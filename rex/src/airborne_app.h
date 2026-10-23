@@ -6,6 +6,8 @@
 
 #include <rex/rex_app.h>
 
+#include "input_script.h"
+
 class AirborneApp : public rex::ReXApp {
  public:
   using rex::ReXApp::ReXApp;
@@ -16,9 +18,11 @@ class AirborneApp : public rex::ReXApp {
         PPCImageConfig));
   }
 
+  // Install the scripted gamepad when the input_script cvar is set.
+  void OnPreSetup(rex::RuntimeConfig& config) override { InstallInputScript(config); }
+
   // Override virtual hooks for customization:
   // void OnPostInitLogging() override {}
-  // void OnPreSetup(rex::RuntimeConfig& config) override {}
   // void OnLoadXexImage(std::string& xex_image) override {}
   // void OnPostLoadXexImage() override {}
   // void OnPostSetup() override {}

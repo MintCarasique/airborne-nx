@@ -13,6 +13,7 @@ include(generated/rexglue.cmake)
 # Sources
 set(AIRBORNE_SOURCES
     src/main.cpp
+    src/input_script.cpp
 )
 
 if(WIN32)

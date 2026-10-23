@@ -9,4 +9,9 @@ fullscreen = false
 # translation whose lookups fail: the UI shows raw keys like
 # <?INT?UIStrings.MenuButtons.XenonStart?>. German has intact strings.
 user_language = 3
+
+# Keyboard as the Xbox pad (needs window focus): Enter/X = START, Space/; = A,
+# Backspace/' = B, Tab/Z = BACK, L = X, P = Y, Shift+arrows = D-pad,
+# WASD = left stick, arrows = right stick, Q/E = LT/RT, 1/3 = LB/RB.
+mnk_mode = true
 log_level = "info"
