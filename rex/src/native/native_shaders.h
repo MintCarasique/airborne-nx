@@ -31,6 +31,9 @@ struct ElementoVertice {
   uint16_t instruccion = 0;  // index of the fetch instruction in the microcode
   uint8_t uso = 0;           // DeclUsage: 0 posicion, 3 normal, 5 texcoord, 10 color...
   uint8_t indice_uso = 0;
+  // AirborneNX: the container's destination swizzle of the fetch (12 bits), kept before kFetchConserva masks
+  // it out of the microcode (MoH:A's D3D rewrites it, so it is not part of the identity).
+  uint16_t swizzle = 0;
 };
 
 // Sampler from the constant table: the register is the texture's fetch constant

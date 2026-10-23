@@ -1554,9 +1554,24 @@ class DestinosVulkan final : public DestinosNativos, public ContextoDestinos {
         const bool intercambio_rb = ((info_destino >> 24) & 0x1) &&
                                     (destino_render->formato == VK_FORMAT_R8G8B8A8_UNORM ||
                                      destino_render->formato == VK_FORMAT_A2B10G10R10_UNORM_PACK32);
-        resuelta = ObtenerResuelta(base & 0x1FFFFFFF, pitch_destino, alto_destino, formato_destino, intercambio_rb,
-                                   destino_render->formato);
-        base_resuelta = base & 0x1FFFFFFF;
+        // AirborneNX: predicated tiling (MoH:A draws its 1280x720 scene in 512- and 208-row tiles) resolves
+        // each tile into the same texture, the later ones with RB_COPY_DEST_BASE at the tile's first row.
+        // Such a copy goes into the texture that contains that address, rows further down.
+        uint32_t base_contenedora = 0, filas = 0;
+        if (BuscarResueltaContenedora(base & 0x1FFFFFFF, pitch_destino, alto_destino, Log2BytesCopia(formato_destino),
+                                      destino_render->formato, base_contenedora, filas)) {
+          resuelta = &resueltas_.find(base_contenedora)->second;
+          dy += filas;
+          base_resuelta = base_contenedora;
+          if (avisados_.insert(0x7000000u | (base & 0xFFFFFF)).second) {
+            REXLOG_INFO("[nativo] C2: copia de baldosa a {:08X}: dentro de la textura resuelta {:08X}, {} filas abajo",
+                        base & 0x1FFFFFFF, base_contenedora, filas);
+          }
+        } else {
+          resuelta = ObtenerResuelta(base & 0x1FFFFFFF, pitch_destino, alto_destino, formato_destino, intercambio_rb,
+                                     destino_render->formato);
+          base_resuelta = base & 0x1FFFFFFF;
+        }
         if (resuelta) {
           AnotarCopia(base & 0x1FFFFFFF, pitch_destino, alto_destino, dibujos_antes);
           if (compuesta_hay_ || compuesta_caducada_ != 0) {  // nfsmw_nativo_compuesta_perezosa
@@ -1800,7 +1815,7 @@ class DestinosVulkan final : public DestinosNativos, public ContextoDestinos {
         reg.rb_copy_dest_base +
         uint32_t(DesplazamientoMosaico2D(int32_t(base_x), int32_t(base_y), pitch_destino, 2));
     const uint32_t dx = uint32_t(x0) - base_x;
-    const uint32_t dy = uint32_t(y0) - base_y;
+    uint32_t dy = uint32_t(y0) - base_y;
     const uint32_t formato_textura = ((info >> 16) & 0x1) ? 23 : 22;  // k_24_8_FLOAT : k_24_8
     // With the scaled shadow map, the resolved texture stays at that same size.
     // The scene picks it by address, without looking at the size, and samples it with normalized coordinates
@@ -1818,8 +1833,19 @@ class DestinosVulkan final : public DestinosNativos, public ContextoDestinos {
       GrabarCopiaPendiente(base & 0x1FFFFFFF);
       ++perezosa_copiadas_escritura_;
     }
-    Resuelta* resuelta = ObtenerResuelta(base & 0x1FFFFFFF, ancho_resuelta, alto_resuelta,
-                                         formato_textura, false, formato_profundidad_);
+    // AirborneNX: a later tile of predicated tiling goes into the texture that contains its address (see
+    // the color copy).
+    Resuelta* resuelta = nullptr;
+    uint32_t base_contenedora = 0, filas = 0;
+    if (ancho_resuelta == pitch_destino &&
+        BuscarResueltaContenedora(base & 0x1FFFFFFF, pitch_destino, alto_destino, 2, formato_profundidad_,
+                                  base_contenedora, filas)) {
+      resuelta = &resueltas_.find(base_contenedora)->second;
+      dy += filas;
+    } else {
+      resuelta = ObtenerResuelta(base & 0x1FFFFFFF, ancho_resuelta, alto_resuelta, formato_textura, false,
+                                 formato_profundidad_);
+    }
     if (!resuelta || !Grabar()) {
       return;
     }
@@ -4106,6 +4132,35 @@ class DestinosVulkan final : public DestinosNativos, public ContextoDestinos {
     REXLOG_INFO("[nativo] C2: destino de profundidad base {:03X}, formato {}, {}x{}", base,
                 formato, pitch, alto);
     return &profundidades_.emplace(clave, imagen).first->second;
+  }
+
+  // AirborneNX: the resolved texture whose memory holds `direccion` past its first row, with the same
+  // width and host format, where a copy of `alto` rows starting there fits. In a tiled 2D texture rows go in
+  // 32-row macro tiles of pitch (aligned to 32) texels, so the offset of row y (a multiple of 32) is
+  // y * pitch * bytes per texel. Returns the texture's base and that row.
+  bool BuscarResueltaContenedora(uint32_t direccion, uint32_t ancho, uint32_t alto, uint32_t log2_bytes,
+                                 VkFormat formato_host, uint32_t& base_out, uint32_t& fila_out) const {
+    const uint64_t bytes_fila = uint64_t((ancho + 31) & ~31u) << log2_bytes;
+    if (!bytes_fila) {
+      return false;
+    }
+    for (const auto& [base, r] : resueltas_) {
+      if (direccion <= base || r.imagen.ancho != ancho || r.imagen.formato != formato_host) {
+        continue;
+      }
+      const uint64_t desplazamiento = uint64_t(direccion) - base;
+      if (desplazamiento % (bytes_fila * 32)) {
+        continue;
+      }
+      const uint64_t fila = desplazamiento / bytes_fila;
+      if (fila >= r.imagen.alto || fila + alto > uint64_t(r.imagen.alto) + 31) {
+        continue;
+      }
+      base_out = base;
+      fila_out = uint32_t(fila);
+      return true;
+    }
+    return false;
   }
 
   Resuelta* ObtenerResuelta(uint32_t base, uint32_t ancho, uint32_t alto, uint32_t formato,

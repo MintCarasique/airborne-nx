@@ -2425,14 +2425,16 @@ class SistemaGraficoNativo final : public rex::system::IGraphicsSystem {
     const uint32_t iniciador = Registro(g::XE_GPU_REG_VGT_DRAW_INITIATOR);
     REXLOG_INFO("[traza] dibujo VS n{} PS n{} tipo {} cuenta {} sup {:08X} rt0 {:08X} rt1 {:08X} "
                 "mascara {:08X} mezcla {:08X} colorctl {:08X} prof {:08X} stencil {:08X} "
-                "modo {:08X}{}",
+                "modo {:08X} vte {:08X} clip {:08X} vport {:08X}/{:08X}/{:08X}/{:08X}{}",
                 vs_dibujo_ ? int(vs_dibujo_->numero) : -1, ps_dibujo_ ? int(ps_dibujo_->numero) : -1,
                 iniciador & 0x3F, iniciador >> 16, Registro(g::XE_GPU_REG_RB_SURFACE_INFO),
                 Registro(g::XE_GPU_REG_RB_COLOR_INFO), Registro(g::XE_GPU_REG_RB_COLOR1_INFO),
                 Registro(g::XE_GPU_REG_RB_COLOR_MASK), Registro(g::XE_GPU_REG_RB_BLENDCONTROL0),
                 Registro(g::XE_GPU_REG_RB_COLORCONTROL), Registro(g::XE_GPU_REG_RB_DEPTHCONTROL),
                 Registro(g::XE_GPU_REG_RB_STENCILREFMASK), Registro(g::XE_GPU_REG_RB_MODECONTROL),
-                texturas);
+                Registro(g::XE_GPU_REG_PA_CL_VTE_CNTL), Registro(g::XE_GPU_REG_PA_CL_CLIP_CNTL),
+                Registro(g::XE_GPU_REG_PA_CL_VPORT_XSCALE), Registro(g::XE_GPU_REG_PA_CL_VPORT_XOFFSET),
+                Registro(g::XE_GPU_REG_PA_CL_VPORT_YSCALE), Registro(g::XE_GPU_REG_PA_CL_VPORT_YOFFSET), texturas);
     TrazarVertices(iniciador);
   }
 
@@ -3465,8 +3467,7 @@ class SistemaGraficoNativo final : public rex::system::IGraphicsSystem {
       detalle += fmt::format(" {}{}:f{}/fmt{}/z{}/o{}/s{:03X}>{:03X}{}{}{}{}", NombreUso(elemento.uso),
                              elemento.indice_uso, ((d0 >> 20) & 0x1F) * 3 + ((d0 >> 25) & 0x3),
                              (d1 >> 16) & 0x3F, d2 & 0xFF, int32_t(d2 << 1) >> 9,
-                             vs.microcodigo[size_t(elemento.instruccion) * 3 + 1] & 0xFFF,
-                             d1 & 0xFFF, ((d1 >> 30) & 0x1) ? "/mini" : "",
+                             uint32_t(elemento.swizzle), d1 & 0xFFF, ((d1 >> 30) & 0x1) ? "/mini" : "",
                              ((d1 >> 12) & 0x1) ? "/signo" : "",
                              exponente ? fmt::format("/exp{}", exponente) : std::string(),
                              ((d1 >> 14) & 0x1) ? "/rf1" : "");

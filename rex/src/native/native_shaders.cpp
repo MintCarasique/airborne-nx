@@ -35,9 +35,12 @@ namespace {
 
 // Bits of a vertex fetch instruction that D3D does not touch
 // (VertexFetchInstruction in XenosRecomp shader_code.h): opcode, source and
-// destination registers, destination swizzle and predicate. The rest (fetch
-// constant, format, stride, offset and numeric modes) comes from the declaration.
-constexpr uint32_t kFetchConserva[3] = {0x0007FFFF, 0x80000FFF, 0x80000000};
+// destination registers and predicate. The rest (fetch constant, format, stride,
+// offset and numeric modes) comes from the declaration.
+// AirborneNX: MoH:A's XDK also rewrites the destination swizzle (a float3 position
+// gets w = 1: 0x688 -> 0xA88, with format 0x39 = 32_32_32_FLOAT), so it is not kept
+// either (NFSMW kept it: 0x80000FFF).
+constexpr uint32_t kFetchConserva[3] = {0x0007FFFF, 0x80000000, 0x80000000};
 
 constexpr uint32_t kMaxAvisos = 48;
 
@@ -124,6 +127,7 @@ const char* Leer(const nfsmw::native::Shader& shader, EntradaShader& e) {
       if ((size_t(elemento.instruccion) + 1) * 3 > e.microcodigo.size()) {
         return "elemento de vertices apunta fuera del microcodigo";
       }
+      elemento.swizzle = uint16_t(e.microcodigo[size_t(elemento.instruccion) * 3 + 1] & 0xFFF);
       e.elementos.push_back(elemento);
       for (size_t j = 0; j < 3; ++j) {
         e.microcodigo[size_t(elemento.instruccion) * 3 + j] &= kFetchConserva[j];
@@ -376,7 +380,11 @@ const EntradaShader* ShadersNativos::Identificar(bool vertices,
           d.temporal != e.microcodigo) {
         continue;
       }
-      if (!elegido) {
+      // AirborneNX: the same microcode can come in containers whose constant tables declare fewer samplers
+      // (UE3 material variants); XenosRecomp drops the texture fetches it has no sampler for. Prefer the
+      // container that declares the most samplers, then the most constants.
+      if (!elegido || e.samplers.size() > elegido->samplers.size() ||
+          (e.samplers.size() == elegido->samplers.size() && e.constantes_bytes > elegido->constantes_bytes)) {
         elegido = &e;
       }
       ++coincidencias;
@@ -384,11 +392,23 @@ const EntradaShader* ShadersNativos::Identificar(bool vertices,
   }
 
   // Vertex shaders arrive patched: a mismatch is normal.
-  const bool avisar = d.avisos < kMaxAvisos && !vertices;
+  // AirborneNX: vertex shaders too (MoH:A patches them only at creation; a miss is a missing shader).
+  const bool avisar = d.avisos < kMaxAvisos;
   if (elegido) {
     ++d.estadisticas.identificados;
     if (coincidencias > 1) {
       ++d.estadisticas.ambiguos;
+    }
+    // AirborneNX: one line per shader the ring identifies (52 distinct ones at the title screen).
+    if (d.estadisticas.distintos <= 256) {
+      std::string usados;
+      for (const SamplerShader& sampler : elegido->samplers) {
+        usados += fmt::format(" s{}:{}", sampler.registro, sampler.tipo);
+      }
+      REXLOG_INFO("[nativo] C5a: {} n{} identificado ({} palabras, {} coincidencias, {} bytes de constantes, "
+                  "samplers:{}; contenedor {:016X})",
+                  vertices ? "VS" : "PS", elegido->numero, microcodigo.size(), coincidencias,
+                  elegido->constantes_bytes, usados.empty() ? " ninguno" : usados, elegido->shader->huella);
     }
     if (avisar && vertices) {
       // What D3D has patched in each fetch: it becomes the vertex input.

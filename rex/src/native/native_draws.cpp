@@ -3122,6 +3122,24 @@ class DibujosVulkanImpl final : public DibujosVulkan {
       // so this creates no pipelines that did not already exist.
       especializacion |= (funcion_alfa & 0x7u) << kSpecFuncionAlfaDesplazamiento;
     }
+    // AirborneNX: 7e3 render targets are RGBA16F on the host. The PS applies the 7e3 range to the outputs
+    // that go to them (salida7e3 in shader_common.h: RGB in [0, 31.875], alpha in 2 bits), or the 16-bit
+    // alpha keeps values the Xbox 360 would clamp (UE3 writes the scene depth there, ~3500).
+    if (ps) {
+      static constexpr uint32_t kInfoColor7e3[4] = {gr::XE_GPU_REG_RB_COLOR_INFO, gr::XE_GPU_REG_RB_COLOR1_INFO,
+                                                    gr::XE_GPU_REG_RB_COLOR2_INFO, gr::XE_GPU_REG_RB_COLOR3_INFO};
+      static constexpr uint32_t kSpecSalida7e3[4] = {uint32_t(1) << 5, uint32_t(1) << 6, uint32_t(1) << 7,
+                                                     uint32_t(1) << 10};
+      const uint32_t mascara_color = r[gr::XE_GPU_REG_RB_COLOR_MASK];
+      for (uint32_t i = 0; i < 4; ++i) {
+        const uint32_t formato = (r[kInfoColor7e3[i]] >> 16) & 0xF;
+        if (((mascara_color >> (i * 4)) & 0xF) &&
+            (formato == uint32_t(xenos::ColorRenderTargetFormat::k_2_10_10_10_FLOAT) ||
+             formato == uint32_t(xenos::ColorRenderTargetFormat::k_2_10_10_10_FLOAT_AS_16_16_16_16))) {
+          especializacion |= kSpecSalida7e3[i];
+        }
+      }
+    }
     compartidas[64] = (r[kRegBooleanos] & 0xFFFF) | ((r[kRegBooleanos + 4] & 0xFFFF) << 16);
     compartidas[65] = 0;  // g_SwappedTexcoords
     if (!(r[gr::XE_GPU_REG_PA_SU_VTX_CNTL] & 0x1)) {  // PixelCenter::kD3DZero
@@ -8303,7 +8321,7 @@ class DibujosVulkanImpl final : public DibujosVulkan {
     uint32_t ubicaciones_usadas = 0;
     for (const ElementoVertice& elemento : vs.elementos) {
       const uint32_t registro = (vs.microcodigo[size_t(elemento.instruccion) * 3] >> 12) & 0x3F;
-      const uint32_t original = vs.microcodigo[size_t(elemento.instruccion) * 3 + 1] & 0xFFF;
+      const uint32_t original = elemento.swizzle;  // AirborneNX: the microcode copy has it masked
       size_t q = SIZE_MAX;
       for (const ElementoVertice& otro : vs.elementos) {
         const size_t i = size_t(otro.instruccion) * 3;

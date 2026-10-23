@@ -23,8 +23,9 @@
 namespace nfsmw::native {
 namespace {
 constexpr std::array<uint8_t, 8> kFirma{'N','F','S','S','P','V',0,0};
-constexpr size_t kMaxArchivo = 64 * 1024 * 1024;
-constexpr size_t kMaxShaders = 4096;
+// AirborneNX: MoH:A has ~10 000 shaders (~140 MB of SPIR-V and containers); NFSMW had about 1000.
+constexpr size_t kMaxArchivo = 512 * 1024 * 1024;
+constexpr size_t kMaxShaders = 32768;
 constexpr size_t kMaxOriginal = 64 * 1024;
 constexpr size_t kMaxSpirv = 4 * 1024 * 1024;
 
