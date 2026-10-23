@@ -19,6 +19,11 @@ set(AIRBORNE_SOURCES
     src/renderdoc_trigger.cpp
 )
 
+# Native renderer, ported from the NFS: Most Wanted port (GPL-3.0); selected
+# at run time with nfsmw_renderizador=nativo, the Xenos emulation otherwise.
+file(GLOB AIRBORNE_NATIVE_SOURCES CONFIGURE_DEPENDS src/native/*.cpp)
+list(APPEND AIRBORNE_SOURCES ${AIRBORNE_NATIVE_SOURCES})
+
 if(WIN32)
     add_executable(airborne WIN32 ${AIRBORNE_SOURCES})
 else()
@@ -26,6 +31,13 @@ else()
 endif()
 
 rexglue_setup_target(airborne GPU_PLUGINS xenos)
+
+# The native renderer uses SDK internals (src/core/threading_switch.h,
+# graphics registers) and xxHash, which the runtime links privately.
+target_include_directories(airborne PRIVATE "${REXSDK_DIR}/src" "${REXSDK_DIR}/src/ui/shaders" src/native)
+if(TARGET xxHash::xxhash)
+    target_link_libraries(airborne PRIVATE xxHash::xxhash)
+endif()
 
 # With the SDK as a subdirectory, rex_app.cpp (compiled into this target)
 # includes imgui.h, but rexruntime links imgui privately. Same workaround as

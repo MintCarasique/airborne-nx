@@ -11,6 +11,7 @@
 #include <rex/rex_app.h>
 
 #include "input_script.h"
+#include "native/native_system.h"
 #include "nxlink_log.h"
 #include "renderdoc_trigger.h"
 
@@ -54,8 +55,14 @@ class AirborneApp : public rex::ReXApp {
 #endif
   }
 
-  // Install the scripted gamepad when the input_script cvar is set.
-  void OnPreSetup(rex::RuntimeConfig& config) override { InstallInputScript(config); }
+  // Install the scripted gamepad when the input_script cvar is set, and the
+  // native renderer instead of the Xenos emulation when nfsmw_renderizador=nativo.
+  void OnPreSetup(rex::RuntimeConfig& config) override {
+    if (nfsmw::nativo::Activo()) {
+      config.graphics = nfsmw::nativo::CrearSistemaGrafico();
+    }
+    InstallInputScript(config);
+  }
 
   // Schedule RenderDoc captures when renderdoc_capture_at is set.
   void OnPostSetup() override { StartRenderDocTrigger(); }
