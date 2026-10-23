@@ -4,6 +4,8 @@
 /VIDEO_TS/
 /extracted/
 /generated/
+/rex/generated/default/
+/rex/out/
 /dist/
 /tools/toolchain/
 /tools/XenonRecomp/
@@ -31,6 +33,8 @@ __pycache__/
 /analysis/*
 !/analysis/*.md
 !/analysis/*.toml
+# XenonAnalyse output, recreated by tools/recompile.ps1 -Analyse.
+/analysis/airborne_switch_tables*.toml
 !/analysis/image/
 /analysis/image/*
 !/analysis/image/*.tsv

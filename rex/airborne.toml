@@ -1,0 +1,8 @@
+# Cvars for the PC build of airborne. tools/run_rex.ps1 copies this file next to
+# airborne.exe, where ReXApp loads it. game_data_root cannot be set here (it is
+# read before this file is loaded); run_rex.ps1 passes it on the command line.
+
+# Without a GPU plugin the SDK silently runs with no GPU emulation.
+gpu_plugin = "xenos"
+fullscreen = false
+log_level = "info"

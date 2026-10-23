@@ -1,0 +1,66 @@
+# MoH: Airborne (default.xex, SHA-256 8050b225...) - manual declarations for the codegen.
+#
+# Included from airborne_manifest.toml. Included files use the flat schema
+# (sections at the root), not the one nested under [entrypoint].
+
+# ----------------------------------------------------------------------------
+#  FUNCTIONS DECLARED BY HAND
+#
+#  Key = start address. Without size/end the analyzer finds the bounds itself.
+#  Each of these is reached only by a tail branch (b) from a this-adjusting
+#  thunk, so the analysis never saw a bl to it ("target not in any function").
+# ----------------------------------------------------------------------------
+[functions]
+# Leaf: squared distance of two float3 + fsqrts compare. Tail-called from 0x82DD9BD0.
+"0x82CA6540" = {}
+# Leaf getter: *r4 = this->field_0C; return 0. Tail-called from 0x82AA19E4 (r3 -= 4).
+"0x82AA13A8" = {}
+# Thunk: r3 += 4; b 0x82AA2C00. Tail-called from 0x82AABF6C (r3 -= 4).
+"0x82AABB70" = {}
+
+# ----------------------------------------------------------------------------
+#  JUMP TABLES verified by tools/recover_airborne_switches.py (bytes checked
+#  against default.xex). Keyed by the bctr address.
+#  0x828B6D24: auto-detection reads 17 entries from the byte table; only 12
+#  belong to it (indices 12..16 are the bytes after the table).
+#  0x82CDD5B8: auto-detection agrees (16 halfword entries); pinned anyway.
+# ----------------------------------------------------------------------------
+[[switch_tables]]
+address  = 0x828B6D24  # bctr; dispatch starts at 0x828B6D00
+register = 3
+labels   = [
+    0x828B6D28,
+    0x828B6D38,
+    0x828B6D48,
+    0x828B6D58,
+    0x828B6D68,
+    0x828B6D78,
+    0x828B6D88,
+    0x828B6D98,
+    0x828B6DA8,
+    0x828B6DB8,
+    0x828B6DC8,
+    0x828B6DD8,
+]
+
+[[switch_tables]]
+address  = 0x82CDD5B8  # bctr; dispatch starts at 0x82CDD594
+register = 24
+labels   = [
+    0x82CDD5BC,
+    0x82CDD5BC,
+    0x82CDD090,
+    0x82CDD5BC,
+    0x82CDD5BC,
+    0x82CDD5BC,
+    0x82CDD5BC,
+    0x82CDD090,
+    0x82CDD090,
+    0x82CDD5BC,
+    0x82CDD090,
+    0x82CDD090,
+    0x82CDD5BC,
+    0x82CDD5BC,
+    0x82CDD5BC,
+    0x82CDD5BC,
+]
