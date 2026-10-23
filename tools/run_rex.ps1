@@ -26,8 +26,12 @@ if ($Seconds -gt 0) {
             Add-Type -Namespace Native -Name Win -MemberDefinition @'
 [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h, out RECT r);
 [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr dc, uint flags);
+[DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
 public struct RECT { public int Left, Top, Right, Bottom; }
 '@
+            # Physical pixels: without this a scaled display (125 %) reports a smaller
+            # client rect and the capture keeps only its top-left part.
+            [void][Native.Win]::SetProcessDPIAware()
             $process.Refresh()
             $handle = $process.MainWindowHandle
             $rect = New-Object Native.Win+RECT

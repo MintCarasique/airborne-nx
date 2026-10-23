@@ -5,4 +5,8 @@
 # Without a GPU plugin the SDK silently runs with no GPU emulation.
 gpu_plugin = "xenos"
 fullscreen = false
+# 3 = German. In this dump Localization/Coalesced.int (= .uke) is a Russian
+# translation whose lookups fail: the UI shows raw keys like
+# <?INT?UIStrings.MenuButtons.XenonStart?>. German has intact strings.
+user_language = 3
 log_level = "info"
