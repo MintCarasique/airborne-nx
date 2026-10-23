@@ -1,17 +1,13 @@
-# Cvars for the PC build of airborne. tools/run_rex.ps1 copies this file next to
-# airborne.exe, where ReXApp loads it. game_data_root cannot be set here (it is
-# read before this file is loaded); run_rex.ps1 passes it on the command line.
+# Optional overrides for airborne, read from the executable's folder
+# (tools/run_rex.ps1 copies this file next to airborne.exe). The defaults that
+# must always hold (gpu_plugin = "xenos", user_language = 3, mnk_mode on PC)
+# are set in rex/src/airborne_app.h. game_data_root cannot be set here (it is
+# read before this file); on PC run_rex.ps1 passes it on the command line, on
+# the Switch the app uses the game/ folder next to the NRO.
+#
+# PC keyboard as the Xbox pad (needs window focus): Enter/X = START,
+# Space/; = A, Backspace/' = B, Tab/Z = BACK, L = X, P = Y, Shift+arrows =
+# D-pad, WASD = left stick, arrows = right stick, Q/E = LT/RT, 1/3 = LB/RB.
 
-# Without a GPU plugin the SDK silently runs with no GPU emulation.
-gpu_plugin = "xenos"
 fullscreen = false
-# 3 = German. In this dump Localization/Coalesced.int (= .uke) is a Russian
-# translation whose lookups fail: the UI shows raw keys like
-# <?INT?UIStrings.MenuButtons.XenonStart?>. German has intact strings.
-user_language = 3
-
-# Keyboard as the Xbox pad (needs window focus): Enter/X = START, Space/; = A,
-# Backspace/' = B, Tab/Z = BACK, L = X, P = Y, Shift+arrows = D-pad,
-# WASD = left stick, arrows = right stick, Q/E = LT/RT, 1/3 = LB/RB.
-mnk_mode = true
 log_level = "info"

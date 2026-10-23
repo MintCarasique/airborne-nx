@@ -33,6 +33,12 @@ if(NOT REXGLUE_PLATFORM_SWITCH AND TARGET imgui)
         $<TARGET_PROPERTY:imgui,INTERFACE_INCLUDE_DIRECTORIES>)
 endif()
 
+# Nintendo Switch: airborne.nro next to the ELF (tools/package_switch.py
+# installs it as dist/switch/airborne-nx/airborne-nx.nro).
+if(REXGLUE_PLATFORM_SWITCH)
+    rexglue_switch_add_nro(airborne NAME "AirborneNX" AUTHOR "AirborneNX" VERSION "0.1.0")
+endif()
+
 # renderdoc_trigger.cpp includes renderdoc_app.h through rex/ui/renderdoc_api.h.
 if(NOT REXGLUE_PLATFORM_SWITCH AND TARGET renderdoc)
     target_include_directories(airborne PRIVATE
