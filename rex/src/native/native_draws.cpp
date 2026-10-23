@@ -1149,8 +1149,12 @@ constexpr size_t kMaxRegistrosLista = 4096;
 // (68) and function (69), NDC (64-73) and g_InputRemap for the 16 locations (74-89).
 // 90 words up to g_InputRemap (bytes 296..359) and 32 more for 1/size of the 16 texture slots (bytes
 // 360..487), which avoid querying the texture size on every sample.
-constexpr uint32_t kPalabrasCompartidas = 122;
+// AirborneNX: 16 more words (bytes 488..551): the value scale of each texture slot (2^exp_adjust of the
+// fetch constant times the resolve bias of the texture), which the shaders multiply every sample by
+// (<sampler>_Escala, tools/shaders_native). They default to 1.
+constexpr uint32_t kPalabrasCompartidas = 138;
 constexpr uint32_t kPalabraInvTamano = 90;
+constexpr uint32_t kPalabraEscala = 122;
 // Constants through a dynamic UBO (nfsmw_nativo_constantes_ubo). The bit is SPEC_CONSTANT_CONSTANTES_UBO
 // from shader_common.h, and the sizes are the blocks the shaders declare: 256 and 224 float4, and 23 shared
 // float4.
@@ -1264,7 +1268,7 @@ constexpr uint32_t kCieloFotogramasPrueba = 90;
 constexpr uint32_t kCieloFotogramasConUno = 90;
 constexpr VkDeviceSize kUboBytesVs = 256 * 16;
 constexpr VkDeviceSize kUboBytesPs = 224 * 16;
-constexpr VkDeviceSize kUboBytesCompartidas = 31 * 16;
+constexpr VkDeviceSize kUboBytesCompartidas = 35 * 16;  // AirborneNX: was 31 (+ the 16 slot scales)
 constexpr uint32_t kRemapeoIdentidad = 0xFFF;
 constexpr uint32_t kMaxVerticesPorDibujo = uint32_t(1) << 20;
 constexpr uint32_t kMemoriaFisica = 0x20000000;
@@ -2712,6 +2716,9 @@ class DibujosVulkanImpl final : public DibujosVulkan {
     Etapa(1, marca);
     // --- Textures and samplers ----------------------------------------------------
     uint32_t compartidas[kPalabrasCompartidas] = {};
+    for (uint32_t i = 0; i < 16; ++i) {
+      EscribirEscala(compartidas, i, 1.0f);
+    }
     VkDeviceSize bytes_texturas = 0;
     DescartarHuellasPlaneadas();  // those of the previous draw that never reached SubirTextura
     texturas_a_subir_.clear();
@@ -2752,6 +2759,7 @@ class DibujosVulkanImpl final : public DibujosVulkan {
         compartidas[cache.monton * 16 + sampler.registro] = cache.ranura;
         compartidas[48 + sampler.registro] = cache.sampler;
         EscribirInvTamano(compartidas, sampler.registro, cache.ancho, cache.alto);
+        EscribirEscala(compartidas, sampler.registro, cache.escala);
         ++samplers_cache_;
         continue;
       }
@@ -2759,6 +2767,7 @@ class DibujosVulkanImpl final : public DibujosVulkan {
       uint32_t monton = 0;
       uint32_t ranura_sampler = 0;
       uint32_t ancho_host = 0, alto_host = 0;
+      float escala = 1.0f;
       // Second cache, keyed by the whole fetch constant within the same frame and generation: a register
       // changes texture between draws, but textures repeat a lot within a frame, and PrepararTextura already
       // queued their upload the first time.
@@ -2774,6 +2783,7 @@ class DibujosVulkanImpl final : public DibujosVulkan {
         valido_hasta = por_fetch.valido_hasta;
         ancho_host = por_fetch.ancho;
         alto_host = por_fetch.alto;
+        escala = por_fetch.escala;
         ++samplers_cache_fetch_;
       } else {
         // Why the table misses ("C6 cache por fetch" report, every 10 s).
@@ -2786,7 +2796,7 @@ class DibujosVulkanImpl final : public DibujosVulkan {
         }
         bool muestreo_puntual = false;
         PrepararTextura(fetch, ranura_textura, monton, bytes_texturas, muestreo_puntual, valido_hasta,
-                        ancho_host, alto_host);
+                        ancho_host, alto_host, escala);
         ranura_sampler = RanuraSampler(fetch, muestreo_puntual);
         por_fetch.fotograma = fotograma_;
         por_fetch.generacion = generacion_texturas_;
@@ -2797,6 +2807,7 @@ class DibujosVulkanImpl final : public DibujosVulkan {
         por_fetch.valido_hasta = valido_hasta;
         por_fetch.ancho = ancho_host;
         por_fetch.alto = alto_host;
+        por_fetch.escala = escala;
         // A depth requested without being sampled is not stored in the caches: the next draw that really
         // samples it has to go through TexturaResuelta, which is where it is recorded if it was deferred.
         if (composicion_sin_desenfoque && muestreo_puntual) {
@@ -2809,6 +2820,7 @@ class DibujosVulkanImpl final : public DibujosVulkan {
       compartidas[monton * 16 + sampler.registro] = ranura_textura;
       compartidas[48 + sampler.registro] = ranura_sampler;
       EscribirInvTamano(compartidas, sampler.registro, ancho_host, alto_host);
+      EscribirEscala(compartidas, sampler.registro, escala);
       cache.fotograma = fotograma_;
       cache.generacion = generacion_texturas_;
       std::memcpy(cache.fetch.data(), fetch, sizeof(cache.fetch));
@@ -2818,6 +2830,7 @@ class DibujosVulkanImpl final : public DibujosVulkan {
       cache.valido_hasta = valido_hasta;
       cache.ancho = ancho_host;
       cache.alto = alto_host;
+      cache.escala = escala;
       if (sin_cache) {
         cache.fotograma = 0;  // with valido_hasta at 0 it is not valid across frames either
       }
@@ -8421,9 +8434,12 @@ class DibujosVulkanImpl final : public DibujosVulkan {
   // with its data already prepared. Base level of 2D textures and cubemaps.
   void PrepararTextura(const uint32_t* f, uint32_t& ranura, uint32_t& monton,
                        VkDeviceSize& bytes_subida, bool& muestreo_puntual, uint64_t& valido_hasta,
-                       uint32_t& ancho_host_out, uint32_t& alto_host_out) {
+                       uint32_t& ancho_host_out, uint32_t& alto_host_out, float& escala_out) {
     ranura = 0;
     monton = 0;
+    // AirborneNX: exp_adjust of the fetch constant (dword 3, bits 13-18, signed): samples are multiplied by
+    // 2^exp_adjust. Resolved textures add their own resolve bias below.
+    escala_out = std::ldexp(1.0f, int32_t(f[3] << 13) >> 26);
     ancho_host_out = 0;  // 0 = unknown (1/size is not written)
     alto_host_out = 0;
     muestreo_puntual = false;
@@ -8454,6 +8470,7 @@ class DibujosVulkanImpl final : public DibujosVulkan {
         // shimmered as the camera moved. Resolved textures report their size like any other.
         ancho_host_out = resuelta->ancho;
         alto_host_out = resuelta->alto;
+        escala_out *= resuelta->escala;
         // One trace per size, to check in the log that the 1/size constant of resolved textures is no longer
         // 0 (that was the cause of the shadow flicker).
         if (avisos_invtam_resuelta_.insert(uint64_t(resuelta->ancho) << 32 | resuelta->alto).second) {
@@ -10007,6 +10024,11 @@ class DibujosVulkanImpl final : public DibujosVulkan {
 
   // 1/size of a slot's host image, in the shared constants. With size 0 (a texture that could not be
   // prepared) 0 is written: the shader does not use it because it does not sample either.
+  // AirborneNX: value scale of a slot (see kPalabraEscala).
+  static void EscribirEscala(uint32_t* compartidas, uint32_t registro, float escala) {
+    std::memcpy(compartidas + kPalabraEscala + registro, &escala, sizeof(escala));
+  }
+
   static void EscribirInvTamano(uint32_t* compartidas, uint32_t registro, uint32_t ancho, uint32_t alto) {
     const float inv[2] = {ancho ? 1.0f / float(ancho) : 0.0f, alto ? 1.0f / float(alto) : 0.0f};
     std::memcpy(compartidas + kPalabraInvTamano + registro * 2, inv, sizeof(inv));
@@ -12984,6 +13006,7 @@ class DibujosVulkanImpl final : public DibujosVulkan {
     uint64_t valido_hasta = 0;  // last frame it is valid without going back to PrepararTextura
     uint32_t ancho = 0;  // host image size, for 1/size
     uint32_t alto = 0;
+    float escala = 1.0f;  // AirborneNX: value scale of the slot (kPalabraEscala)
   };
   bool cache_entre_fotogramas_ = true;  // nfsmw_nativo_cache_texturas_entre_fotogramas
   bool mipmaps_ = true;                 // nfsmw_nativo_mipmaps

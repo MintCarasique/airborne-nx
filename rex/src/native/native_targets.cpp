@@ -1573,6 +1573,9 @@ class DestinosVulkan final : public DestinosNativos, public ContextoDestinos {
           base_resuelta = base & 0x1FFFFFFF;
         }
         if (resuelta) {
+          // AirborneNX: RB_COPY_DEST_INFO.copy_dest_exp_bias (bits 16-21, signed): the guest texture holds
+          // 2^bias times the render target. The copy here is 1:1 and the samples are scaled instead.
+          resuelta->imagen.escala = std::ldexp(1.0f, int32_t(info_destino << 10) >> 26);
           AnotarCopia(base & 0x1FFFFFFF, pitch_destino, alto_destino, dibujos_antes);
           if (compuesta_hay_ || compuesta_caducada_ != 0) {  // nfsmw_nativo_compuesta_perezosa
             CompuestaAntesDeEscribirTextura(base & 0x1FFFFFFF, x0 == 0 && y0 == 0 &&

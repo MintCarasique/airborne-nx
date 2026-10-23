@@ -2399,9 +2399,9 @@ class SistemaGraficoNativo final : public rex::system::IGraphicsSystem {
         const uint32_t d1 = Registro(base + 1);
         const uint32_t d3 = Registro(base + 3);
         const uint32_t d5 = Registro(base + 5);
-        texturas += fmt::format(" t{}={:08X}/f{}/d{}/s{:03X}/e{}{}", s.registro, d1 & 0xFFFFF000,
+        texturas += fmt::format(" t{}={:08X}/f{}/d{}/s{:03X}/e{}/x{}{}", s.registro, d1 & 0xFFFFF000,
                                 d1 & 0x3F, (d5 >> 9) & 0x3, (d3 >> 1) & 0xFFF, (d1 >> 6) & 0x3,
-                                (d0 & 0x3) == 2 ? "" : "!");
+                                int32_t(d3 << 13) >> 26, (d0 & 0x3) == 2 ? "" : "!");
       }
     }
     if (!vs_dibujo_ || !ps_dibujo_) {

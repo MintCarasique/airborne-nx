@@ -57,6 +57,10 @@ struct ImagenNativa {
   // on it again without clearing first, the content has to be brought back.
   bool contenido_invalido = false;
   uint32_t resuelta_base = 0;  // where its content is while contenido_invalido
+  // AirborneNX: scale of the stored values relative to what the guest texture holds. A resolve with
+  // RB_COPY_DEST_INFO.copy_dest_exp_bias stores 2^bias times the render target (MoH:A resolves its HDR scene
+  // with -3); the copy here is image to image, so the shaders multiply the samples by this instead.
+  float escala = 1.0f;
 };
 
 // GPU time categories (ContextoDestinos::MarcarGpu and the C2 report).
