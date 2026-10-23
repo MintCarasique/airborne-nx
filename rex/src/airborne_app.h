@@ -7,6 +7,7 @@
 #include <rex/rex_app.h>
 
 #include "input_script.h"
+#include "renderdoc_trigger.h"
 
 class AirborneApp : public rex::ReXApp {
  public:
@@ -20,6 +21,9 @@ class AirborneApp : public rex::ReXApp {
 
   // Install the scripted gamepad when the input_script cvar is set.
   void OnPreSetup(rex::RuntimeConfig& config) override { InstallInputScript(config); }
+
+  // Schedule RenderDoc captures when renderdoc_capture_at is set.
+  void OnPostSetup() override { StartRenderDocTrigger(); }
 
   // Override virtual hooks for customization:
   // void OnPostInitLogging() override {}

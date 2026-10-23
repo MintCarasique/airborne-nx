@@ -14,6 +14,7 @@ include(generated/rexglue.cmake)
 set(AIRBORNE_SOURCES
     src/main.cpp
     src/input_script.cpp
+    src/renderdoc_trigger.cpp
 )
 
 if(WIN32)
@@ -30,4 +31,10 @@ rexglue_setup_target(airborne GPU_PLUGINS xenos)
 if(NOT REXGLUE_PLATFORM_SWITCH AND TARGET imgui)
     target_include_directories(airborne PRIVATE
         $<TARGET_PROPERTY:imgui,INTERFACE_INCLUDE_DIRECTORIES>)
+endif()
+
+# renderdoc_trigger.cpp includes renderdoc_app.h through rex/ui/renderdoc_api.h.
+if(NOT REXGLUE_PLATFORM_SWITCH AND TARGET renderdoc)
+    target_include_directories(airborne PRIVATE
+        $<TARGET_PROPERTY:renderdoc,INTERFACE_INCLUDE_DIRECTORIES>)
 endif()
