@@ -1,0 +1,22 @@
+{
+  "status": "USER_REPORTED_STOP_BEFORE_MOVIE",
+  "build_id": "6d74b214954ed55455a723a8a5de6d9a918ff6ce9325e65938becb62b8c210bc",
+  "raw_log": "analysis\\hardware\\switch_entry_v0.7_4e69253caac7.txt",
+  "log_sha256": "4e69253caac79b68fe0ae408c30971df117c72c6daceb8a1a2c99ab00064a224",
+  "bytes": 187555,
+  "valid_utf8": true,
+  "nul_bytes": 0,
+  "user_observation": "Initial diagnostic screen, black screen, then final screen; no intro visible",
+  "first_failure": "viOpenDefaultDisplay/vblank",
+  "result_decimal": 4722,
+  "result_hex": "00001272",
+  "module": 114,
+  "description": 9,
+  "stop": "VI display open failed",
+  "movie_draws": 0,
+  "movie_plane_uploads": 0,
+  "file_opens": 0,
+  "initial_presentations": 1,
+  "cleanup_pass": true,
+  "exit_action": "RETURN_TO_LOADER"
+}

@@ -1,0 +1,26 @@
+{
+  "status": "USER_REPORTED_HARDWARE_PASS",
+  "probe_version": "0.3",
+  "probe_kind": "startup",
+  "build_id": "811084736791fbcc2e829be4effe120aad4706eac5b9340d995dcac725533b2b",
+  "matches_known_build": true,
+  "phases": {
+    "native_services": "PASS",
+    "guest_workers": "PASS",
+    "image_stack": "PASS",
+    "physical_aliases": "PASS",
+    "guest_heap": "PASS",
+    "guards": "PASS",
+    "guest_memory": "PASS",
+    "cleanup": "PASS",
+    "game_entry": "BLOCKED"
+  },
+  "checks": 1569,
+  "system_version": "22.1.0",
+  "applet_type": 0,
+  "failures": [],
+  "limits": "User-supplied evidence. Startup prerequisites and isolated guest leaf only. R13 preservation and private scratch slots do not validate the full guest PCR/TLS ABI. Game entry, full allocator, GPU, audio and gameplay remain untested.",
+  "log": "analysis\\hardware\\switch_startup_v0.3_334a87647c17.txt",
+  "log_sha256": "334a87647c17d5855f689de7784250c2e870f7b362bf97f70124ca6b9373eb78",
+  "source": "User-supplied log"
+}

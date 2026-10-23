@@ -1,0 +1,86 @@
+diff --git a/XenosRecomp/shader_recompiler.cpp b/XenosRecomp/shader_recompiler.cpp
+index 698a418..4484429 100644
+--- a/XenosRecomp/shader_recompiler.cpp
++++ b/XenosRecomp/shader_recompiler.cpp
+@@ -193,7 +193,11 @@ void ShaderRecompiler::recompile(const VertexFetchInstruction& instr, uint32_t a
+         break;
+     }
+ 
++#ifdef AIRBORNE_RECOMP
++    print("AirborneInput{}", uint32_t(findResult->second.address));
++#else
+     print("i{}{}", USAGE_VARIABLES[uint32_t(findResult->second.usage)], uint32_t(findResult->second.usageIndex));
++#endif
+ 
+     switch (findResult->second.usage)
+     {
+@@ -1171,6 +1175,24 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+ 
+         case RegisterSet::Sampler:
+         {
++#ifdef AIRBORNE_RECOMP
++            // UE3 reflects sampler arrays as a single multi-register entry.
++            // Each texture fetch still selects its own hardware sampler slot.
++            for (uint32_t element = 0; element < constantInfo->registerCount; ++element)
++            {
++                uint32_t slot = constantInfo->registerIndex + element;
++                if (slot >= 16) throw std::runtime_error("Sampler array exceeds shared descriptor ABI");
++                auto inserted = samplerArrayNames.emplace(slot,
++                    fmt::format("AirborneSampler{}", slot));
++                const char* name = inserted.first->second.c_str();
++                for (size_t dimension = 0; dimension < std::size(TEXTURE_DIMENSIONS); ++dimension)
++                    println("#define {}_Texture{}DescriptorIndex vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + {})",
++                        name, TEXTURE_DIMENSIONS[dimension], dimension * 64 + slot * 4);
++                println("#define {}_SamplerDescriptorIndex vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + {})",
++                    name, std::size(TEXTURE_DIMENSIONS) * 64 + slot * 4);
++                samplers.emplace(slot, name);
++            }
++#else
+             for (size_t j = 0; j < std::size(TEXTURE_DIMENSIONS); j++)
+             {
+                 println("#define {}_Texture{}DescriptorIndex vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + {})",
+@@ -1181,6 +1203,7 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+                 constantName, std::size(TEXTURE_DIMENSIONS) * 64 + constantInfo->registerIndex * 4);
+ 
+             samplers.emplace(constantInfo->registerIndex, constantName);
++#endif
+             break;
+         }
+ 
+@@ -1324,6 +1347,14 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+ 
+             out += '\t';
+ 
++#ifdef AIRBORNE_RECOMP
++            // Bind each fetch by its table position and instruction address.
++            // Semantic names may repeat in UE3 containers; they are not a
++            // unique Vulkan input key. Runtime vertex bindings use this same
++            // original table order, rather than Unleashed's fixed locations.
++            println("[[vk::location({})]] in {} AirborneInput{} : TEXCOORD{},",
++                i, usageType, uint32_t(vertexElement.address), i);
++#else
+             for (auto& usageLocation : USAGE_LOCATIONS)
+             {
+                 if (usageLocation.usage == vertexElement.usage && usageLocation.usageIndex == vertexElement.usageIndex)
+@@ -1335,6 +1366,7 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+ 
+             println("in {0} i{1}{2} : {3}{2},", usageType, USAGE_VARIABLES[uint32_t(vertexElement.usage)],
+                 uint32_t(vertexElement.usageIndex), USAGE_SEMANTICS[uint32_t(vertexElement.usage)]);
++#endif
+ 
+             vertexElements.emplace(uint32_t(vertexElement.address), vertexElement);
+         }
+diff --git a/XenosRecomp/shader_recompiler.h b/XenosRecomp/shader_recompiler.h
+index b2e317d..c2d78ca 100644
+--- a/XenosRecomp/shader_recompiler.h
++++ b/XenosRecomp/shader_recompiler.h
+@@ -31,6 +31,9 @@ struct ShaderRecompiler : StringBuffer
+     std::unordered_map<uint32_t, const ConstantInfo*> float4Constants;
+     std::unordered_map<uint32_t, const char*> boolConstants;
+     std::unordered_map<uint32_t, const char*> samplers;
++#ifdef AIRBORNE_RECOMP
++    std::map<uint32_t, std::string> samplerArrayNames;
++#endif
+     std::unordered_map<uint32_t, uint32_t> ifEndLabels;
+     uint32_t specConstantsMask = 0;
+ 

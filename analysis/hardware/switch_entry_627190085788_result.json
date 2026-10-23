@@ -1,0 +1,50 @@
+{
+  "build_id": "62719008578868185ea2524e0d4e20261f0f2d1eab277fd82b61f8fbd480c500",
+  "raw_log": "analysis\\hardware\\switch_entry_627190085788_8990a0d4f3ee.txt",
+  "sha256": "8990a0d4f3eea01e24a9730e95f5155c91cfe0b1687fee56780270670f25021e",
+  "bytes": 22260774,
+  "user_observation": "Intro and title splash visible on Switch, slow",
+  "movie_draws": 475,
+  "first_movie": [
+    1,
+    43487,
+    0
+  ],
+  "last_movie": [
+    475,
+    119996,
+    89730
+  ],
+  "intervals": {
+    "n": 474,
+    "mean_ms": 161.41,
+    "median_ms": 99.641,
+    "p95_ms": 219.271,
+    "total_s": 76.508
+  },
+  "stages": {
+    "edram_resolve": {
+      "n": 478,
+      "mean_ms": 15.335,
+      "median_ms": 14.912,
+      "p95_ms": 15.948,
+      "total_s": 7.33
+    },
+    "front_buffer_decode_and_present": {
+      "n": 507,
+      "mean_ms": 44.325,
+      "median_ms": 42.062,
+      "p95_ms": 52.179,
+      "total_s": 22.473
+    },
+    "movie_upload_draw_readback": {
+      "n": 475,
+      "mean_ms": 14.651,
+      "median_ms": 14.236,
+      "p95_ms": 17.366,
+      "total_s": 6.959
+    }
+  },
+  "stop": "120 second watchdog",
+  "cleanup_pass": true
+}

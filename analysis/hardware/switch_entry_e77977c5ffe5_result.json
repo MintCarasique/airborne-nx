@@ -1,0 +1,23 @@
+{
+  "status": "USER_REPORTED_STOP_ON_MANUAL_VSYNC_RESET",
+  "build_id": "e77977c5ffe544b074dd9f288f4d8a7c24f2ada8b770779a0ed153a667710ff9",
+  "raw_log": "analysis\\hardware\\switch_entry_e77977c5ffe5_f05a4e9cb66e.txt",
+  "log_sha256": "f05a4e9cb66ed873db295bb4fe01e8c51df70a31540f0f3d1511112ded7eefcf",
+  "bytes": 188115,
+  "valid_utf8": true,
+  "nul_bytes": 0,
+  "user_observation": "No visible change: initial diagnostic, black screen, final screen; no movie",
+  "content_checks_passed": 3,
+  "display_borrow": true,
+  "display_id": 83,
+  "vi_vsync_event_acquired": true,
+  "first_failure": "eventClear/vblank",
+  "result_decimal": 64001,
+  "result_hex": "0000fa01",
+  "module": 1,
+  "description": 125,
+  "movie_draws": 0,
+  "file_opens": 0,
+  "cleanup_pass": true,
+  "exit_action": "RETURN_TO_LOADER"
+}

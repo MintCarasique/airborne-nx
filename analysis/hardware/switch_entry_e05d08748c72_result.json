@@ -1,0 +1,22 @@
+{
+  "status": "USER_REPORTED_120S_WATCHDOG_BEFORE_RESOURCE_LOADING",
+  "build_id": "e05d08748c721358d0acfcd45ad905eac48b404131dd3d36e396abc249b44289",
+  "raw_log": "analysis\\hardware\\switch_entry_e05d08748c72_e7bd9a3c60bf.txt",
+  "log_sha256": "e7bd9a3c60bf313bcf5ced69c7db1566ddbba19589e047813d725c6992f5e272",
+  "bytes": 5195717,
+  "valid_utf8": true,
+  "nul_bytes": 0,
+  "user_observation": "Black screen for 120 seconds",
+  "successful_vi_event_waits": 513,
+  "initial_black_presentations": 256,
+  "movie_draws": 0,
+  "file_opens": 0,
+  "main_logged_imports": 2999,
+  "main_tls_get_calls": 2713,
+  "watchdog_relative_pc": "06571f90",
+  "watchdog_symbol": "svcArbitrateLock",
+  "watchdog_load_base": "00000004a03eb000",
+  "interpretation": "Main thread progresses slowly through initialization; mutex wait sampled at watchdog. Global serialization and per-line SD flush are concrete contention sources; target acceleration unproven.",
+  "cleanup_pass": true,
+  "exit_action": "RETURN_TO_LOADER"
+}

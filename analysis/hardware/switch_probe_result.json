@@ -1,0 +1,16 @@
+{
+  "status": "USER_REPORTED_HARDWARE_PASS",
+  "probe_version": "0.1",
+  "source": "User-supplied result.txt; not independently observed on the console",
+  "log": "analysis\\hardware\\switch_probe_v0.1_ecb1e73175f9.txt",
+  "log_sha256": "ecb1e73175f9b23b177ea420f1581d6df44984e08c8989191673ef8f0a275685",
+  "system_version": "22.1.0",
+  "applet_type": 0,
+  "applet_mode": "Application",
+  "image_sha256_pass": true,
+  "real_leaf_calls": 768,
+  "half_instruction_executions": 1138867,
+  "timebase_frequency": 50000000,
+  "timebase_delta": 500201,
+  "limits": "Isolated CPU probe only; no game entry, full guest map, GPU, audio or gameplay validation. Log does not identify console model, CFW version or exact NRO hash."
+}

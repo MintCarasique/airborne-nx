@@ -1,0 +1,24 @@
+# Baseline SHA-256: 8050b225e8c4ec7dfeb5aea23cce3e4123163480d243b45c7b3f3da6f05d98e6
+# Experimental configuration. Host CPU archive/startup probe only; no game boot or Switch build.
+[main]
+file_path = "../extracted/base/default.xex"
+out_directory_path = "../generated/ppc"
+switch_table_file_path = "../analysis/airborne_switch_tables_merged.toml"
+
+skip_lr = false
+skip_msr = false
+ctr_as_local = false
+xer_as_local = false
+reserved_as_local = false
+cr_as_local = false
+non_argument_as_local = false
+non_volatile_as_local = false
+
+restgprlr_14_address = 0x82C46AB0
+savegprlr_14_address = 0x82C46A60
+restfpr_14_address = 0x82C46C9C
+savefpr_14_address = 0x82C46C50
+restvmx_14_address = 0x82C48328
+savevmx_14_address = 0x82C48090
+restvmx_64_address = 0x82C483BC
+savevmx_64_address = 0x82C48124

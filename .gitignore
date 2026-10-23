@@ -1,0 +1,42 @@
+# Private input, derived game code, and local toolchain artifacts
+/[[]XBOX360[]]*/
+/AUDIO_TS/
+/VIDEO_TS/
+/extracted/
+/generated/
+/dist/
+/tools/toolchain/
+/tools/XenonRecomp/
+/tools/XenosRecomp/
+/tools/reference-nfsmw/
+/tools/mesa-switch/
+/tools/god2iso/
+/tools/god2xex/
+/tools/*.exe
+/analysis/image/*.bin
+/analysis/instruction_tests/
+/analysis/syntax/
+/analysis/object_build/
+/analysis/switch_object_build/
+/analysis/host_probe_entry.log
+*.iso
+*.xex
+*.xexp
+*.parts
+__pycache__/
+
+# Analysis: keep only human-written docs, recovered tables and small results.
+# Raw logs, hardware dumps, generated JSON reports and copied third-party
+# sources stay local.
+/analysis/*
+!/analysis/*.md
+!/analysis/*.toml
+!/analysis/image/
+/analysis/image/*
+!/analysis/image/*.tsv
+!/analysis/hardware/
+/analysis/hardware/*
+!/analysis/hardware/*_result.json
+*.log
+.vs/
+build/

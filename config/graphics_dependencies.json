@@ -1,0 +1,17 @@
+{
+  "mesa_switch": {
+    "url": "https://github.com/danfromtico/mesa-switch.git",
+    "commit": "0ff52079ca9e9e837ed27eb95a8d239f439a1864"
+  },
+  "xenos_recomp": {
+    "url": "https://github.com/hedge-dev/XenosRecomp.git",
+    "commit": "990d03b28a27b50277ee5d8d942e1c5f873869d1",
+    "patch": "tools/patches/xenosrecomp-airborne.patch",
+    "patch_sha256": "caa249c38e7ea1a75ae821e731067f4e3831b0c6c2eb6d8397ced6231ba8933e"
+  },
+  "nfsmw_reference": {
+    "url": "https://github.com/FermataRest/nfsmw-nx.git",
+    "commit": "66611e3dc6e53f40807561f1e855f1eda241ef4a",
+    "use": "Read-only architecture reference; no game-specific implementation copied"
+  }
+}

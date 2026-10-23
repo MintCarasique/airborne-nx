@@ -1,0 +1,17 @@
+{
+  "status": "USER_REPORTED_HARDWARE_FAIL",
+  "probe_version": "0.2",
+  "probe_kind": "memory",
+  "build_id": "f6741f128e30cca49520e01ef5aaf55a38e68d756205552214d04d291710961e",
+  "matches_known_build": true,
+  "system_version": "22.1.0",
+  "applet_type": 0,
+  "checks": 0,
+  "failures": [
+    "FAIL image/stack svcMapProcessMemory rc=0000d401"
+  ],
+  "limits": "User-supplied log, not independently observed. Small memory/addressing probe only; no game entry, full heap, 512 MiB physical pool, GPU, audio or gameplay validation.",
+  "log": "analysis\\hardware\\switch_memory_v0.2_426976583ec9.txt",
+  "log_sha256": "426976583ec96045fcd07dbe510b0b32f496754fb5a1def677f002ba50c90ffe",
+  "source": "User-supplied log"
+}

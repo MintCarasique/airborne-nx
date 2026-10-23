@@ -1,0 +1,1023 @@
+diff --git a/XenonAnalyse/function.cpp b/XenonAnalyse/function.cpp
+index 34add40..47b0b89 100644
+--- a/XenonAnalyse/function.cpp
++++ b/XenonAnalyse/function.cpp
+@@ -38,11 +38,13 @@ size_t Function::SearchBlock(size_t address) const
+     return -1;
+ }
+ 
+-Function Function::Analyze(const void* code, size_t size, size_t base)
++Function Function::Analyze(const void* code, size_t size, size_t base,
++                           const BranchTargets* indirectBranches,
++                           const std::set<size_t>* functionEntries)
+ {
+     Function fn{ base, 0 };
+ 
+-    if (*((uint32_t*)code + 1) == 0x04000048) // shifted ptr tail call
++    if (size >= 8 && *((uint32_t*)code + 1) == 0x04000048) // shifted ptr tail call
+     {
+         fn.size = 0x8;
+         return fn;
+@@ -58,11 +60,12 @@ Function Function::Analyze(const void* code, size_t size, size_t base)
+     std::vector<size_t> blockStack{};
+     blockStack.reserve(32);
+     blockStack.emplace_back();
++    bool followedSwitch = false;
+ 
+     #define RESTORE_DATA() if (!blockStack.empty()) data = (dataStart + ((blocks[blockStack.back()].base + blocks[blockStack.back()].size) / sizeof(*data))) - 1; // continue adds one
+ 
+     // TODO: Branch fallthrough
+-    for (; data <= dataEnd ; ++data)
++    for (; data < dataEnd ; ++data)
+     {
+         const size_t addr = base + ((data - dataStart) * sizeof(*data));
+         if (blockStack.empty())
+@@ -151,7 +154,8 @@ Function Function::Analyze(const void* code, size_t size, size_t base)
+                     const size_t branchBase = branchDest - base;
+                     const size_t branchBlock = fn.SearchBlock(branchDest);
+ 
+-                    if (branchDest < base)
++                    if (branchDest < base || branchDest - base >= size ||
++                        (branchDest != base && functionEntries != nullptr && functionEntries->count(branchDest)))
+                     {
+                         // Branches before base are just tail calls, no need to chase after those
+                         RESTORE_DATA();
+@@ -180,6 +184,29 @@ Function Function::Analyze(const void* code, size_t size, size_t base)
+                 }
+                 else if (op == PPC_OP_CTR)
+                 {
++                    // Follow supplied switch successors instead of treating BCTR as a return.
++                    // These are exact CFG edges, not an enlargement to the largest table label.
++                    if (xop == 528 && indirectBranches != nullptr)
++                    {
++                        const auto table = indirectBranches->find(addr);
++                        if (table != indirectBranches->end())
++                        {
++                            for (auto target : table->second)
++                            {
++                                if (target < base || target - base >= size || (target & 3))
++                                    continue;
++                                if (fn.SearchBlock(target) == size_t(-1))
++                                {
++                                    blocks.emplace_back(target - base, 0);
++                                    blockStack.emplace_back(blocks.size() - 1);
++                                }
++                            }
++                            followedSwitch = true;
++                            RESTORE_DATA();
++                            continue;
++                        }
++                    }
++
+                     // 5th bit of BO tells cpu to ignore the counter, which is a blr/bctr otherwise it's conditional
+                     const bool conditional = !(PPC_BO(instruction) & 0x10);
+                     if (conditional)
+@@ -230,7 +257,7 @@ Function Function::Analyze(const void* code, size_t size, size_t base)
+             break;
+         }
+ 
+-        if (discontinuity != -1)
++        if (discontinuity != -1 && !followedSwitch)
+         {
+             blocks.erase(blocks.begin() + discontinuity, blocks.end());
+         }
+diff --git a/XenonAnalyse/function.h b/XenonAnalyse/function.h
+index 7df1c6a..96b5587 100644
+--- a/XenonAnalyse/function.h
++++ b/XenonAnalyse/function.h
+@@ -2,6 +2,8 @@
+ 
+ #include <cstddef>
+ #include <vector>
++#include <unordered_map>
++#include <set>
+ 
+ #ifdef _DEBUG
+ #define DEBUG(X) X
+@@ -47,5 +49,8 @@ struct Function
+     }
+     
+     size_t SearchBlock(size_t address) const;
+-    static Function Analyze(const void* code, size_t size, size_t base);
++    using BranchTargets = std::unordered_map<size_t, std::vector<size_t>>;
++    static Function Analyze(const void* code, size_t size, size_t base,
++                            const BranchTargets* indirectBranches = nullptr,
++                            const std::set<size_t>* functionEntries = nullptr);
+ };
+diff --git a/XenonRecomp/recompiler.cpp b/XenonRecomp/recompiler.cpp
+index fa91527..ec00767 100644
+--- a/XenonRecomp/recompiler.cpp
++++ b/XenonRecomp/recompiler.cpp
+@@ -95,6 +95,63 @@ bool Recompiler::LoadConfig(const std::string_view& configFilePath)
+ 
+ void Recompiler::Analyse()
+ {
++    std::set<size_t> functionEntries;
++    for (const auto& symbol : image.symbols) functionEntries.insert(symbol.address);
++    for (const auto& [address, size] : config.functions) functionEntries.insert(address);
++    const auto* runtimeData = image.Find(".pdata");
++    if (runtimeData != nullptr)
++        for (size_t offset = 0; offset + sizeof(IMAGE_CE_RUNTIME_FUNCTION) <= runtimeData->size;
++             offset += sizeof(IMAGE_CE_RUNTIME_FUNCTION))
++            functionEntries.insert(ByteSwap(*reinterpret_cast<const uint32_t*>(runtimeData->data + offset)));
++    // Establish call targets before tracing any function: a direct branch to
++    // another known function is a tail call, not a CFG successor to absorb.
++    for (const auto& section : image.sections)
++    {
++        if (!(section.flags & SectionFlags_Code)) continue;
++        for (size_t offset = 0; offset + 4 <= section.size; offset += 4)
++        {
++            const auto word = ByteSwap(*reinterpret_cast<const uint32_t*>(section.data + offset));
++            if (PPC_OP(word) == PPC_OP_B && PPC_BL(word) && !PPC_BA(word))
++            {
++                const size_t target = section.base + offset + PPC_BI(word);
++                if (target >= section.base && target - section.base < section.size)
++                    functionEntries.insert(target);
++            }
++        }
++    }
++
++    Function::BranchTargets switchBranches;
++    for (const auto& [address, table] : config.switchTables)
++    {
++        const Section* owner = nullptr;
++        for (const auto& section : image.sections)
++            if ((section.flags & SectionFlags_Code) && address >= section.base &&
++                address - section.base < section.size)
++                owner = &section;
++        if (owner == nullptr) continue;
++        // Recognized switch sequences fit within 64 bytes. Stop at the first
++        // branch, so a malformed table cannot attach to a later function.
++        for (size_t offset = address - owner->base;
++             offset + 4 <= owner->size && offset < address - owner->base + 64; offset += 4)
++        {
++            ppc_insn insn{};
++            ppc::Disassemble(owner->data + offset, owner->base + offset, insn);
++            if (insn.opcode == nullptr) break;
++            if (insn.opcode->id == PPC_INST_BCTR)
++            {
++                auto& targets = switchBranches[owner->base + offset];
++                targets.assign(table.labels.begin(), table.labels.end());
++                std::sort(targets.begin(), targets.end());
++                targets.erase(std::unique(targets.begin(), targets.end()), targets.end());
++                break;
++            }
++            const auto word = ByteSwap(*reinterpret_cast<const uint32_t*>(owner->data + offset));
++            if (PPC_OP(word) == PPC_OP_B || PPC_OP(word) == PPC_OP_BC ||
++                insn.opcode->id == PPC_INST_BLR || insn.opcode->id == PPC_INST_BCTRL)
++                break;
++        }
++    }
++
+     for (size_t i = 14; i < 128; i++)
+     {
+         if (i < 32)
+@@ -213,7 +270,7 @@ void Recompiler::Analyse()
+                 if (address >= section.base && address < section.base + section.size && image.symbols.find(address) == image.symbols.end())
+                 {
+                     auto data = section.data + address - section.base;
+-                    auto& fn = functions.emplace_back(Function::Analyze(data, section.base + section.size - address, address));
++                    auto& fn = functions.emplace_back(Function::Analyze(data, section.base + section.size - address, address, &switchBranches, &functionEntries));
+                     image.symbols.emplace(fmt::format("sub_{:X}", fn.base), fn.base, fn.size, Symbol_Function);
+                 }
+             }
+@@ -242,7 +299,7 @@ void Recompiler::Analyse()
+             }
+             else
+             {
+-                auto& fn = functions.emplace_back(Function::Analyze(data, dataEnd - data, base));
++                auto& fn = functions.emplace_back(Function::Analyze(data, dataEnd - data, base, &switchBranches, &functionEntries));
+                 image.symbols.emplace(fmt::format("sub_{:X}", fn.base), fn.base, fn.size, Symbol_Function);
+ 
+                 base += fn.size;
+@@ -251,6 +308,34 @@ void Recompiler::Analyse()
+         }
+     }
+ 
++    // Switch-aware spans may contain callable leaf entries that the sequential
++    // gap pass no longer sees. Close the set over direct calls and tail calls,
++    // including targets in other executable sections.
++    for (size_t i = 0; i < functions.size(); ++i)
++    {
++        const auto fn = functions[i];
++        for (size_t address = fn.base; address + 4 <= fn.base + fn.size; address += 4)
++        {
++            const auto word = ByteSwap(*reinterpret_cast<const uint32_t*>(image.Find(address)));
++            if (PPC_OP(word) != PPC_OP_B || PPC_BA(word)) continue;
++            const size_t target = address + PPC_BI(word);
++            if (!PPC_BL(word) && target >= fn.base && target < fn.base + fn.size) continue;
++            if (image.symbols.find(target) != image.symbols.end()) continue;
++            for (const auto& section : image.sections)
++            {
++                if (!(section.flags & SectionFlags_Code) || target < section.base ||
++                    target - section.base >= section.size) continue;
++                auto child = Function::Analyze(section.data + target - section.base,
++                    section.base + section.size - target, target, &switchBranches, &functionEntries);
++                if (child.size == 0) break;
++                image.symbols.emplace(fmt::format("sub_{:X}", target), target, child.size, Symbol_Function);
++                functions.emplace_back(std::move(child));
++                functionEntries.insert(target);
++                break;
++            }
++        }
++    }
++
+     std::sort(functions.begin(), functions.end(), [](auto& lhs, auto& rhs) { return lhs.base < rhs.base; });
+ }
+ 
+@@ -373,12 +458,12 @@ bool Recompiler::Recompile(
+         {
+             if (address == config.longJmpAddress)
+             {
+-                println("\tlongjmp(*reinterpret_cast<jmp_buf*>(base + {}.u32), {}.s32);", r(3), r(4));
++                println("\tlongjmp(*reinterpret_cast<jmp_buf*>(ppc_guest_ptr(base, {}.u32)), {}.s32);", r(3), r(4));
+             }
+             else if (address == config.setJmpAddress)
+             {
+                 println("\t{} = ctx;", env());
+-                println("\t{}.s64 = setjmp(*reinterpret_cast<jmp_buf*>(base + {}.u32));", temp(), r(3));
++                println("\t{}.s64 = setjmp(*reinterpret_cast<jmp_buf*>(ppc_guest_ptr(base, {}.u32)));", temp(), r(3));
+                 println("\tif ({}.s64 != 0) ctx = {};", temp(), env());
+                 println("\t{} = {};", r(3), temp());
+             }
+@@ -712,7 +797,16 @@ bool Recompiler::Recompile(
+         break;
+ 
+     case PPC_INST_BLRL:
+-        println("__builtin_debugtrap();");
++        if (config.skipLr)
++        {
++            fmt::println("ERROR: BLRL requires LR state at {:X}", base);
++            println("\t__builtin_trap();");
++            return false;
++        }
++        println("\t{}.u64 = ctx.lr;", temp());
++        println("\tctx.lr = 0x{:X};", base + 4);
++        println("\tPPC_CALL_INDIRECT_FUNC({}.u32 & ~3u);", temp());
++        csrState = CSRState::Unknown;
+         break;
+ 
+     case PPC_INST_BLT:
+@@ -813,17 +907,17 @@ bool Recompiler::Recompile(
+         break;
+ 
+     case PPC_INST_DCBZ:
+-        print("\tmemset(base + ((");
++        print("\tmemset(ppc_guest_ptr(base, ((");
+         if (insn.operands[0] != 0)
+             print("{}.u32 + ", r(insn.operands[0]));
+-        println("{}.u32) & ~31), 0, 32);", r(insn.operands[1]));
++        println("{}.u32) & ~31)), 0, 32);", r(insn.operands[1]));
+         break;
+ 
+     case PPC_INST_DCBZL:
+-        print("\tmemset(base + ((");
++        print("\tmemset(ppc_guest_ptr(base, ((");
+         if (insn.operands[0] != 0)
+             print("{}.u32 + ", r(insn.operands[0]));
+-        println("{}.u32) & ~127), 0, 128);", r(insn.operands[1]));
++        println("{}.u32) & ~127)), 0, 128);", r(insn.operands[1]));
+         break;
+ 
+     case PPC_INST_DIVD:
+@@ -985,6 +1079,18 @@ bool Recompiler::Recompile(
+         println("\t{}.f64 = float(1.0 / {}.f64);", f(insn.operands[0]), f(insn.operands[1]));
+         break;
+ 
++    case PPC_INST_FRSQRTE:
++        printSetFlushMode(false);
++        println("\tctx.fpscr.reciprocalSqrt({}, {}.u64);", f(insn.operands[0]), f(insn.operands[1]));
++        if (strchr(insn.opcode->name, '.'))
++        {
++            println("\t{}.lt = bool(ctx.fpscr.guestFlags & 0x80000000u);", cr(1));
++            println("\t{}.gt = bool(ctx.fpscr.guestFlags & 0x40000000u);", cr(1));
++            println("\t{}.eq = bool(ctx.fpscr.guestFlags & 0x20000000u);", cr(1));
++            println("\t{}.so = bool(ctx.fpscr.guestFlags & 0x10000000u);", cr(1));
++        }
++        break;
++
+     case PPC_INST_FRSP:
+         printSetFlushMode(false);
+         println("\t{}.f64 = double(float({}.f64));", f(insn.operands[0]), f(insn.operands[1]));
+@@ -1043,7 +1149,7 @@ bool Recompiler::Recompile(
+         break;
+ 
+     case PPC_INST_LDARX:
+-        print("\t{}.u64 = *(uint64_t*)(base + ", reserved());
++        print("\t{}.u64 = *(uint64_t*)ppc_guest_ptr(base, ", reserved());
+         if (insn.operands[1] != 0)
+             print("{}.u32 + ", r(insn.operands[1]));
+         println("{}.u32);", r(insn.operands[2]));
+@@ -1139,7 +1245,7 @@ bool Recompiler::Recompile(
+     case PPC_INST_LVX128:
+         // NOTE: for endian swapping, we reverse the whole vector instead of individual elements.
+         // this is accounted for in every instruction (eg. dp3 sums yzw instead of xyz)
+-        print("\tsimde_mm_store_si128((simde__m128i*){}.u8, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)(base + ((", v(insn.operands[0]));
++        print("\tsimde_mm_store_si128((simde__m128i*){}.u8, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)ppc_guest_ptr(base, ((", v(insn.operands[0]));
+         if (insn.operands[1] != 0)
+             print("{}.u32 + ", r(insn.operands[1]));
+         println("{}.u32) & ~0xF))), simde_mm_load_si128((simde__m128i*)VectorMaskL)));", r(insn.operands[2]));
+@@ -1151,7 +1257,7 @@ bool Recompiler::Recompile(
+         if (insn.operands[1] != 0)
+             print("{}.u32 + ", r(insn.operands[1]));
+         println("{}.u32;", r(insn.operands[2]));
+-        println("\tsimde_mm_store_si128((simde__m128i*){}.u8, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)(base + ({}.u32 & ~0xF))), simde_mm_load_si128((simde__m128i*)&VectorMaskL[({}.u32 & 0xF) * 16])));", v(insn.operands[0]), temp(), temp());
++        println("\tsimde_mm_store_si128((simde__m128i*){}.u8, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)ppc_guest_ptr(base, ({}.u32 & ~0xF))), simde_mm_load_si128((simde__m128i*)&VectorMaskL[({}.u32 & 0xF) * 16])));", v(insn.operands[0]), temp(), temp());
+         break;
+ 
+     case PPC_INST_LVRX:
+@@ -1160,7 +1266,7 @@ bool Recompiler::Recompile(
+         if (insn.operands[1] != 0)
+             print("{}.u32 + ", r(insn.operands[1]));
+         println("{}.u32;", r(insn.operands[2]));
+-        println("\tsimde_mm_store_si128((simde__m128i*){}.u8, {}.u32 & 0xF ? simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)(base + ({}.u32 & ~0xF))), simde_mm_load_si128((simde__m128i*)&VectorMaskR[({}.u32 & 0xF) * 16])) : simde_mm_setzero_si128());", v(insn.operands[0]), temp(), temp(), temp());
++        println("\tsimde_mm_store_si128((simde__m128i*){}.u8, {}.u32 & 0xF ? simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)ppc_guest_ptr(base, ({}.u32 & ~0xF))), simde_mm_load_si128((simde__m128i*)&VectorMaskR[({}.u32 & 0xF) * 16])) : simde_mm_setzero_si128());", v(insn.operands[0]), temp(), temp(), temp());
+         break;
+ 
+     case PPC_INST_LVSL:
+@@ -1187,7 +1293,7 @@ bool Recompiler::Recompile(
+         break;
+ 
+     case PPC_INST_LWARX:
+-        print("\t{}.u32 = *(uint32_t*)(base + ", reserved());
++        print("\t{}.u32 = *(uint32_t*)ppc_guest_ptr(base, ", reserved());
+         if (insn.operands[1] != 0)
+             print("{}.u32 + ", r(insn.operands[1]));
+         println("{}.u32);", r(insn.operands[2]));
+@@ -1260,7 +1366,7 @@ bool Recompiler::Recompile(
+         break;
+ 
+     case PPC_INST_MFTB:
+-        println("\t{}.u64 = __rdtsc();", r(insn.operands[0]));
++        println("\t{}.u64 = ppc_read_timebase();", r(insn.operands[0]));
+         break;
+ 
+     case PPC_INST_MR:
+@@ -1282,7 +1388,7 @@ bool Recompiler::Recompile(
+         break;
+ 
+     case PPC_INST_MTFSF:
+-        println("\tctx.fpscr.storeFromGuest({}.u32);", f(insn.operands[1]));
++        println("\tctx.fpscr.storeFromGuest({}.u32, {});", f(insn.operands[1]), insn.operands[0]);
+         break;
+ 
+     case PPC_INST_MTLR:
+@@ -1301,6 +1407,27 @@ bool Recompiler::Recompile(
+         println("\t{}.ca = ({}.u64 & 0x20000000) != 0;", xer(), r(insn.operands[0]));
+         break;
+ 
++    case PPC_INST_EQV:
++        println("\t{}.u64 = ~({}.u64 ^ {}.u64);", r(insn.operands[0]), r(insn.operands[1]), r(insn.operands[2]));
++        if (strchr(insn.opcode->name, '.'))
++            println("\t{}.compare<int64_t>({}.s64, 0, {});", cr(0), r(insn.operands[0]), xer());
++        break;
++
++    case PPC_INST_CROR:
++    case PPC_INST_CRORC:
++    {
++        const char* bits[] = {"lt", "gt", "eq", "so"};
++        const auto d = insn.operands[0], a = insn.operands[1], b = insn.operands[2];
++        println("\t{}.{} = bool({}.{}) | {}bool({}.{});", cr(d / 4), bits[d % 4], cr(a / 4), bits[a % 4], insn.opcode->id == PPC_INST_CRORC ? "!" : "", cr(b / 4), bits[b % 4]);
++        break;
++    }
++
++    case PPC_INST_MULHD:
++        println("\t{}.s64 = int64_t((__int128({}.s64) * __int128({}.s64)) >> 64);", r(insn.operands[0]), r(insn.operands[1]), r(insn.operands[2]));
++        if (strchr(insn.opcode->name, '.'))
++            println("\t{}.compare<int64_t>({}.s64, 0, {});", cr(0), r(insn.operands[0]), xer());
++        break;
++
+     case PPC_INST_MULHW:
+         println("\t{}.s64 = (int64_t({}.s32) * int64_t({}.s32)) >> 32;", r(insn.operands[0]), r(insn.operands[1]), r(insn.operands[2]));
+         break;
+@@ -1503,10 +1630,10 @@ bool Recompiler::Recompile(
+     case PPC_INST_STDCX:
+         println("\t{}.lt = 0;", cr(0));
+         println("\t{}.gt = 0;", cr(0));
+-        print("\t{}.eq = __sync_bool_compare_and_swap(reinterpret_cast<uint64_t*>(base + ", cr(0));
++        print("\t{}.eq = __sync_bool_compare_and_swap(reinterpret_cast<uint64_t*>(ppc_guest_ptr(base, ", cr(0));
+         if (insn.operands[1] != 0)
+             print("{}.u32 + ", r(insn.operands[1]));
+-        println("{}.u32), {}.s64, __builtin_bswap64({}.s64));", r(insn.operands[2]), reserved(), r(insn.operands[0]));
++        println("{}.u32)), {}.s64, __builtin_bswap64({}.s64));", r(insn.operands[2]), reserved(), r(insn.operands[0]));
+         println("\t{}.so = {}.so;", cr(0), xer());
+         break;
+ 
+@@ -1635,7 +1762,7 @@ bool Recompiler::Recompile(
+ 
+     case PPC_INST_STVX:
+     case PPC_INST_STVX128:
+-        print("\tsimde_mm_store_si128((simde__m128i*)(base + ((");
++        print("\tsimde_mm_store_si128((simde__m128i*)ppc_guest_ptr(base, ((");
+         if (insn.operands[1] != 0)
+             print("{}.u32 + ", r(insn.operands[1]));
+         println("{}.u32) & ~0xF)), simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*){}.u8), simde_mm_load_si128((simde__m128i*)VectorMaskL)));", r(insn.operands[2]), v(insn.operands[0]));
+@@ -1658,10 +1785,10 @@ bool Recompiler::Recompile(
+     case PPC_INST_STWCX:
+         println("\t{}.lt = 0;", cr(0));
+         println("\t{}.gt = 0;", cr(0));
+-        print("\t{}.eq = __sync_bool_compare_and_swap(reinterpret_cast<uint32_t*>(base + ", cr(0));
++        print("\t{}.eq = __sync_bool_compare_and_swap(reinterpret_cast<uint32_t*>(ppc_guest_ptr(base, ", cr(0));
+         if (insn.operands[1] != 0)
+             print("{}.u32 + ", r(insn.operands[1]));
+-        println("{}.u32), {}.s32, __builtin_bswap32({}.s32));", r(insn.operands[2]), reserved(), r(insn.operands[0]));
++        println("{}.u32)), {}.s32, __builtin_bswap32({}.s32));", r(insn.operands[2]), reserved(), r(insn.operands[0]));
+         println("\t{}.so = {}.so;", cr(0), xer());
+         break;
+ 
+@@ -1740,17 +1867,31 @@ bool Recompiler::Recompile(
+         println("\tsimde_mm_store_ps({}.f32, simde_mm_add_ps(simde_mm_load_ps({}.f32), simde_mm_load_ps({}.f32)));", v(insn.operands[0]), v(insn.operands[1]), v(insn.operands[2]));
+         break;
+ 
++    case PPC_INST_VADDSBS:
+     case PPC_INST_VADDSHS:
+-        println("\tsimde_mm_store_si128((simde__m128i*){}.s16, simde_mm_adds_epi16(simde_mm_load_si128((simde__m128i*){}.s16), simde_mm_load_si128((simde__m128i*){}.s16)));", v(insn.operands[0]), v(insn.operands[1]), v(insn.operands[2]));
++    case PPC_INST_VADDSWS:
++    case PPC_INST_VADDUBS:
++    case PPC_INST_VADDUWS:
++    case PPC_INST_VSUBSHS:
++    case PPC_INST_VSUBSWS:
++    case PPC_INST_VSUBUBS:
++    {
++        const int id = insn.opcode->id;
++        const bool subtract = id == PPC_INST_VSUBSHS || id == PPC_INST_VSUBSWS || id == PPC_INST_VSUBUBS;
++        const bool isUnsigned = id == PPC_INST_VADDUBS || id == PPC_INST_VADDUWS || id == PPC_INST_VSUBUBS;
++        const int bits = (id == PPC_INST_VADDSBS || id == PPC_INST_VADDUBS || id == PPC_INST_VSUBUBS) ? 8 :
++            (id == PPC_INST_VADDSHS || id == PPC_INST_VSUBSHS) ? 16 : 32;
++        const auto member = fmt::format("{}{}", isUnsigned ? 'u' : 's', bits);
++        const auto type = fmt::format("{}int{}_t", isUnsigned ? "u" : "", bits);
++        for (int i = 0; i < 128 / bits; ++i)
++            println("\t{}.{}[{}] = ctx.vscr.saturate<{}>(int64_t({}.{}[{}]) {} int64_t({}.{}[{}]));", v(insn.operands[0]), member, i, type, v(insn.operands[1]), member, i, subtract ? '-' : '+', v(insn.operands[2]), member, i);
+         break;
++    }
+ 
+     case PPC_INST_VADDUBM:
+         println("\tsimde_mm_store_si128((simde__m128i*){}.u8, simde_mm_add_epi8(simde_mm_load_si128((simde__m128i*){}.u8), simde_mm_load_si128((simde__m128i*){}.u8)));", v(insn.operands[0]), v(insn.operands[1]), v(insn.operands[2]));
+         break;
+ 
+-    case PPC_INST_VADDUBS:
+-        println("\tsimde_mm_store_si128((simde__m128i*){}.u8, simde_mm_adds_epu8(simde_mm_load_si128((simde__m128i*){}.u8), simde_mm_load_si128((simde__m128i*){}.u8)));", v(insn.operands[0]), v(insn.operands[1]), v(insn.operands[2]));
+-        break;
+ 
+     case PPC_INST_VADDUHM:
+         println("\tsimde_mm_store_si128((simde__m128i*){}.u16, simde_mm_add_epi16(simde_mm_load_si128((simde__m128i*){}.u16), simde_mm_load_si128((simde__m128i*){}.u16)));", v(insn.operands[0]), v(insn.operands[1]), v(insn.operands[2]));
+@@ -1760,19 +1901,31 @@ bool Recompiler::Recompile(
+         println("\tsimde_mm_store_si128((simde__m128i*){}.u32, simde_mm_add_epi32(simde_mm_load_si128((simde__m128i*){}.u32), simde_mm_load_si128((simde__m128i*){}.u32)));", v(insn.operands[0]), v(insn.operands[1]), v(insn.operands[2]));
+         break;
+ 
+-    case PPC_INST_VADDUWS:
+-        println("\tsimde_mm_store_si128((simde__m128i*){}.u32, simde_mm_adds_epu32(simde_mm_load_si128((simde__m128i*){}.u32), simde_mm_load_si128((simde__m128i*){}.u32)));", v(insn.operands[0]), v(insn.operands[1]), v(insn.operands[2]));
+-        break;
+ 
+     case PPC_INST_VAND:
+     case PPC_INST_VAND128:
+         println("\tsimde_mm_store_si128((simde__m128i*){}.u8, simde_mm_and_si128(simde_mm_load_si128((simde__m128i*){}.u8), simde_mm_load_si128((simde__m128i*){}.u8)));", v(insn.operands[0]), v(insn.operands[1]), v(insn.operands[2]));
+         break;
+ 
++    case PPC_INST_VANDC:
+     case PPC_INST_VANDC128:
+         println("\tsimde_mm_store_si128((simde__m128i*){}.u8, simde_mm_andnot_si128(simde_mm_load_si128((simde__m128i*){}.u8), simde_mm_load_si128((simde__m128i*){}.u8)));", v(insn.operands[0]), v(insn.operands[2]), v(insn.operands[1]));
+         break;
+ 
++    case PPC_INST_VNOR:
++        println("\tsimde_mm_store_si128((simde__m128i*){}.u8, simde_mm_xor_si128(simde_mm_or_si128(simde_mm_load_si128((simde__m128i*){}.u8), simde_mm_load_si128((simde__m128i*){}.u8)), simde_mm_set1_epi32(-1)));", v(insn.operands[0]), v(insn.operands[1]), v(insn.operands[2]));
++        break;
++
++    case PPC_INST_VMAXSH:
++    case PPC_INST_VMINSH:
++    case PPC_INST_VAVGUH:
++    {
++        const char* operation = insn.opcode->id == PPC_INST_VMAXSH ? "max_epi16" :
++            insn.opcode->id == PPC_INST_VMINSH ? "min_epi16" : "avg_epu16";
++        println("\tsimde_mm_store_si128((simde__m128i*){}.u16, simde_mm_{}(simde_mm_load_si128((simde__m128i*){}.u16), simde_mm_load_si128((simde__m128i*){}.u16)));", v(insn.operands[0]), operation, v(insn.operands[1]), v(insn.operands[2]));
++        break;
++    }
++
+     case PPC_INST_VAVGSB:
+         println("\tsimde_mm_store_si128((simde__m128i*){}.u8, simde_mm_avg_epi8(simde_mm_load_si128((simde__m128i*){}.u8), simde_mm_load_si128((simde__m128i*){}.u8)));", v(insn.operands[0]), v(insn.operands[1]), v(insn.operands[2]));
+         break;
+@@ -1785,6 +1938,12 @@ bool Recompiler::Recompile(
+         println("\tsimde_mm_store_si128((simde__m128i*){}.u8, simde_mm_avg_epu8(simde_mm_load_si128((simde__m128i*){}.u8), simde_mm_load_si128((simde__m128i*){}.u8)));", v(insn.operands[0]), v(insn.operands[1]), v(insn.operands[2]));
+         break;
+ 
++    case PPC_INST_VCTUXS:
++    case PPC_INST_VCFPUXWS128:
++        for (int i = 0; i < 4; ++i)
++            println("\t{}.u32[{}] = ctx.vscr.convertUnsigned({}.u32[{}], {});", v(insn.operands[0]), i, v(insn.operands[1]), i, insn.operands[2]);
++        break;
++
+     case PPC_INST_VCTSXS:
+     case PPC_INST_VCFPSXWS128:
+         printSetFlushMode(true);
+@@ -1875,8 +2034,24 @@ bool Recompiler::Recompile(
+         println("\tsimde_mm_store_si128((simde__m128i*){}.u8, simde_mm_cmpgt_epu8(simde_mm_load_si128((simde__m128i*){}.u8), simde_mm_load_si128((simde__m128i*){}.u8)));", v(insn.operands[0]), v(insn.operands[1]), v(insn.operands[2]));
+         break;
+ 
++    case PPC_INST_VCMPEQUH:
++    case PPC_INST_VCMPGTSH:
++    case PPC_INST_VCMPGTSW:
++    case PPC_INST_VCMPGTUW:
++    {
++        const int id = insn.opcode->id;
++        const char* operation = id == PPC_INST_VCMPEQUH ? "simde_mm_cmpeq_epi16" :
++            id == PPC_INST_VCMPGTSH ? "simde_mm_cmpgt_epi16" : id == PPC_INST_VCMPGTSW ? "simde_mm_cmpgt_epi32" : "ppc_cmpgt_epu32";
++        println("\tsimde_mm_store_si128((simde__m128i*){}.u8, {}(simde_mm_load_si128((simde__m128i*){}.u8), simde_mm_load_si128((simde__m128i*){}.u8)));", v(insn.operands[0]), operation, v(insn.operands[1]), v(insn.operands[2]));
++        if (strchr(insn.opcode->name, '.'))
++            println("\t{}.setFromMask(simde_mm_load_si128((simde__m128i*){}.u8), 0xFFFF);", cr(6), v(insn.operands[0]));
++        break;
++    }
++
+     case PPC_INST_VCMPGTUH:
+         println("\tsimde_mm_store_si128((simde__m128i*){}.u8, simde_mm_cmpgt_epu16(simde_mm_load_si128((simde__m128i*){}.u16), simde_mm_load_si128((simde__m128i*){}.u16)));", v(insn.operands[0]), v(insn.operands[1]), v(insn.operands[2]));
++        if (strchr(insn.opcode->name, '.'))
++            println("\t{}.setFromMask(simde_mm_load_si128((simde__m128i*){}.u8), 0xFFFF);", cr(6), v(insn.operands[0]));
+         break;
+ 
+     case PPC_INST_VEXPTEFP:
+@@ -2014,6 +2189,16 @@ bool Recompiler::Recompile(
+             println("\t{}.u32[{}] = {}.u32;", v(insn.operands[0]), insn.operands[4], temp());
+             break;
+ 
++        case 3: // FLOAT16_2, one packed word; other mask modes remain explicit traps.
++            if (insn.operands[3] != 1)
++            {
++                println("\t__builtin_debugtrap();");
++                break;
++            }
++            println("\t{}.u32 = (uint32_t(ppc_float_to_half_rtz({}.u32[3])) << 16) | ppc_float_to_half_rtz({}.u32[2]);", temp(), v(insn.operands[1]), v(insn.operands[1]));
++            println("\t{}.u32[{}] = {}.u32;", v(insn.operands[0]), insn.operands[4], temp());
++            break;
++
+         case 5: // float16_4
+             if (insn.operands[3] != 2 || insn.operands[4] > 2)
+                 fmt::println("Unexpected float16_4 pack instruction at {:X}", base);
+@@ -2044,7 +2229,29 @@ bool Recompiler::Recompile(
+ 
+     case PPC_INST_VPKSHUS:
+     case PPC_INST_VPKSHUS128:
+-        println("\tsimde_mm_store_si128((simde__m128i*){}.u8, simde_mm_packus_epi16(simde_mm_load_si128((simde__m128i*){}.s16), simde_mm_load_si128((simde__m128i*){}.s16)));", v(insn.operands[0]), v(insn.operands[2]), v(insn.operands[1]));
++    case PPC_INST_VPKSHSS:
++    case PPC_INST_VPKSWSS:
++    case PPC_INST_VPKSWUS:
++    case PPC_INST_VPKUHUS:
++    {
++        const int id = insn.opcode->id;
++        const bool word = id == PPC_INST_VPKSWSS || id == PPC_INST_VPKSWUS;
++        const int bits = word ? 32 : 16;
++        const auto source = fmt::format("{}{}", id == PPC_INST_VPKUHUS ? 'u' : 's', bits);
++        const bool signedResult = id == PPC_INST_VPKSHSS || id == PPC_INST_VPKSWSS;
++        const auto dest = fmt::format("{}{}", signedResult ? 's' : 'u', bits / 2);
++        const auto type = fmt::format("{}int{}_t", signedResult ? "" : "u", bits / 2);
++        // Snapshot both inputs through a temporary result: VD may alias VA/VB.
++        // Reversed storage puts the packed VB half before the packed VA half.
++        for (int i = 0; i < 256 / bits; ++i)
++            println("\t{}.{}[{}] = ctx.vscr.saturate<{}>({}.{}[{}]);", vTemp(), dest, i, type, v(insn.operands[i < 128 / bits ? 2 : 1]), source, i % (128 / bits));
++        println("\t{} = {};", v(insn.operands[0]), vTemp());
++        break;
++    }
++
++    case PPC_INST_VRLH:
++        for (int i = 0; i < 8; ++i)
++            println("\t{}.u16[{}] = uint16_t((uint32_t({}.u16[{}]) << ({}.u16[{}] & 15)) | (uint32_t({}.u16[{}]) >> ((16 - ({}.u16[{}] & 15)) & 15)));", v(insn.operands[0]), i, v(insn.operands[1]), i, v(insn.operands[2]), i, v(insn.operands[1]), i, v(insn.operands[2]), i);
+         break;
+ 
+     case PPC_INST_VREFP:
+@@ -2088,6 +2295,7 @@ bool Recompiler::Recompile(
+         break;
+ 
+     case PPC_INST_VSEL:
++    case PPC_INST_VSEL128:
+         println("\tsimde_mm_store_si128((simde__m128i*){}.u8, simde_mm_or_si128(simde_mm_andnot_si128(simde_mm_load_si128((simde__m128i*){}.u8), simde_mm_load_si128((simde__m128i*){}.u8)), simde_mm_and_si128(simde_mm_load_si128((simde__m128i*){}.u8), simde_mm_load_si128((simde__m128i*){}.u8))));", v(insn.operands[0]), v(insn.operands[3]), v(insn.operands[1]), v(insn.operands[3]), v(insn.operands[2]));
+         break;
+ 
+@@ -2102,6 +2310,31 @@ bool Recompiler::Recompile(
+         println("\tsimde_mm_store_si128((simde__m128i*){}.u8, simde_mm_alignr_epi8(simde_mm_load_si128((simde__m128i*){}.u8), simde_mm_load_si128((simde__m128i*){}.u8), {}));", v(insn.operands[0]), v(insn.operands[1]), v(insn.operands[2]), 16 - insn.operands[3]);
+         break;
+ 
++    case PPC_INST_VSLH:
++        // Each result lane depends only on the same source lanes, including VD=VB.
++        for (size_t i = 0; i < 8; i++)
++            println("\t{}.u16[{}] = uint16_t(uint32_t({}.u16[{}]) << ({}.u16[{}] & 15));", v(insn.operands[0]), i, v(insn.operands[1]), i, v(insn.operands[2]), i);
++        break;
++
++    case PPC_INST_VSRAH:
++        for (size_t i = 0; i < 8; i++)
++            println("\t{}.s16[{}] = int16_t(int32_t({}.s16[{}]) >> ({}.u16[{}] & 15));", v(insn.operands[0]), i, v(insn.operands[1]), i, v(insn.operands[2]), i);
++        break;
++
++    case PPC_INST_VSRH:
++        for (size_t i = 0; i < 8; i++)
++            println("\t{}.u16[{}] = uint16_t({}.u16[{}] >> ({}.u16[{}] & 15));", v(insn.operands[0]), i, v(insn.operands[1]), i, v(insn.operands[2]), i);
++        break;
++
++    case PPC_INST_VSRAB:
++        for (size_t i = 0; i < 16; i++)
++            println("\t{}.s8[{}] = int8_t(int32_t({}.s8[{}]) >> ({}.u8[{}] & 7));", v(insn.operands[0]), i, v(insn.operands[1]), i, v(insn.operands[2]), i);
++        break;
++
++    case PPC_INST_VSUBUBM:
++        println("\tsimde_mm_store_si128((simde__m128i*){}.u8, simde_mm_sub_epi8(simde_mm_load_si128((simde__m128i*){}.u8), simde_mm_load_si128((simde__m128i*){}.u8)));", v(insn.operands[0]), v(insn.operands[1]), v(insn.operands[2]));
++        break;
++
+     case PPC_INST_VSLW:
+     case PPC_INST_VSLW128:
+         // TODO: vectorize, ensure endianness is correct
+@@ -2130,6 +2363,14 @@ bool Recompiler::Recompile(
+         println("\tsimde_mm_store_si128((simde__m128i*){}.u8, simde_mm_set1_epi8(char(0x{:X})));", v(insn.operands[0]), insn.operands[1]);
+         break;
+ 
++    case PPC_INST_VSPLTISH:
++    {
++        // The disassembler may represent SIMM as a sign-extended uint32_t.
++        const int value = int(insn.operands[1] & 15) - int(insn.operands[1] & 16);
++        println("\tsimde_mm_store_si128((simde__m128i*){}.u16, simde_mm_set1_epi16({}));", v(insn.operands[0]), value);
++        break;
++    }
++
+     case PPC_INST_VSPLTISW:
+     case PPC_INST_VSPLTISW128:
+         println("\tsimde_mm_store_si128((simde__m128i*){}.u32, simde_mm_set1_epi32(int(0x{:X})));", v(insn.operands[0]), insn.operands[1]);
+@@ -2169,18 +2410,6 @@ bool Recompiler::Recompile(
+         println("\tsimde_mm_store_ps({}.f32, simde_mm_sub_ps(simde_mm_load_ps({}.f32), simde_mm_load_ps({}.f32)));", v(insn.operands[0]), v(insn.operands[1]), v(insn.operands[2]));
+         break;
+ 
+-    case PPC_INST_VSUBSWS:
+-        // TODO: vectorize
+-        for (size_t i = 0; i < 4; i++)
+-        {
+-            println("\t{}.s64 = int64_t({}.s32[{}]) - int64_t({}.s32[{}]);", temp(), v(insn.operands[1]), i, v(insn.operands[2]), i);
+-            println("\t{}.s32[{}] = {}.s64 > INT_MAX ? INT_MAX : {}.s64 < INT_MIN ? INT_MIN : {}.s64;", v(insn.operands[0]), i, temp(), temp(), temp());
+-        }
+-        break;
+-
+-    case PPC_INST_VSUBUBS:
+-        println("\tsimde_mm_store_si128((simde__m128i*){}.u8, simde_mm_subs_epu8(simde_mm_load_si128((simde__m128i*){}.u8), simde_mm_load_si128((simde__m128i*){}.u8)));", v(insn.operands[0]), v(insn.operands[1]), v(insn.operands[2]));
+-        break;
+ 
+     case PPC_INST_VSUBUHM:
+         println("\tsimde_mm_store_si128((simde__m128i*){}.u8, simde_mm_sub_epi16(simde_mm_load_si128((simde__m128i*){}.u8), simde_mm_load_si128((simde__m128i*){}.u8)));", v(insn.operands[0]), v(insn.operands[1]), v(insn.operands[2]));
+@@ -2212,6 +2441,14 @@ bool Recompiler::Recompile(
+             println("\t{} = {};", v(insn.operands[0]), vTemp());
+             break;
+ 
++        case 3: // FLOAT16_2: packed guest W -> guest XY, then constants Z=0/W=1.
++            println("\t{}.u32[3] = ppc_half_to_float({}.u16[1]);", vTemp(), v(insn.operands[1]));
++            println("\t{}.u32[2] = ppc_half_to_float({}.u16[0]);", vTemp(), v(insn.operands[1]));
++            println("\t{}.u32[1] = 0;", vTemp());
++            println("\t{}.u32[0] = 0x3f800000;", vTemp());
++            println("\t{} = {};", v(insn.operands[0]), vTemp());
++            break;
++
+         default:
+             println("\t__builtin_debugtrap();");
+             break;
+@@ -2271,7 +2508,7 @@ bool Recompiler::Recompile(
+     if (strchr(insn.opcode->name, '.'))
+     {
+         int lastLine = out.find_last_of('\n', out.size() - 2);
+-        if (out.find("cr0", lastLine + 1) == std::string::npos && out.find("cr6", lastLine + 1) == std::string::npos)
++        if (out.find("cr0", lastLine + 1) == std::string::npos && out.find("cr1", lastLine + 1) == std::string::npos && out.find("cr6", lastLine + 1) == std::string::npos)
+             fmt::println("{} at {:X} has RC bit enabled but no comparison was generated", insn.opcode->name, base);
+     }
+ #endif
+diff --git a/XenonUtils/ppc_context.h b/XenonUtils/ppc_context.h
+index 31a86cd..ba52fe8 100644
+--- a/XenonUtils/ppc_context.h
++++ b/XenonUtils/ppc_context.h
+@@ -6,11 +6,13 @@
+ #endif
+ 
+ #include <climits>
++#include <chrono>
+ #include <cmath>
+ #include <csetjmp>
+ #include <cstdint>
+ #include <cstdlib>
+ #include <cstring>
++#include <limits>
+ 
+ #include <x86/avx.h>
+ #include <x86/sse.h>
+@@ -29,22 +31,30 @@
+ #define PPC_EXTERN_FUNC(x) extern PPC_FUNC(x)
+ #define PPC_WEAK_FUNC(x) __attribute__((weak,noinline)) PPC_FUNC(x)
+ 
+-#define PPC_FUNC_PROLOGUE() __builtin_assume(((size_t)base & 0x1F) == 0)
++#define PPC_FUNC_PROLOGUE() do { if (((uintptr_t)base & 0x1F) != 0) __builtin_unreachable(); } while (0)
++
++// The Xbox 360 4 KiB physical alias starts at physical offset 0x1000.
++// Windows file-view offsets must be allocation-granularity aligned, so map
++// its backing at E0000000 and apply this bias consistently for guest accesses.
++inline uint8_t* ppc_guest_ptr(uint8_t* base, uint32_t address)
++{
++    return base + uint64_t(address) + (address >= 0xE0000000u ? 0x1000ull : 0);
++}
+ 
+ #ifndef PPC_LOAD_U8
+-#define PPC_LOAD_U8(x) *(volatile uint8_t*)(base + (x))
++#define PPC_LOAD_U8(x) *(volatile uint8_t*)ppc_guest_ptr(base, (x))
+ #endif
+ 
+ #ifndef PPC_LOAD_U16
+-#define PPC_LOAD_U16(x) __builtin_bswap16(*(volatile uint16_t*)(base + (x)))
++#define PPC_LOAD_U16(x) __builtin_bswap16(*(volatile uint16_t*)ppc_guest_ptr(base, (x)))
+ #endif
+ 
+ #ifndef PPC_LOAD_U32
+-#define PPC_LOAD_U32(x) __builtin_bswap32(*(volatile uint32_t*)(base + (x)))
++#define PPC_LOAD_U32(x) __builtin_bswap32(*(volatile uint32_t*)ppc_guest_ptr(base, (x)))
+ #endif
+ 
+ #ifndef PPC_LOAD_U64
+-#define PPC_LOAD_U64(x) __builtin_bswap64(*(volatile uint64_t*)(base + (x)))
++#define PPC_LOAD_U64(x) __builtin_bswap64(*(volatile uint64_t*)ppc_guest_ptr(base, (x)))
+ #endif
+ 
+ // TODO: Implement.
+@@ -68,19 +78,19 @@
+ #endif
+ 
+ #ifndef PPC_STORE_U8
+-#define PPC_STORE_U8(x, y) *(volatile uint8_t*)(base + (x)) = (y)
++#define PPC_STORE_U8(x, y) *(volatile uint8_t*)ppc_guest_ptr(base, (x)) = (y)
+ #endif
+ 
+ #ifndef PPC_STORE_U16
+-#define PPC_STORE_U16(x, y) *(volatile uint16_t*)(base + (x)) = __builtin_bswap16(y)
++#define PPC_STORE_U16(x, y) *(volatile uint16_t*)ppc_guest_ptr(base, (x)) = __builtin_bswap16(y)
+ #endif
+ 
+ #ifndef PPC_STORE_U32
+-#define PPC_STORE_U32(x, y) *(volatile uint32_t*)(base + (x)) = __builtin_bswap32(y)
++#define PPC_STORE_U32(x, y) *(volatile uint32_t*)ppc_guest_ptr(base, (x)) = __builtin_bswap32(y)
+ #endif
+ 
+ #ifndef PPC_STORE_U64
+-#define PPC_STORE_U64(x, y) *(volatile uint64_t*)(base + (x)) = __builtin_bswap64(y)
++#define PPC_STORE_U64(x, y) *(volatile uint64_t*)ppc_guest_ptr(base, (x)) = __builtin_bswap64(y)
+ #endif
+ 
+ // MMIO Store handling is completely reliant on being preeceded by eieio.
+@@ -205,6 +215,34 @@ union alignas(0x10) PPCVRegister
+     double f64[2];
+ };
+ 
++inline uint16_t ppc_float_to_half_rtz(uint32_t bits) noexcept
++{
++    const uint16_t sign = uint16_t((bits >> 16) & 0x8000);
++    const unsigned exponent = (bits >> 23) & 255;
++    const uint32_t fraction = bits & 0x7fffff;
++    if (exponent == 255)
++        return uint16_t(sign | 0x7c00 | (fraction ? ((fraction >> 13) | 0x0200) : 0));
++    if (exponent > 142) return uint16_t(sign | 0x7bff);
++    if (exponent >= 113)
++        return uint16_t(sign | ((exponent - 112) << 10) | (fraction >> 13));
++    if (exponent < 103) return sign;
++    return uint16_t(sign | ((fraction | 0x800000) >> (126 - exponent)));
++}
++
++inline uint32_t ppc_half_to_float(uint16_t bits) noexcept
++{
++    const uint32_t sign = uint32_t(bits & 0x8000) << 16;
++    const unsigned exponent = (bits >> 10) & 31;
++    uint32_t fraction = bits & 1023;
++    if (exponent == 31)
++        return sign | 0x7f800000 | (fraction << 13) | (fraction ? 0x00400000 : 0);
++    if (exponent) return sign | ((exponent + 112) << 23) | (fraction << 13);
++    if (!fraction) return sign;
++    unsigned shift = 0;
++    while (!(fraction & 1024)) { fraction <<= 1; ++shift; }
++    return sign | ((113 - shift) << 23) | ((fraction & 1023) << 13);
++}
++
+ #define PPC_ROUND_NEAREST 0x00
+ #define PPC_ROUND_TOWARD_ZERO 0x01
+ #define PPC_ROUND_UP 0x02
+@@ -214,11 +252,87 @@ union alignas(0x10) PPCVRegister
+ struct PPCFPSCRRegister
+ {
+     uint32_t csr;
++    uint32_t guestFlags = 0;
+ 
+-    static constexpr size_t HostToGuest[] = { PPC_ROUND_NEAREST, PPC_ROUND_DOWN, PPC_ROUND_UP, PPC_ROUND_TOWARD_ZERO };
++    static constexpr uint32_t FX = 0x80000000, FEX = 0x40000000, VX = 0x20000000;
++    static constexpr uint32_t ZX = 0x04000000, VXSNAN = 0x01000000, VXSQRT = 0x00000200;
++    static constexpr uint32_t InvalidCauses = 0x01F80700;
++
++    inline void refreshExceptionSummary() noexcept
++    {
++        guestFlags = (guestFlags & ~VX) | ((guestFlags & InvalidCauses) ? VX : 0);
++        const bool enabled = ((guestFlags & VX) && (guestFlags & 0x80)) ||
++            ((guestFlags & 0x10000000) && (guestFlags & 0x40)) ||
++            ((guestFlags & 0x08000000) && (guestFlags & 0x20)) ||
++            ((guestFlags & ZX) && (guestFlags & 0x10)) ||
++            ((guestFlags & 0x02000000) && (guestFlags & 0x08));
++        guestFlags = (guestFlags & ~FEX) | (enabled ? FEX : 0);
++    }
++
++    inline void raise(uint32_t cause) noexcept
++    {
++        if ((guestFlags & cause) != cause) guestFlags |= FX;
++        guestFlags |= cause;
++        refreshExceptionSummary();
++    }
++
++    inline bool reciprocalSqrt(PPCRegister& destination, uint64_t input) noexcept
++    {
++        constexpr uint64_t Magnitude = 0x7fffffffffffffffull;
++        constexpr uint64_t Exponent = 0x7ff0000000000000ull;
++        constexpr uint64_t Fraction = 0x000fffffffffffffull;
++        constexpr uint64_t Quiet = 0x0008000000000000ull;
++        const auto magnitude = input & Magnitude;
++        uint64_t result;
++        unsigned classification;
++        if ((input & Exponent) == Exponent && (input & Fraction))
++        {
++            if (!(input & Quiet))
++            {
++                raise(VXSNAN);
++                if (guestFlags & 0x80) return false;
++            }
++            result = input | Quiet;
++            classification = 0x11;
++        }
++        else if (magnitude == 0)
++        {
++            raise(ZX);
++            if (guestFlags & 0x10) return false;
++            result = (input & ~Magnitude) | Exponent;
++            classification = (input >> 63) ? 0x09 : 0x05;
++        }
++        else if (input >> 63)
++        {
++            raise(VXSQRT);
++            if (guestFlags & 0x80) return false;
++            result = Exponent | Quiet;
++            classification = 0x11;
++        }
++        else if (magnitude == Exponent)
++        {
++            result = 0;
++            classification = 0x02;
++        }
++        else
++        {
++            double value;
++            memcpy(&value, &input, sizeof(value));
++            // An ISA-compliant estimate, not a bit-exact Xenon hardware model.
++            // Every positive finite binary64 input has a normal finite result.
++            const double estimate = 1.0 / std::sqrt(value);
++            memcpy(&result, &estimate, sizeof(result));
++            classification = 0x04;
++        }
++        destination.u64 = result;
++        // FR/FI choose zero; update FPRF only when a result is committed.
++        guestFlags = (guestFlags & ~0x0007f000u) | (classification << 12);
++        return true;
++    }
+ 
+     // simde does not handle denormal flags, so we need to implement per-arch.
+ #if defined(__x86_64__) || defined(_M_X64)
++    static constexpr size_t HostToGuest[] = { PPC_ROUND_NEAREST, PPC_ROUND_DOWN, PPC_ROUND_UP, PPC_ROUND_TOWARD_ZERO };
+     static constexpr size_t RoundShift = 13;
+     static constexpr size_t RoundMask = SIMDE_MM_ROUND_MASK;
+     static constexpr size_t FlushMask = SIMDE_MM_FLUSH_ZERO_MASK | _MM_DENORMALS_ZERO_MASK;
+@@ -226,14 +340,17 @@ struct PPCFPSCRRegister
+ 
+     inline uint32_t getcsr() noexcept
+     {
+-        return simde_mm_getcsr();
++        uint32_t control;
++        __asm__ __volatile__("stmxcsr %0" : "=m"(control));
++        return control;
+     }
+ 
+     inline void setcsr(uint32_t csr) noexcept
+     {
+-        simde_mm_setcsr(csr);
++        __asm__ __volatile__("ldmxcsr %0" : : "m"(csr));
+     }
+ #elif defined(__aarch64__) || defined(_M_ARM64)
++    static constexpr size_t HostToGuest[] = { PPC_ROUND_NEAREST, PPC_ROUND_UP, PPC_ROUND_DOWN, PPC_ROUND_TOWARD_ZERO };
+     // RMode
+     static constexpr size_t RoundShift = 22;
+     static constexpr size_t RoundMask = 3 << RoundShift;
+@@ -251,7 +368,8 @@ struct PPCFPSCRRegister
+ 
+     inline void setcsr(uint32_t csr) noexcept
+     {
+-        __asm__ __volatile__("msr fpcr, %0" : : "r"(csr));
++        const uint64_t control = csr;
++        __asm__ __volatile__("msr fpcr, %0" : : "r"(control));
+     }
+ #else
+ #   error "Missing implementation for FPSCR."
+@@ -260,14 +378,23 @@ struct PPCFPSCRRegister
+     inline uint32_t loadFromHost() noexcept
+     {
+         csr = getcsr();
+-        return HostToGuest[(csr & RoundMask) >> RoundShift];
++        return guestFlags | HostToGuest[(csr & RoundMask) >> RoundShift];
+     }
+         
+-    inline void storeFromGuest(uint32_t value) noexcept
++    inline void storeFromGuest(uint32_t value, uint8_t fields = 0xff) noexcept
+     {
+-        csr &= ~RoundMask;
+-        csr |= GuestToHost[value & PPC_ROUND_MASK];
+-        setcsr(csr);
++        uint32_t mask = 0;
++        for (unsigned i = 0; i < 8; ++i)
++            if (fields & (0x80u >> i)) mask |= 0xf0000000u >> (i * 4);
++        guestFlags = (guestFlags & ~mask) | (value & mask & ~PPC_ROUND_MASK);
++        refreshExceptionSummary();
++        if (mask & PPC_ROUND_MASK)
++        {
++            csr = getcsr();
++            csr &= ~RoundMask;
++            csr |= GuestToHost[value & PPC_ROUND_MASK];
++            setcsr(csr);
++        }
+     }
+ 
+     inline void enableFlushModeUnconditional() noexcept
+@@ -301,6 +428,47 @@ struct PPCFPSCRRegister
+     }
+ };
+ 
++struct PPCVSCRRegister
++{
++    uint32_t value = 0;
++
++    inline uint32_t convertUnsigned(uint32_t bits, unsigned scale) noexcept
++    {
++        // Decode binary32 without host rounding, flush modes or invalid casts.
++        const unsigned exponent = (bits >> 23) & 255;
++        const unsigned fraction = bits & 0x7fffff;
++        if (exponent == 255)
++        {
++            if (fraction != 0) return 0; // NaN: zero, no saturation.
++            value |= 1;
++            return bits >> 31 ? 0 : UINT32_MAX;
++        }
++        const int power = int(exponent) - 127 + int(scale);
++        // All subnormals and magnitudes below one truncate to zero (scale <=31).
++        if (exponent == 0 || power < 0) return 0;
++        if (bits >> 31) { value |= 1; return 0; }
++        if (power >= 32) { value |= 1; return UINT32_MAX; }
++        const uint32_t significand = fraction | 0x800000;
++        return power >= 23 ? significand << (power - 23) : significand >> (23 - power);
++    }
++
++    template<typename T>
++    inline T saturate(int64_t input) noexcept
++    {
++        constexpr int64_t low = std::numeric_limits<T>::min();
++        constexpr int64_t high = std::numeric_limits<T>::max();
++        if (input < low) { value |= 1; return T(low); }
++        if (input > high) { value |= 1; return T(high); }
++        return T(input);
++    }
++};
++
++inline simde__m128i ppc_cmpgt_epu32(simde__m128i a, simde__m128i b) noexcept
++{
++    const auto sign = simde_mm_set1_epi32(INT32_MIN);
++    return simde_mm_cmpgt_epi32(simde_mm_xor_si128(a, sign), simde_mm_xor_si128(b, sign));
++}
++
+ struct alignas(0x40) PPCContext
+ {
+     PPCRegister r3;
+@@ -370,6 +538,7 @@ struct alignas(0x40) PPCContext
+     PPCCRRegister cr7;
+ #endif
+     PPCFPSCRRegister fpscr;
++    PPCVSCRRegister vscr;
+ 
+ #ifndef PPC_CONFIG_NON_ARGUMENT_AS_LOCAL
+     PPCRegister f0;
+@@ -688,16 +857,14 @@ inline simde__m128i simde_mm_vsr(simde__m128i a, simde__m128i b)
+     return simde_mm_castps_si128(simde_mm_insert_ps(simde_mm_castsi128_ps(simde_mm_srl_epi64(a, b)), simde_mm_castsi128_ps(simde_mm_srl_epi64(simde_mm_srli_si128(a, 4), b)), 0x10));
+ }
+ 
+-#if defined(__aarch64__) || defined(_M_ARM64)
+-inline uint64_t __rdtsc()
++// Guest timebase and KeQueryPerformanceFrequency must use the same units.
++// The host runtime currently uses a 50 MHz diagnostic clock on every CPU.
++inline constexpr uint64_t PPC_TIMEBASE_FREQUENCY = 50000000;
++inline uint64_t ppc_read_timebase()
+ {
+-    uint64_t ret;
+-    asm volatile("mrs %0, cntvct_el0\n\t"
+-                 : "=r"(ret)::"memory");
+-    return ret;
++    const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
++        std::chrono::steady_clock::now().time_since_epoch()).count();
++    return uint64_t(ns) / 20;
+ }
+-#elif !defined(__x86_64__) && !defined(_M_X64)
+-#   error "Missing implementation for __rdtsc()"
+-#endif
+ 
+ #endif
