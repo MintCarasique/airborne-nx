@@ -24,6 +24,8 @@ python tools/extract_god.py "<дамп>/454107F6/00007000/<id>" extracted/base a
 powershell -File tools\build_rexglue.ps1         # SDK + codegen rex/airborne_manifest.toml
 powershell -File tools\build_rexglue.ps1 -SkipSdk -SkipCodegen -App -Config RelWithDebInfo
 powershell -File tools\run_rex.ps1 -Seconds 60   # лог: rex/run.log
+# Уровень сразу, без меню; скриншоты окна игры; бэкенд GPU:
+powershell -File tools\run_rex.ps1 -Seconds 50 -ShotsAt 30,48 -ShotDir <папка> --cl=Tra_Jmp_P --gpu_backend=vulkan
 ```
 
 ## Структура
