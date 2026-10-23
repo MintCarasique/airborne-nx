@@ -3982,6 +3982,14 @@ class DestinosVulkan final : public DestinosNativos, public ContextoDestinos {
   }
 
   Imagen* ObtenerDestino(uint32_t base, uint32_t formato, uint32_t pitch) {
+    // AirborneNX: the *_AS_* formats have the same EDRAM layout as their base format (only blending
+    // precision differs), so both name the same EDRAM and the same image. UE3 draws the scene into 7e3 at
+    // 0x2D0 and then adds the lights onto it as 2_10_10_10_FLOAT_AS_16_16_16_16 at the same base.
+    if (formato == uint32_t(xenos::ColorRenderTargetFormat::k_2_10_10_10_FLOAT_AS_16_16_16_16)) {
+      formato = uint32_t(xenos::ColorRenderTargetFormat::k_2_10_10_10_FLOAT);
+    } else if (formato == uint32_t(xenos::ColorRenderTargetFormat::k_2_10_10_10_AS_10_10_10_10)) {
+      formato = uint32_t(xenos::ColorRenderTargetFormat::k_2_10_10_10);
+    }
     if (!pitch) {
       Rechazar(7, "destino de render con pitch 0");
       return nullptr;

@@ -391,6 +391,42 @@ const EntradaShader* ShadersNativos::Identificar(bool vertices,
     }
   }
 
+  // AirborneNX: when a VS is bound with a PS that does not read some of its interpolators, MoH:A's XDK turns
+  // those export instructions into no-ops (word 0 loses the export bit and both write masks: C80F8002 ->
+  // C8000000; the source words change too). A candidate whose only differences are such instructions is the
+  // same shader: its SPIR-V still writes the interpolator, which the PS ignores.
+  if (!elegido && vertices) {
+    if (auto c = d.candidatos.find({vertices, uint32_t(microcodigo.size())}); c != d.candidatos.end()) {
+      for (uint32_t indice : c->second) {
+        const EntradaShader& e = d.entradas[indice];
+        bool igual = true;
+        bool alguna = false;
+        for (size_t k = 0; igual && k * 3 + 2 < microcodigo.size(); ++k) {
+          bool distinta = false;
+          for (size_t j = 0; j < 3; ++j) {
+            uint32_t entrante = microcodigo[k * 3 + j];
+            for (const ElementoVertice& elemento : e.elementos) {
+              if (size_t(elemento.instruccion) == k) entrante &= kFetchConserva[j];
+            }
+            distinta |= entrante != e.microcodigo[k * 3 + j];
+          }
+          if (!distinta) continue;
+          // Only from instruction 1 on (instruction 0 holds the control flow) and only the export pattern.
+          const uint32_t entrante0 = microcodigo[k * 3], original0 = e.microcodigo[k * 3];
+          igual = k > 0 && (original0 & 0x8000u) && !(entrante0 & 0x00FF8000u) &&
+                  (entrante0 & 0xFC000000u) == (original0 & 0xFC000000u);
+          alguna = true;
+        }
+        if (igual && alguna) {
+          elegido = &e;
+          ++coincidencias;
+          ++d.estadisticas.exportes_anulados;
+          break;
+        }
+      }
+    }
+  }
+
   // Vertex shaders arrive patched: a mismatch is normal.
   // AirborneNX: vertex shaders too (MoH:A patches them only at creation; a miss is a missing shader).
   const bool avisar = d.avisos < kMaxAvisos;

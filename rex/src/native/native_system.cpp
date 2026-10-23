@@ -4404,8 +4404,9 @@ class SistemaGraficoNativo final : public rex::system::IGraphicsSystem {
     if (shaders_.cargada()) {
       const EstadisticasShaders e = shaders_.Estadisticas();
       NFSMW_INFORME_SEGUN(diferir_informe, "[nativo] C5a: cargas={} distintos={} identificados={} sin_identificar={} "
-                  "ambiguos={}; dibujos con VS y PS={} sin VS={} sin PS={}; pares VS/PS={}",
+                  "ambiguos={} exportes_anulados={}; dibujos con VS y PS={} sin VS={} sin PS={}; pares VS/PS={}",
                   e.cargas + cargas_cacheadas_, e.distintos, e.identificados, e.sin_identificar, e.ambiguos,
+                  e.exportes_anulados,
                   dibujos_identificados_, dibujos_sin_vs_, dibujos_sin_ps_, pares_.size());
       // IM_LOAD without memcmp (CargarShaderCacheado).
       {

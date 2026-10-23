@@ -72,6 +72,7 @@ struct EstadisticasShaders {
   uint64_t identificados = 0;    // of the distinct ones
   uint64_t sin_identificar = 0;  // of the distinct ones
   uint64_t ambiguos = 0;         // distinct ones with more than one possible container
+  uint64_t exportes_anulados = 0;  // AirborneNX: VS identified despite exports the XDK turned into no-ops
 };
 
 class ShadersNativos {

@@ -480,6 +480,9 @@ REXCVAR_DEFINE_INT32(nfsmw_nativo_texturas_huella_hilo_mb, 16, "NFSMW",
  * no decision of the ring: it only counts, and reports every 10 s in the "C3 reutilizar por contenido"
  * line.
  */
+REXCVAR_DEFINE_BOOL(airborne_salida_7e3, true, "AirborneNX",
+                    "Native renderer: apply the 7e3 range in the pixel shader to outputs that go to 7e3 render targets "
+                    "(RGBA16F on the host)");
 REXCVAR_DEFINE_BOOL(nfsmw_nativo_diag_reutilizar, true, "NFSMW",
                     "Renderizador nativo (26/09, build 186, solo medida): cuenta cuantas texturas nuevas tienen el "
                     "mismo contenido y forma que otra viva de la cache (el juego recarga los packs en otra direccion) "
@@ -3125,7 +3128,7 @@ class DibujosVulkanImpl final : public DibujosVulkan {
     // AirborneNX: 7e3 render targets are RGBA16F on the host. The PS applies the 7e3 range to the outputs
     // that go to them (salida7e3 in shader_common.h: RGB in [0, 31.875], alpha in 2 bits), or the 16-bit
     // alpha keeps values the Xbox 360 would clamp (UE3 writes the scene depth there, ~3500).
-    if (ps) {
+    if (ps && REXCVAR_GET(airborne_salida_7e3)) {
       static constexpr uint32_t kInfoColor7e3[4] = {gr::XE_GPU_REG_RB_COLOR_INFO, gr::XE_GPU_REG_RB_COLOR1_INFO,
                                                     gr::XE_GPU_REG_RB_COLOR2_INFO, gr::XE_GPU_REG_RB_COLOR3_INFO};
       static constexpr uint32_t kSpecSalida7e3[4] = {uint32_t(1) << 5, uint32_t(1) << 6, uint32_t(1) << 7,
@@ -3133,9 +3136,10 @@ class DibujosVulkanImpl final : public DibujosVulkan {
       const uint32_t mascara_color = r[gr::XE_GPU_REG_RB_COLOR_MASK];
       for (uint32_t i = 0; i < 4; ++i) {
         const uint32_t formato = (r[kInfoColor7e3[i]] >> 16) & 0xF;
+        // Only the real 7e3 format: k_2_10_10_10_FLOAT_AS_16_16_16_16 keeps 16 bits per channel in EDRAM (the
+        // emulation shows UE3's scene depth, ~8500, surviving in its alpha).
         if (((mascara_color >> (i * 4)) & 0xF) &&
-            (formato == uint32_t(xenos::ColorRenderTargetFormat::k_2_10_10_10_FLOAT) ||
-             formato == uint32_t(xenos::ColorRenderTargetFormat::k_2_10_10_10_FLOAT_AS_16_16_16_16))) {
+            formato == uint32_t(xenos::ColorRenderTargetFormat::k_2_10_10_10_FLOAT)) {
           especializacion |= kSpecSalida7e3[i];
         }
       }
