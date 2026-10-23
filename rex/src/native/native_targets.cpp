@@ -643,6 +643,108 @@ using rex::ui::vulkan::VulkanDevice;
 using rex::ui::vulkan::VulkanPresenter;
 
 constexpr VkFormat kFormatoColor = VK_FORMAT_R8G8B8A8_UNORM;
+
+// AirborneNX: MoH: Airborne (UE3, HDR) also renders to 7e3, 2_10_10_10 and 16-bit targets. Host format of
+// each Xenos color render target format; VK_FORMAT_UNDEFINED = not supported. 7e3 and the 16-bit formats
+// keep the shader's raw values in half floats (the emulation's host path does the same for 7e3); 16_16 and
+// 16_16_16_16 lose their -32..32 clamp. The resolved texture takes the render target's host format, so a
+// resolve stays a plain image copy and the draws sample the host image.
+VkFormat FormatoHostDestino(uint32_t formato) {
+  switch (xenos::ColorRenderTargetFormat(formato)) {
+    case xenos::ColorRenderTargetFormat::k_8_8_8_8:
+    case xenos::ColorRenderTargetFormat::k_8_8_8_8_GAMMA:
+      return VK_FORMAT_R8G8B8A8_UNORM;
+    case xenos::ColorRenderTargetFormat::k_2_10_10_10:
+    case xenos::ColorRenderTargetFormat::k_2_10_10_10_AS_10_10_10_10:
+      return VK_FORMAT_A2B10G10R10_UNORM_PACK32;
+    case xenos::ColorRenderTargetFormat::k_2_10_10_10_FLOAT:
+    case xenos::ColorRenderTargetFormat::k_2_10_10_10_FLOAT_AS_16_16_16_16:
+    case xenos::ColorRenderTargetFormat::k_16_16_16_16:
+    case xenos::ColorRenderTargetFormat::k_16_16_16_16_FLOAT:
+      return VK_FORMAT_R16G16B16A16_SFLOAT;
+    case xenos::ColorRenderTargetFormat::k_16_16:
+    case xenos::ColorRenderTargetFormat::k_16_16_FLOAT:
+      return VK_FORMAT_R16G16_SFLOAT;
+    case xenos::ColorRenderTargetFormat::k_32_FLOAT:
+      return VK_FORMAT_R32_SFLOAT;
+    case xenos::ColorRenderTargetFormat::k_32_32_FLOAT:
+      return VK_FORMAT_R32G32_SFLOAT;
+    default:
+      return VK_FORMAT_UNDEFINED;
+  }
+}
+
+// RB_COLOR_CLEAR (+ RB_COLOR_CLEAR_LO << 32) in the render target's format, decoded like the emulation
+// (vulkan/render_target_cache.cpp, resolve clear).
+VkClearColorValue ColorDeBorrado(uint32_t formato, uint64_t valor) {
+  using F = xenos::ColorRenderTargetFormat;
+  VkClearColorValue color{};
+  switch (F(formato)) {
+    case F::k_2_10_10_10:
+    case F::k_2_10_10_10_AS_10_10_10_10:
+      for (uint32_t j = 0; j < 3; ++j) {
+        color.float32[j] = float((valor >> (j * 10)) & 0x3FF) * (1.0f / 1023.0f);
+      }
+      color.float32[3] = float((valor >> 30) & 0x3) * (1.0f / 3.0f);
+      break;
+    case F::k_2_10_10_10_FLOAT:
+    case F::k_2_10_10_10_FLOAT_AS_16_16_16_16:
+      for (uint32_t j = 0; j < 3; ++j) {
+        color.float32[j] = xenos::Float7e3To32(uint32_t(valor >> (j * 10)) & 0x3FF);
+      }
+      color.float32[3] = float((valor >> 30) & 0x3) * (1.0f / 3.0f);
+      break;
+    case F::k_16_16:
+    case F::k_16_16_FLOAT:
+    case F::k_16_16_16_16:
+    case F::k_16_16_16_16_FLOAT: {
+      const bool es_float = F(formato) == F::k_16_16_FLOAT || F(formato) == F::k_16_16_16_16_FLOAT;
+      for (uint32_t j = 0; j < 4; ++j) {
+        const uint16_t componente = uint16_t((valor >> (j * 16)) & 0xFFFF);
+        color.float32[j] = es_float ? rex::xenos_half_to_float(componente)
+                                    : std::max(float(int16_t(componente)) * (1.0f / 32767.0f), -1.0f);
+      }
+      break;
+    }
+    case F::k_32_FLOAT:
+    case F::k_32_32_FLOAT:
+      for (uint32_t j = 0; j < 2; ++j) {
+        const uint32_t bits = uint32_t(valor >> (j * 32));
+        std::memcpy(&color.float32[j], &bits, sizeof(bits));
+      }
+      break;
+    default:
+      for (uint32_t j = 0; j < 4; ++j) {
+        color.float32[j] = float((valor >> (j * 8)) & 0xFF) * (1.0f / 255.0f);
+      }
+      break;
+  }
+  return color;
+}
+
+// log2 of the bytes per texel of a resolve destination (GetResolveInfo aligns the base to 32 texels).
+uint32_t Log2BytesCopia(uint32_t formato_destino) {
+  using F = xenos::ColorFormat;
+  switch (F(formato_destino)) {
+    // The *_AS_16_16_16_16 formats are 32 bpp (only the sampling precision is 16 bits).
+    case F::k_16_16_16_16:
+    case F::k_16_16_16_16_FLOAT:
+    case F::k_32_32_FLOAT:
+      return 3;
+    case F::k_32_32_32_32_FLOAT:
+      return 4;
+    case F::k_5_6_5:
+    case F::k_1_5_5_5:
+    case F::k_4_4_4_4:
+    case F::k_16:
+    case F::k_16_FLOAT:
+      return 1;
+    case F::k_8:
+      return 0;
+    default:
+      return 2;
+  }
+}
 constexpr uint32_t kAltoMaximoDestino = 2048;
 constexpr VkImageSubresourceRange kRangoColor = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 constexpr VkImageSubresourceRange kRangoProfundidad = {
@@ -1410,8 +1512,7 @@ class DestinosVulkan final : public DestinosNativos, public ContextoDestinos {
     }
     const uint32_t info_color = reg.rb_color_info[origen];
     const uint32_t formato_color = (info_color >> 16) & 0xF;
-    if (formato_color != uint32_t(xenos::ColorRenderTargetFormat::k_8_8_8_8) &&
-        formato_color != uint32_t(xenos::ColorRenderTargetFormat::k_8_8_8_8_GAMMA)) {
+    if (FormatoHostDestino(formato_color) == VK_FORMAT_UNDEFINED) {
       return Rechazar(100 + formato_color, "formato de destino de render todavia no soportado");
     }
     int32_t x0, y0, x1, y1;
@@ -1435,25 +1536,26 @@ class DestinosVulkan final : public DestinosNativos, public ContextoDestinos {
     if (copiar) {
       const uint32_t info_destino = reg.rb_copy_dest_info;
       const uint32_t formato_destino = (info_destino >> 7) & 0x3F;
+      // AirborneNX: any destination format; the resolved texture keeps the render target's host format.
       if ((info_destino >> 3) & 0x1) {
         Rechazar(3, "copia a textura 3D o array: todavia no");
-      } else if (formato_destino != uint32_t(xenos::ColorFormat::k_8_8_8_8) &&
-                 formato_destino != uint32_t(xenos::ColorFormat::k_8_8_8_8_A) &&
-                 formato_destino != uint32_t(xenos::ColorFormat::k_8_8_8_8_AS_16_16_16_16)) {
-        Rechazar(200 + formato_destino, "formato de copia todavia no soportado");
       } else {
         const uint32_t pitch_destino = reg.rb_copy_dest_pitch & 0x3FFF;
         const uint32_t alto_destino = (reg.rb_copy_dest_pitch >> 16) & 0x3FFF;
-        // 4 bytes per texel: base in multiples of 32 texels (GetResolveInfo).
+        // Base in multiples of 32 texels (GetResolveInfo), with the destination's bytes per texel.
         const uint32_t base_x = uint32_t(x0) & ~uint32_t(31);
         const uint32_t base_y = uint32_t(y0) & ~uint32_t(31);
         const uint32_t base =
-            reg.rb_copy_dest_base +
-            uint32_t(DesplazamientoMosaico2D(int32_t(base_x), int32_t(base_y), pitch_destino, 2));
+            reg.rb_copy_dest_base + uint32_t(DesplazamientoMosaico2D(int32_t(base_x), int32_t(base_y), pitch_destino,
+                                                                     Log2BytesCopia(formato_destino)));
         dx = uint32_t(x0) - base_x;
         dy = uint32_t(y0) - base_y;
-        resuelta = ObtenerResuelta(base & 0x1FFFFFFF, pitch_destino, alto_destino, formato_destino,
-                                   (info_destino >> 24) & 0x1);
+        // The red/blue swap of the copy only exists for 8- and 10-bit unorm channels.
+        const bool intercambio_rb = ((info_destino >> 24) & 0x1) &&
+                                    (destino_render->formato == VK_FORMAT_R8G8B8A8_UNORM ||
+                                     destino_render->formato == VK_FORMAT_A2B10G10R10_UNORM_PACK32);
+        resuelta = ObtenerResuelta(base & 0x1FFFFFFF, pitch_destino, alto_destino, formato_destino, intercambio_rb,
+                                   destino_render->formato);
         base_resuelta = base & 0x1FFFFFFF;
         if (resuelta) {
           AnotarCopia(base & 0x1FFFFFFF, pitch_destino, alto_destino, dibujos_antes);
@@ -1605,9 +1707,7 @@ class DestinosVulkan final : public DestinosNativos, public ContextoDestinos {
         if (REXCVAR_GET(nfsmw_nativo_diag_borrado)) {
           color = ColorDiagnostico(info_color & 0xFFF, formato_color, pitch);
         } else {
-          for (uint32_t j = 0; j < 4; ++j) {
-            color.float32[j] = float((valor_crudo >> (j * 8)) & 0xFF) * (1.0f / 255.0f);
-          }
+          color = ColorDeBorrado(formato_color, valor_crudo);
         }
         // nfsmw_nativo_borrar_area_util. Only the rows in use; the bottom band, if needed.
         if (!BorrarColorAreaUtil(*destino_render, color)) {
@@ -3877,10 +3977,16 @@ class DestinosVulkan final : public DestinosNativos, public ContextoDestinos {
      * the scene (the screen fills with a yellow smear). Reverted.
      */
     const uint32_t alto = std::min(kAltoMaximoDestino, std::max<uint32_t>(720, (pitch + 15) & ~15u));
+    const VkFormat formato_host = FormatoHostDestino(formato);
+    if (formato_host == VK_FORMAT_UNDEFINED) {
+      Rechazar(100 + formato, "formato de destino de render todavia no soportado");
+      return nullptr;
+    }
     Imagen imagen;
     if (!Crear(imagen, pitch, alto,
                VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
-                   VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT)) {
+                   VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+               formato_host)) {
       Rechazar(8, "no se pudo crear un destino de render");
       return nullptr;
     }
@@ -4645,7 +4751,7 @@ class DestinosVulkan final : public DestinosNativos, public ContextoDestinos {
     info_vista.image = imagen.imagen;
     info_vista.viewType = VK_IMAGE_VIEW_TYPE_2D;
     info_vista.format = formato;
-    info_vista.subresourceRange = formato == kFormatoColor ? kRangoColor : kRangoProfundidad;
+    info_vista.subresourceRange = EsProfundidadFormato(formato) ? kRangoProfundidad : kRangoColor;
     if (dfn_.vkCreateImageView(device_, &info_vista, nullptr, &imagen.vista) != VK_SUCCESS) {
       Destruir(imagen);
       return false;
@@ -6138,6 +6244,10 @@ class DestinosVulkan final : public DestinosNativos, public ContextoDestinos {
 };
 
 }  // namespace
+
+bool FormatoDestinoColorSoportado(uint32_t formato) {
+  return FormatoHostDestino(formato) != VK_FORMAT_UNDEFINED;
+}
 
 std::unique_ptr<DestinosNativos> DestinosNativos::Crear(const VulkanDevice* dispositivo,
                                                         rex::memory::Memory* memoria) {

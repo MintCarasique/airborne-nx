@@ -757,7 +757,7 @@ class SistemaGraficoNativo final : public rex::system::IGraphicsSystem {
     }
     // Step C5a: the NFSSPV library sits next to the executable (it is built from the game
     // data, so it is not distributed). Without it the game still runs, without identification.
-    if (shaders_.Cargar(rex::filesystem::GetExecutableFolder() / "nfsmw_shaders.nfsp")) {
+    if (shaders_.Cargar(rex::filesystem::GetExecutableFolder() / "airborne_shaders.nfsp")) {
       ActivarGanchos(&shaders_);  // step C5b: shader objects and Draw* records
     }
     ultimo_informe_ = Reloj::now();

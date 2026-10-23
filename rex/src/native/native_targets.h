@@ -139,4 +139,7 @@ class DestinosNativos {
   virtual void CostePresentar(uint64_t coste[12]) const = 0;
 };
 
+// AirborneNX: whether a Xenos color render target format has a host format (see FormatoHostDestino).
+bool FormatoDestinoColorSoportado(uint32_t formato);
+
 }  // namespace nfsmw::nativo

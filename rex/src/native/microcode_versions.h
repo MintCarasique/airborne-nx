@@ -138,7 +138,8 @@ inline void AvisarCreacion(const uint8_t* base, uint32_t objeto, bool vertices) 
   if (!objeto) {
     return;
   }
-  const uint32_t direccion = LeerInvitado32(base, objeto + (vertices ? 40u : 12u));
+  // AirborneNX: the microcode pointer is at +32 (VS) and +24 (PS) in MoH: Airborne's objects (NFSMW: +40, +12).
+  const uint32_t direccion = LeerInvitado32(base, objeto + (vertices ? 32u : 24u));
   if (!direccion) {
     return;
   }

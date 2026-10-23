@@ -70,31 +70,48 @@ bool NombreEs(const Contenedor& c, size_t posicion, const char* nombre) {
 // microcode is the whole physical part. Reference: docs/shaders.md and
 // shaders/nfsmw_contenedor.h (Convertir2005). Returns the reason if it cannot be
 // read.
+//
+// AirborneNX: MoH: Airborne's containers are the 2008 layout (signature 0x102A11xx, the one in XenosRecomp
+// shader.h): 36-byte header, CTAB at +16 as in 2005, shader header at +24, and the microcode is the range
+// [physicalOffset, physicalOffset + size) of the physical part (literal constants can follow it). The
+// vertex element list starts at +0x24 of the shader header instead of +0x28.
 const char* Leer(const nfsmw::native::Shader& shader, EntradaShader& e) {
   const Contenedor c{shader.original};
   if (!c.Hay(0, 24)) return "contenedor demasiado corto";
+  const bool de2008 = (c.U32(0) & 0xFFFFFF00u) == 0x102A1100u;
+  if (de2008 && !c.Hay(0, 36)) return "contenedor demasiado corto";
   const uint32_t virtuales = c.U32(4);
   const uint32_t fisicos = c.U32(8);
   const uint32_t tabla = c.U32(16);
-  const uint32_t cabecera = c.U32(20);
+  const uint32_t cabecera = c.U32(de2008 ? 24 : 20);
+  const size_t lista = de2008 ? 36 : 40;
   if (!fisicos || (fisicos % 4) || !c.Hay(virtuales, fisicos)) {
     return "microcodigo fuera del contenedor";
   }
-  if (cabecera >= virtuales || size_t(cabecera) + (shader.vertices ? 40 : 32) > virtuales) {
+  if (cabecera >= virtuales || size_t(cabecera) + (shader.vertices ? lista : 32) > virtuales) {
     return "cabecera del shader fuera de la parte virtual";
+  }
+  uint32_t inicio_codigo = 0, bytes_codigo = fisicos;
+  if (de2008) {
+    inicio_codigo = c.U32(cabecera);
+    bytes_codigo = c.U32(cabecera + 4);
+    if (!bytes_codigo || (inicio_codigo % 4) || (bytes_codigo % 4) || inicio_codigo > fisicos ||
+        bytes_codigo > fisicos - inicio_codigo) {
+      return "microcodigo fuera de la parte fisica";
+    }
   }
 
   e.vertices = shader.vertices;
-  e.microcodigo.resize(fisicos / 4);
+  e.microcodigo.resize(bytes_codigo / 4);
   for (size_t i = 0; i < e.microcodigo.size(); ++i) {
-    e.microcodigo[i] = c.U32(size_t(virtuales) + i * 4);
+    e.microcodigo[i] = c.U32(size_t(virtuales) + inicio_codigo + i * 4);
   }
 
   if (e.vertices) {
-    // List at +0x28, after skipping the words at +0x18; +0x1C = element count.
+    // List at +0x28 (2005) or +0x24 (2008), after skipping the words at +0x18; +0x1C = element count.
     const uint32_t previos = c.U32(cabecera + 24);
     const uint32_t cantidad = c.U32(cabecera + 28);
-    const size_t comienzo = size_t(cabecera) + 40 + size_t(previos) * 4;
+    const size_t comienzo = size_t(cabecera) + lista + size_t(previos) * 4;
     if (cantidad > 64 || previos > 1024 || comienzo + size_t(cantidad) * 4 > virtuales) {
       return "elementos de vertices fuera de la parte virtual";
     }
@@ -398,39 +415,42 @@ const EntradaShader* ShadersNativos::Identificar(bool vertices,
                   "({} contenedores de ese tipo y longitud)",
                   vertices ? "vertex" : "pixel", microcodigo.size(), clave.huella,
                   c != d.candidatos.end() ? c->second.size() : 0);
-      // Diagnostics: which words change against the containers of the same
-      // length (incoming / container original, without the mask).
-      for (size_t k = 0; c != d.candidatos.end() && k < c->second.size() && k < 2; ++k) {
+      // Diagnostics: the closest container of the same length (fewest differing words after the fetch
+      // mask) and which words change (incoming / container).
+      const EntradaShader* cercano = nullptr;
+      uint32_t menos = UINT32_MAX;
+      for (size_t k = 0; c != d.candidatos.end() && k < c->second.size(); ++k) {
         const EntradaShader& e = d.entradas[c->second[k]];
-        const auto& o = e.shader->original;
-        const size_t virtuales = size_t(o[4]) << 24 | size_t(o[5]) << 16 | size_t(o[6]) << 8 | o[7];
-        std::string diferencias;
         uint32_t cuantas = 0;
         for (size_t i = 0; i < microcodigo.size(); ++i) {
           uint32_t entrante = microcodigo[i];
           for (const ElementoVertice& elemento : e.elementos) {
             const size_t p = size_t(elemento.instruccion) * 3;
-            if (i >= p && i < p + 3) {
-              entrante &= kFetchConserva[i - p];
-            }
+            if (i >= p && i < p + 3) entrante &= kFetchConserva[i - p];
           }
-          if (entrante == e.microcodigo[i]) {
-            continue;
+          cuantas += entrante != e.microcodigo[i];
+        }
+        if (cuantas < menos) {
+          menos = cuantas;
+          cercano = &e;
+        }
+      }
+      if (cercano) {
+        std::string diferencias;
+        uint32_t mostradas = 0;
+        for (size_t i = 0; i < microcodigo.size() && mostradas < 32; ++i) {
+          uint32_t entrante = microcodigo[i];
+          for (const ElementoVertice& elemento : cercano->elementos) {
+            const size_t p = size_t(elemento.instruccion) * 3;
+            if (i >= p && i < p + 3) entrante &= kFetchConserva[i - p];
           }
-          if (++cuantas <= 24) {
-            const size_t b = virtuales + i * 4;
-            const uint32_t original = uint32_t(o[b]) << 24 | uint32_t(o[b + 1]) << 16 |
-                                      uint32_t(o[b + 2]) << 8 | o[b + 3];
-            diferencias += fmt::format(" {}:{:08X}/{:08X}", i, microcodigo[i], original);
+          if (entrante != cercano->microcodigo[i]) {
+            ++mostradas;
+            diferencias += fmt::format(" {}:{:08X}/{:08X}", i, microcodigo[i], cercano->microcodigo[i]);
           }
         }
-        std::string fetch;
-        for (const ElementoVertice& elemento : e.elementos) {
-          fetch += fmt::format(" {}", elemento.instruccion);
-        }
-        REXLOG_WARN("[nativo] C5a:   frente a n{}: {} palabras distintas; fetch en las "
-                    "instrucciones{}:{}",
-                    e.numero, cuantas, fetch, diferencias);
+        REXLOG_WARN("[nativo] C5a:   el mas cercano n{}: {} palabras distintas:{}", cercano->numero, menos,
+                    diferencias);
       }
     }
   }

@@ -30,6 +30,7 @@
 //   equivalent.
 
 #include "native_draws.h"
+#include "native_targets.h"  // FormatoDestinoColorSoportado
 #include "stall_waits.h"
 
 #include "native_vertex_dedupe.h"
@@ -2310,8 +2311,7 @@ class DibujosVulkanImpl final : public DibujosVulkan {
       }
       const uint32_t info = r[kInfoColor[i]];
       const uint32_t formato = (info >> 16) & 0xF;
-      if (formato != uint32_t(xenos::ColorRenderTargetFormat::k_8_8_8_8) &&
-          formato != uint32_t(xenos::ColorRenderTargetFormat::k_8_8_8_8_GAMMA)) {
+      if (!FormatoDestinoColorSoportado(formato)) {
         return Rechazar(200 + formato, "formato de destino de color todavia no soportado");
       }
       claves[i] = (uint64_t(1) << 63) | (uint64_t(info & 0xFFF) << 24) | (uint64_t(formato) << 16) |

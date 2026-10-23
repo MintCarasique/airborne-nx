@@ -203,7 +203,12 @@ const EntradaShader* IdentificarCreacion(const uint8_t* base, uint32_t direccion
     return nullptr;
   }
   const uint8_t* p = base + direccion;
-  if (LeerBE(p) != (vertices ? 0x102A0E01u : 0x102A0E00u)) {
+  // 2005 (NFSMW) or 2008 (MoH: Airborne) container; the low bit tells vertex from pixel.
+  const uint32_t firma = LeerBE(p);
+  if ((firma & 0xFFFFFFFEu) != 0x102A0E00u && (firma & 0xFFFFFFFEu) != 0x102A1100u) {
+    return nullptr;
+  }
+  if (bool(firma & 1) != vertices) {
     return nullptr;
   }
   const uint64_t total = uint64_t(LeerBE(p + 4)) + LeerBE(p + 8);
@@ -976,22 +981,26 @@ EstadisticasGanchos EstadisticasDeGanchos() {
 #ifndef AIRBORNE_NATIVE_HOOKS
 #define AIRBORNE_NATIVE_HOOKS 0
 #endif
-#if AIRBORNE_NATIVE_HOOKS && !defined(NFSMW_NATIVE_SHADER_LIBRARY)
+#if !defined(NFSMW_NATIVE_SHADER_LIBRARY)
 // r3 = original container; they return the object in r3. The original is always called and no PPC
 // register is touched.
-REX_EXTERN(__imp__sub_8259BC90);
-REX_HOOK_RAW(sub_8259BC90) {  // pixel shader
+// AirborneNX: MoH: Airborne's XDK constructors (analysis/d3d_map/identified.md): sub_829A3158 creates a
+// pixel shader (microcode pointer at +24) and sub_829A32A8 a vertex shader (container copied to +872, the
+// fetches patched at creation by sub_829A18A8, microcode pointer at +32). NFSMW's were sub_8259BC90 and
+// sub_8259C038.
+REX_EXTERN(__imp__sub_829A3158);
+REX_HOOK_RAW(sub_829A3158) {  // pixel shader
   const auto* entrada =
       nfsmw::nativo::ganchos_detalle::IdentificarCreacion(base, ctx.r3.u32, false);
-  __imp__sub_8259BC90(ctx, base);
+  __imp__sub_829A3158(ctx, base);
   nfsmw::nativo::ganchos_detalle::RecordarCreacion(ctx.r3.u32, entrada, false);
   nfsmw::nativo::microcodigo::AvisarCreacion(base, ctx.r3.u32, false);
 }
 
-REX_EXTERN(__imp__sub_8259C038);
-REX_HOOK_RAW(sub_8259C038) {  // vertex shader
+REX_EXTERN(__imp__sub_829A32A8);
+REX_HOOK_RAW(sub_829A32A8) {  // vertex shader
   const auto* entrada = nfsmw::nativo::ganchos_detalle::IdentificarCreacion(base, ctx.r3.u32, true);
-  __imp__sub_8259C038(ctx, base);
+  __imp__sub_829A32A8(ctx, base);
   nfsmw::nativo::ganchos_detalle::RecordarCreacion(ctx.r3.u32, entrada, true);
   nfsmw::nativo::microcodigo::AvisarCreacion(base, ctx.r3.u32, true);
 }
@@ -1012,6 +1021,7 @@ REX_HOOK_RAW(sub_8259C038) {  // vertex shader
  * switch off with DIFERENCIA).
  * It changes no PPC register.
  */
+// AirborneNX: NFSMW-only (MoH: Airborne patches the fetches once, in the constructor); kept for reference.
 #if AIRBORNE_NATIVE_HOOKS
 REX_EXTERN(__imp__sub_825A2FB8);
 REX_HOOK_RAW(sub_825A2FB8) {
