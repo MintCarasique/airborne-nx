@@ -718,10 +718,24 @@ index b49e033..ad60ade 100644
          auto& args = *reinterpret_cast<const ArgsVkSetBlendConstants*>(stream);
          dfn.vkCmdSetBlendConstants(command_buffer, args.blend_constants);
 diff --git a/sdk/src/graphics/vulkan/render_target_cache.cpp b/sdk/src/graphics/vulkan/render_target_cache.cpp
-index feacf4d..112c0ff 100644
+index feacf4d..03f69b3 100644
 --- a/sdk/src/graphics/vulkan/render_target_cache.cpp
 +++ b/sdk/src/graphics/vulkan/render_target_cache.cpp
-@@ -3755,6 +3755,12 @@ VkShaderModule VulkanRenderTargetCache::GetTransferShader(TransferShaderKey key)
+@@ -40,6 +40,13 @@
+ REXCVAR_DEFINE_STRING(render_target_path_vulkan, "", "GPU/Vulkan",
+                       "Vulkan render target implementation path")
+     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
++// Diagnostic: without VK_EXT_shader_stencil_export (NVIDIA, NVK) a transfer
++// into depth writes the stencil with 8 extra draws, one per bit. On the Switch
++// they take most of the GPU time of a frame; this skips them (the depth is
++// still transferred; the stencil of the destination keeps its old contents).
++REXCVAR_DEFINE_BOOL(vulkan_transfer_skip_stencil, false, "GPU/Vulkan",
++                    "Diagnostic: do not transfer the stencil into depth render targets")
++    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+ 
+ // DEFINE_string(
+ //     render_target_path_vulkan, "",
+@@ -3755,6 +3762,12 @@ VkShaderModule VulkanRenderTargetCache::GetTransferShader(TransferShaderKey key)
                                          builder.makeUintConstant(8), builder.makeUintConstant(24));
          }
        }
@@ -734,7 +748,17 @@ index feacf4d..112c0ff 100644
      }
      switch (mode.output) {
        case TransferOutput::kColor: {
-@@ -5003,6 +5009,8 @@ void VulkanRenderTargetCache::PerformTransfersAndResolveClears(
+@@ -4878,7 +4891,8 @@ void VulkanRenderTargetCache::PerformTransfersAndResolveClears(
+       // Gather shader keys and sort to reduce pipeline state and binding
+       // switches. Also gather stencil rectangles to clear if needed.
+       bool need_stencil_bit_draws =
+-          dest_rt_key.is_depth && !vulkan_device->extensions().ext_EXT_shader_stencil_export;
++          dest_rt_key.is_depth && !vulkan_device->extensions().ext_EXT_shader_stencil_export &&
++          !REXCVAR_GET(vulkan_transfer_skip_stencil);
+       current_transfer_invocations_.clear();
+       current_transfer_invocations_.reserve(current_transfers.size()
+                                             << uint32_t(need_stencil_bit_draws));
+@@ -5003,6 +5017,8 @@ void VulkanRenderTargetCache::PerformTransfersAndResolveClears(
            transfer_render_pass, transfer_framebuffer, transfer_dest_view, dest_rt_key.is_depth);
  
        if (stencil_clear_rectangle_count) {
@@ -743,7 +767,7 @@ index feacf4d..112c0ff 100644
          VkClearAttachment* stencil_clear_attachment;
          VkClearRect* stencil_clear_rect_write_ptr;
          command_buffer.CmdClearAttachmentsEmplace(1, stencil_clear_attachment,
-@@ -5033,6 +5041,7 @@ void VulkanRenderTargetCache::PerformTransfersAndResolveClears(
+@@ -5033,6 +5049,7 @@ void VulkanRenderTargetCache::PerformTransfersAndResolveClears(
              ++stencil_clear_rect_write_ptr;
            }
          }
@@ -751,7 +775,7 @@ index feacf4d..112c0ff 100644
        }
  
        // Prefer power of two viewports for exact division by simply biasing the
-@@ -5107,6 +5116,7 @@ void VulkanRenderTargetCache::PerformTransfersAndResolveClears(
+@@ -5107,6 +5124,7 @@ void VulkanRenderTargetCache::PerformTransfersAndResolveClears(
          if (!transfer_rectangle_write_ptr) {
            continue;
          }
@@ -759,7 +783,7 @@ index feacf4d..112c0ff 100644
          for (auto it_merged = it_merged_first; it_merged <= it_merged_last; ++it_merged) {
            Transfer::Rectangle transfer_invocation_rectangles[Transfer::kMaxRectanglesWithCutout];
            uint32_t transfer_invocation_rectangle_count = it_merged->transfer.GetRectangles(
-@@ -5115,6 +5125,9 @@ void VulkanRenderTargetCache::PerformTransfersAndResolveClears(
+@@ -5115,6 +5133,9 @@ void VulkanRenderTargetCache::PerformTransfersAndResolveClears(
            assert_not_zero(transfer_invocation_rectangle_count);
            for (uint32_t j = 0; j < transfer_invocation_rectangle_count; ++j) {
              const Transfer::Rectangle& transfer_rectangle = transfer_invocation_rectangles[j];
@@ -769,7 +793,7 @@ index feacf4d..112c0ff 100644
              float transfer_rectangle_x0 = -1.0f + transfer_rectangle.x_pixels * pixels_to_ndc_x;
              float transfer_rectangle_y0 = -1.0f + transfer_rectangle.y_pixels * pixels_to_ndc_y;
              float transfer_rectangle_x1 =
-@@ -5288,6 +5301,15 @@ void VulkanRenderTargetCache::PerformTransfersAndResolveClears(
+@@ -5288,6 +5309,15 @@ void VulkanRenderTargetCache::PerformTransfersAndResolveClears(
            transfer_push_constants_set |= kTransferUsedPushConstantDwordAddressBit;
          }
  
@@ -785,7 +809,7 @@ index feacf4d..112c0ff 100644
          for (uint32_t j = 0; j < transfer_sample_pipeline_count; ++j) {
            if (j) {
              command_processor_.BindExternalGraphicsPipeline(transfer_pipelines[j]);
-@@ -5313,6 +5335,7 @@ void VulkanRenderTargetCache::PerformTransfersAndResolveClears(
+@@ -5313,6 +5343,7 @@ void VulkanRenderTargetCache::PerformTransfersAndResolveClears(
              command_buffer.CmdVkDraw(transfer_vertex_count, 1, 0, 0);
            }
          }
