@@ -44,6 +44,23 @@ index cbdd7f7..35299f2 100644
    return true;
  }
  
+diff --git a/sdk/src/graphics/vulkan/render_target_cache.cpp b/sdk/src/graphics/vulkan/render_target_cache.cpp
+index feacf4d..8416bd6 100644
+--- a/sdk/src/graphics/vulkan/render_target_cache.cpp
++++ b/sdk/src/graphics/vulkan/render_target_cache.cpp
+@@ -3755,6 +3755,12 @@ VkShaderModule VulkanRenderTargetCache::GetTransferShader(TransferShaderKey key)
+                                         builder.makeUintConstant(8), builder.makeUintConstant(24));
+         }
+       }
++    } else if (mode.output == TransferOutput::kStencilBit && source_stencil[0] != spv::NoResult) {
++      // Depth source, stencil bit output: the depth texture is not bound in
++      // this mode, so the branch above is skipped. The stencil alone is the
++      // packed value (stencil in 0:7). Without it the kill below was never
++      // emitted, every bit draw wrote its bit and the stencil ended at 0xFF.
++      packed = source_stencil[0];
+     }
+     switch (mode.output) {
+       case TransferOutput::kColor: {
 diff --git a/sdk/src/ui/rex_app.cpp b/sdk/src/ui/rex_app.cpp
 index d1b2a1c..357177f 100644
 --- a/sdk/src/ui/rex_app.cpp

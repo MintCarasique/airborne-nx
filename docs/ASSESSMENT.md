@@ -67,7 +67,17 @@
       динамического света в салоне; Vulkan с `render_target_path_vulkan=fsi` — верно. Значит, ошибка в host-пути
       Vulkan-бэкенда (не CPU и не данные игры); `direct_host_resolve=false` не помогает. Оба пути хранят 7e3
       как R16G16B16A16_FLOAT с аппаратным блендингом — дальше нужен покадровый захват (RenderDoc) D3D12 vs Vulkan.
-      Для Switch важно: FSI дорог и неизвестно, есть ли он в NVK на GM20B.
+      Захваты RenderDoc (`--renderdoc_capture_at`, кадр спуска): всё до прохода с умножающим блендингом
+      (DstColor/Zero) в 7e3-цель совпадает; на нём (Vulkan e7851 / D3D12 e7417) Vulkan портит множитель —
+      сцена оранжевая, тени жёсткими пятнами. Вход прохода: глубина R32F, карта теней R32F 864×864, текстура 64×64.
+      **Причина найдена и исправлена:** проход оказался невиновен — EDRAM-перенос глубина→stencil перед ним.
+      Без `VK_EXT_shader_stencil_export` (у NVIDIA его нет) stencil пишется 8 проходами по биту с kill по маске;
+      для источника-глубины в режиме kStencilBit SPIR-V-генератор переноса не заполнял `packed` (текстура глубины
+      в этом режиме не объявлена), kill не генерировался, все биты ставились → stencil 0xFF → R-канал 7e3 в
+      максимуме. Исправление в `vulkan/render_target_cache.cpp` (патч SDK): `packed = source_stencil` для этого
+      случая. После него Vulkan host-путь рисует как D3D12.
+      Для Switch: NVK объявляет VK_EXT_fragment_shader_interlock на GM20B (`cls_eng3d` 0xB197 = MAXWELL_B,
+      `nvk_physical_device.c:260`), NAK понижает interlock для SM 5.3 — FSI на консоли доступен как запасной путь.
    3. Собрать под Switch со слоем SDK.
    4. Измерить; затем собственный рендер (перехваты D3D/RHI UE3), как `nfsmw_nativo_*`.
    **Сверка инструкций с генератором ReXGlue (2026-10-23)** — наши исправления XenonRecomp против
