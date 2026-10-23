@@ -16,6 +16,11 @@
   0,7. Теперь горячий поток ждёт GPU-фенс в XDK (`sub_829AF948` → цикл `db16cyc` в `sub_829B6490`), а процесс ждёт
   фенсы NVK 1000 мс в секунду: упор в реальный GPU Tegra, ~1,4 с GPU на кадр меню. На кадр: 167 draw игры,
   170 EDRAM-переносов (23 RT, 115 дополнительных draw), 10 resolve, площадь scissor ~126 экранов.
+- Прогон 4/5 (fbc5e09+6ce5dd5de8b5, `--gpu_timing=2`, метки времени ×1,627), меню, GPU на кадр:
+  host render targets: draw 125–180 мс, EDRAM-переносы 1180–1280 мс (~83 %), resolve 86–94 мс, прочее ~25 мс,
+  всего ~1500 мс, 0,7 FPS. FSI (`--render_target_path_vulkan=fsi`): переносов нет (0,07 мс), но draw ~1000 мс,
+  resolve ~19 мс, всего ~1050 мс, 0,9–1,0 FPS. Для сравнения PC (RTX 4070 SUPER, host RT): draw ~5 мс, переносы 3–6 мс.
+  NVK не объявляет `VK_EXT_shader_stencil_export`: перенос в глубину = 1 проход глубины + 8 проходов битов stencil.
 - SDK: «Too few processor cores - scheduling will be wonky»; общая память GPU — полный буфер 512 МБ (sparse нет).
 
 # Измерено на железе (Switch, HOS 22.1.0, applet_type 0 = Application)
