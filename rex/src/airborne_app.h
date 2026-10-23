@@ -67,7 +67,7 @@ class AirborneApp : public rex::ReXApp {
   // std::unique_ptr<rex::ui::ImGuiDialog> CreateAchievementsOverlay() override;
   // std::unique_ptr<rex::ui::AchievementNotificationDialog>
   // CreateAchievementNotificationDialog() override;
-  // void OnShutdown() override {}
+  void OnShutdown() override { StopNxlinkLog(); }
 
  private:
   static void SetIfUnset(const char* name, const char* value) {

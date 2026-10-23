@@ -15,6 +15,7 @@ set(AIRBORNE_SOURCES
     src/main.cpp
     src/input_script.cpp
     src/nxlink_log.cpp
+    src/occlusion_queries.cpp
     src/renderdoc_trigger.cpp
 )
 
