@@ -39,3 +39,9 @@ powershell -File tools\run_rex.ps1 -Seconds 50 -ShotsAt 30,48 -ShotDir <папк
 | `config/` | конфигурация XenonRecomp и закреплённые версии графических зависимостей |
 | `analysis/` | результаты аппаратных прогонов и таблицы образа XEX (сырые логи хранятся локально) |
 | `docs/` | план и заметки |
+
+## Лицензия
+
+GPL-3.0 (`LICENSE`): проект заимствует код нативного рендера порта NFS: Most Wanted
+([nfsmw-nx](https://github.com/FermataRest/nfsmw-nx), GPL-3.0). ReXGlue SDK и наш патч к нему — BSD-3-Clause,
+инструменты шейдеров на основе XenosRecomp — MIT.
