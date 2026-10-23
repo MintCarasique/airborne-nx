@@ -41,6 +41,13 @@ if(REXGLUE_PLATFORM_SWITCH)
     rexglue_switch_add_nro(airborne NAME "AirborneNX" AUTHOR "AirborneNX" VERSION "0.1.0")
 endif()
 
+# airborne_register.cpp is one function with ~55 000 SetFunction calls that
+# runs once at startup; GCC at -O3 spends ~20 minutes on it. -O1 is enough.
+if(REXGLUE_PLATFORM_SWITCH)
+    set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/generated/default/airborne_register.cpp"
+        APPEND PROPERTY COMPILE_OPTIONS -O1)
+endif()
+
 # renderdoc_trigger.cpp includes renderdoc_app.h through rex/ui/renderdoc_api.h.
 if(NOT REXGLUE_PLATFORM_SWITCH AND TARGET renderdoc)
     target_include_directories(airborne PRIVATE
