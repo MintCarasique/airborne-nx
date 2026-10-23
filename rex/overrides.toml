@@ -4,6 +4,22 @@
 # (sections at the root), not the one nested under [entrypoint].
 
 # ----------------------------------------------------------------------------
+#  CODEGEN OPTIONS (root keys: they must stay above the first [table], or TOML
+#  puts them inside it and the codegen ignores them silently)
+#
+#  Guest registers as C++ locals instead of PPCContext fields, so the host
+#  compiler keeps them in registers. They pay off most on the Switch's slow
+#  cores (NFSMW: ~14 % of its main thread was __savegprlr/__restgprlr alone).
+#  Safe here because no hook of ours reads guest registers from the context.
+#  Not enabled: non_argument_as_local (localizes r12, which __savevmx_N takes
+#  as a base) and skip_lr.
+# ----------------------------------------------------------------------------
+cr_as_local = true
+non_volatile_as_local = true
+xer_as_local = true
+ctr_as_local = true
+
+# ----------------------------------------------------------------------------
 #  FUNCTIONS DECLARED BY HAND
 #
 #  Key = start address. Without size/end the analyzer finds the bounds itself.
@@ -17,6 +33,12 @@
 "0x82AA13A8" = {}
 # Thunk: r3 += 4; b 0x82AA2C00. Tail-called from 0x82AABF6C (r3 -= 4).
 "0x82AABB70" = {}
+# Overrides of missed_functions.toml entries (this file is included after it):
+# Exception funclet of 0x82DD1370, in its frame (r31): it branches back into
+# the parent (b 0x82DD1400). The analysis also stopped after
+# `bl 0x82C54E90` at 0x82DD14C4, leaving the beq target 0x82DD14C8 outside.
+# It ends with `b 0x82C46ADC` (restore and return) before 0x82DD14E4.
+"0x82DD148C" = { parent = 0x82DD1370, end = 0x82DD14E4, share_registers = true }
 
 # ----------------------------------------------------------------------------
 #  JUMP TABLES verified by tools/recover_airborne_switches.py (bytes checked

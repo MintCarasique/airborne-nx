@@ -1,4 +1,5 @@
-# Data inside .text that the old analysis listed as functions; see tools/missed_functions.py.
+# Not function entries, although the old analysis listed them; see tools/missed_functions.py.
+# Mostly data inside .text; 0x82A025B8 is the assert path inside 0x82A019E8.
 0x82AC0D78
 0x82AC1060
 0x82AC1108
@@ -31,3 +32,4 @@
 0x82DD1058
 0x82DD1588
 0x82DD2040
+0x82A025B8

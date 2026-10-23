@@ -89,6 +89,11 @@
       Для Switch: NVK объявляет VK_EXT_fragment_shader_interlock на GM20B (`cls_eng3d` 0xB197 = MAXWELL_B,
       `nvk_physical_device.c:260`), NAK понижает interlock для SM 5.3 — FSI на консоли доступен как запасной путь.
    3. Собрать под Switch со слоем SDK.
+      **Первый прогон на консоли (2026-10-23):** доходит до меню без ошибок, < 1 FPS (см. HARDWARE_NOTES).
+      Дальше: локальные регистры в codegen (`cr/non_volatile/xer/ctr_as_local`, проверено на PC), профиль
+      `logs/rex/rex_perfil.log` SDK, живой лог через nxlink (`tools/nxlink.py -s`, Sphaira, 192.168.1.23).
+      Известные неразрешённые переходы codegen (были и до опций, только на путях исключений): `b 0x82C46AE0`
+      из 0x82C4652C (хвост `__finally` в `__restgprlr_26`), `b 0x82DD1400` из фанклета 0x82DD148C.
    4. Измерить; затем собственный рендер (перехваты D3D/RHI UE3), как `nfsmw_nativo_*`.
    **Сверка инструкций с генератором ReXGlue (2026-10-23)** — наши исправления XenonRecomp против
    `sdk/src/codegen/builders`. Совпадают: vctuxs/vcfpuxws128, насыщающие add/sub/pack (кроме ниже), сдвиги и

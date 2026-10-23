@@ -14,6 +14,7 @@ include(generated/rexglue.cmake)
 set(AIRBORNE_SOURCES
     src/main.cpp
     src/input_script.cpp
+    src/nxlink_log.cpp
     src/renderdoc_trigger.cpp
 )
 

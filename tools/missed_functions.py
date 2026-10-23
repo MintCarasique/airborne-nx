@@ -23,9 +23,10 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 GEN = ROOT / 'rex/generated/default'
 IMAGE_BASE = 0x82000000
 
-# Candidates that are data inside .text: codegen reports "has no blocks - generating
-# stub" for them. Each is a two-word header ("lwz r24,-8548(0)" + an lwz) 8 bytes
-# before a function ReXGlue already covers from its mflr.
+# Candidates that are not function entries. Mostly data inside .text: codegen
+# reports "has no blocks - generating stub" for them; each is a two-word header
+# ("lwz r24,-8548(0)" + an lwz) 8 bytes before a function ReXGlue already
+# covers from its mflr. Also code inside another function (an assert path).
 DATA_IN_TEXT = ROOT / 'rex/missed_functions_data.txt'
 
 

@@ -17,7 +17,9 @@ $thirdparty = Join-Path $sdk 'thirdparty'
 $vcvars = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat'
 $llvm = 'C:\Program Files\LLVM\bin'
 $venv = Join-Path $root 'tools\toolchain\venv\Scripts'
-$rexglue = Join-Path $sdk "out\win-amd64\$Config\rexglue.exe"
+# The code generator is a host tool: always the Release build of the SDK,
+# whatever -Config the app is built with.
+$rexglue = Join-Path $sdk "out\win-amd64\Release\rexglue.exe"
 
 function Invoke-Msvc([string]$command) {
     cmd /c "`"$vcvars`" >nul 2>nul && set `"PATH=$llvm;$venv;%PATH%`" && $command"
@@ -64,7 +66,7 @@ if (-not $SkipSdk) {
             Write-Host "symlink $($_.FullName.Substring($thirdparty.Length + 1)) -> $text"
         }
     Invoke-Msvc "cd /d `"$sdk`" && cmake --preset win-amd64"
-    Invoke-Msvc "cd /d `"$sdk`" && cmake --build out/build/win-amd64 --config $Config"
+    Invoke-Msvc "cd /d `"$sdk`" && cmake --build out/build/win-amd64 --config Release"
 }
 
 if (-not $SkipCodegen) {

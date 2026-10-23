@@ -11,6 +11,7 @@
 #include <rex/rex_app.h>
 
 #include "input_script.h"
+#include "nxlink_log.h"
 #include "renderdoc_trigger.h"
 
 class AirborneApp : public rex::ReXApp {
@@ -45,6 +46,7 @@ class AirborneApp : public rex::ReXApp {
   //   mnk_mode       keyboard as the pad, PC only: on the Switch the synthetic
   //                  device would shadow the real controllers.
   void OnPostInitLogging() override {
+    StartNxlinkLog();
     SetIfUnset("gpu_plugin", "xenos");
     SetIfUnset("user_language", "3");
 #if !REX_PLATFORM_SWITCH
