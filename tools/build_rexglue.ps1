@@ -28,6 +28,14 @@ if (-not $SkipSdk) {
     # The reference clone is sparse; the SDK build also needs these folders.
     git -C $ref sparse-checkout add sdk/cmake sdk/resources sdk/switch_compat sdk/thirdparty
     if ($LASTEXITCODE -ne 0) { throw 'sparse-checkout failed' }
+    # Our fixes to the SDK (code generator). Applied once: a patch that already
+    # reverses cleanly is in place.
+    $patch = Join-Path $root 'tools\patches\rexglue-airborne.patch'
+    cmd /c "git -C `"$ref`" apply --reverse --check `"$patch`" 2>nul"
+    if ($LASTEXITCODE -ne 0) {
+        git -C $ref apply $patch
+        if ($LASTEXITCODE -ne 0) { throw "cannot apply $patch" }
+    }
     if (-not (Test-Path (Join-Path $thirdparty 'fmt'))) {
         python (Join-Path $ref 'tools\fetch_thirdparty.py')
         if ($LASTEXITCODE -ne 0) { throw 'fetch_thirdparty failed' }
@@ -59,6 +67,12 @@ if (-not $SkipSdk) {
 if (-not $SkipCodegen) {
     Push-Location (Join-Path $root 'rex')
     try {
+        # The codegen stamp tracks the manifest and the XEX, not the generator:
+        # after a generator change it would report "up to date".
+        $stamp = 'generated\default\codegen.stamp'
+        if ((Test-Path $stamp) -and (Get-Item $rexglue).LastWriteTime -gt (Get-Item $stamp).LastWriteTime) {
+            Remove-Item $stamp
+        }
         # Through cmd: Windows PowerShell turns native stderr into terminating errors.
         cmd /c "`"$rexglue`" codegen airborne_manifest.toml > codegen.log 2>&1"
         if ($LASTEXITCODE -ne 0) { Get-Content codegen.log -Tail 30; throw 'codegen failed, see rex/codegen.log' }
