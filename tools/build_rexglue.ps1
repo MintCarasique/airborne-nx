@@ -28,14 +28,17 @@ if (-not $SkipSdk) {
     # The reference clone is sparse; the SDK build also needs these folders.
     git -C $ref sparse-checkout add sdk/cmake sdk/resources sdk/switch_compat sdk/thirdparty
     if ($LASTEXITCODE -ne 0) { throw 'sparse-checkout failed' }
-    # Our fixes to the SDK (code generator). Applied once: a patch that already
-    # reverses cleanly is in place.
+    # Our fixes to the SDK. The patch is the source of truth: the files it touches
+    # are reset to the reference commit and the patch is applied again, so a patch
+    # that grew since the last build still applies. Edits to those files that are
+    # not in the patch are lost; export them first:
+    #   git -C tools/reference-nfsmw diff -- sdk/src > tools/patches/rexglue-airborne.patch
     $patch = Join-Path $root 'tools\patches\rexglue-airborne.patch'
-    cmd /c "git -C `"$ref`" apply --reverse --check `"$patch`" 2>nul"
-    if ($LASTEXITCODE -ne 0) {
-        git -C $ref apply $patch
-        if ($LASTEXITCODE -ne 0) { throw "cannot apply $patch" }
-    }
+    $touched = git -C $ref apply --numstat $patch | ForEach-Object { ($_ -split "`t")[2] }
+    if ($LASTEXITCODE -ne 0) { throw "cannot read $patch" }
+    git -C $ref checkout -- @touched
+    git -C $ref apply $patch
+    if ($LASTEXITCODE -ne 0) { throw "cannot apply $patch" }
     if (-not (Test-Path (Join-Path $thirdparty 'fmt'))) {
         python (Join-Path $ref 'tools\fetch_thirdparty.py')
         if ($LASTEXITCODE -ne 0) { throw 'fetch_thirdparty failed' }
@@ -81,13 +84,16 @@ if (-not $SkipCodegen) {
 }
 
 if ($App) {
-    # The PC build of rex/ (D3D12). It takes the SDK as a subdirectory, so the
-    # SDK is compiled again under rex/out with the app's configuration.
+    # The PC build of rex/. It takes the SDK as a subdirectory, so the SDK is
+    # compiled again under rex/out with the app's configuration. Both GPU
+    # backends are built; the gpu_backend cvar picks one (Vulkan is what the
+    # Switch runs, through NVK).
     $rex = Join-Path $root 'rex'
     $preset = "win-amd64-$($Config.ToLower())"
     # The init template's presets omit the -march the SDK presets set; the SDK
     # uses SSSE3 intrinsics and does not build without it.
     Invoke-Msvc ("cd /d `"$rex`" && cmake --preset $preset `"-DREXSDK_DIR=$($sdk -replace '\\','/')`"" +
-        " -DCMAKE_C_FLAGS=-march=x86-64-v2 -DCMAKE_CXX_FLAGS=-march=x86-64-v2")
+        " -DCMAKE_C_FLAGS=-march=x86-64-v2 -DCMAKE_CXX_FLAGS=-march=x86-64-v2" +
+        " -DREXGLUE_USE_D3D12=ON -DREXGLUE_USE_VULKAN=ON")
     Invoke-Msvc "cd /d `"$rex`" && cmake --build out/build/$preset -j $Jobs"
 }
