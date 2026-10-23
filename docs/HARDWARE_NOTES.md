@@ -21,6 +21,12 @@
   всего ~1500 мс, 0,7 FPS. FSI (`--render_target_path_vulkan=fsi`): переносов нет (0,07 мс), но draw ~1000 мс,
   resolve ~19 мс, всего ~1050 мс, 0,9–1,0 FPS. Для сравнения PC (RTX 4070 SUPER, host RT): draw ~5 мс, переносы 3–6 мс.
   NVK не объявляет `VK_EXT_shader_stencil_export`: перенос в глубину = 1 проход глубины + 8 проходов битов stencil.
+- Прогон 6 (f4b320c+4a88abf91c2f, `--cl=Tra_Jmp_P`): вылет в конце загрузки уровня. `AllocFixed`: коммит 4 КБ
+  гостевой памяти → `svcMapProcessCodeMemory` 0xCE01 (OutOfResource) при 411 МБ backing / 658 МБ с зеркалами,
+  затем запись игры по 0x10. Причина: SDK коммитил ровно запрошенный диапазон, и постраничные коммиты UE3 давали
+  отдельное отображение ядра на каждые 4 КБ (+ по одному на зеркало) — кончаются объекты блоков памяти ядра, не байты.
+  Переносы в меню по типам: depth→stencil bit 631 мс/кадр (56 draw), color→stencil bit 344 мс (40 draw),
+  depth→depth 67 мс; каждый draw переноса ~10 мс GPU независимо от площади.
 - SDK: «Too few processor cores - scheduling will be wonky»; общая память GPU — полный буфер 512 МБ (sparse нет).
 
 # Измерено на железе (Switch, HOS 22.1.0, applet_type 0 = Application)
