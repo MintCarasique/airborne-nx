@@ -2425,7 +2425,7 @@ class NativeGraphicsSystem final : public rex::system::IGraphicsSystem {
     const uint32_t initiator = Reg(g::XE_GPU_REG_VGT_DRAW_INITIATOR);
     REXLOG_INFO("[traza] dibujo VS n{} PS n{} tipo {} cuenta {} sup {:08X} rt0 {:08X} rt1 {:08X} "
                 "mascara {:08X} mezcla {:08X} colorctl {:08X} prof {:08X} stencil {:08X} "
-                "modo {:08X} vte {:08X} clip {:08X} vport {:08X}/{:08X}/{:08X}/{:08X}{}",
+                "modo {:08X} vte {:08X} clip {:08X} vport {:08X}/{:08X}/{:08X}/{:08X} zinfo {:08X} zvport {:08X}/{:08X} c255 {:08X}/{:08X} pc255 {:08X}{}",
                 draw_vs_ ? int(draw_vs_->number) : -1, draw_ps_ ? int(draw_ps_->number) : -1,
                 initiator & 0x3F, initiator >> 16, Reg(g::XE_GPU_REG_RB_SURFACE_INFO),
                 Reg(g::XE_GPU_REG_RB_COLOR_INFO), Reg(g::XE_GPU_REG_RB_COLOR1_INFO),
@@ -2434,7 +2434,11 @@ class NativeGraphicsSystem final : public rex::system::IGraphicsSystem {
                 Reg(g::XE_GPU_REG_RB_STENCILREFMASK), Reg(g::XE_GPU_REG_RB_MODECONTROL),
                 Reg(g::XE_GPU_REG_PA_CL_VTE_CNTL), Reg(g::XE_GPU_REG_PA_CL_CLIP_CNTL),
                 Reg(g::XE_GPU_REG_PA_CL_VPORT_XSCALE), Reg(g::XE_GPU_REG_PA_CL_VPORT_XOFFSET),
-                Reg(g::XE_GPU_REG_PA_CL_VPORT_YSCALE), Reg(g::XE_GPU_REG_PA_CL_VPORT_YOFFSET), textures);
+                Reg(g::XE_GPU_REG_PA_CL_VPORT_YSCALE), Reg(g::XE_GPU_REG_PA_CL_VPORT_YOFFSET),
+                Reg(g::XE_GPU_REG_RB_DEPTH_INFO), Reg(g::XE_GPU_REG_PA_CL_VPORT_ZSCALE),
+                Reg(g::XE_GPU_REG_PA_CL_VPORT_ZOFFSET), Reg(g::XE_GPU_REG_SHADER_CONSTANT_000_X + 255 * 4),
+                Reg(g::XE_GPU_REG_SHADER_CONSTANT_000_X + 255 * 4 + 1),
+                Reg(g::XE_GPU_REG_SHADER_CONSTANT_000_X + (256 + 255) * 4), textures);
     TraceVertices(initiator);
   }
 

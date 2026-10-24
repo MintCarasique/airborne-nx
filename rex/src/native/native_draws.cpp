@@ -481,6 +481,10 @@ REXCVAR_DEFINE_INT32(nfsmw_nativo_texturas_huella_hilo_mb, 16, "NFSMW",
  * no decision of the ring: it only counts, and reports every 10 s in the "C3 reutilizar por contenido"
  * line.
  */
+REXCVAR_DEFINE_BOOL(airborne_edram_4x_alias, false, "AirborneNX",
+                    "Native renderer (experimental): draw 4X MSAA surfaces into the 1X surface of twice the pitch "
+                    "(EDRAM aliasing) and draw rectangle lists without face culling")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(airborne_salida_7e3, true, "AirborneNX",
                     "Native renderer: apply the 7e3 range in the pixel shader to outputs that go to 7e3 render targets "
                     "(RGBA16F on the host)");
@@ -2335,7 +2339,15 @@ class VulkanDrawerImpl final : public VulkanDrawer {
     std::chrono::steady_clock::time_point t_indices_185 = mark;  // C6 subetapas 15-18
 
     // --- Destinos --------------------------------------------------------------
-    const uint32_t pitch = r[gr::XE_GPU_REG_RB_SURFACE_INFO] & 0x3FFF;
+    // AirborneNX: a 4X MSAA surface keeps each pixel's samples as a 2x2 block of EDRAM, so in 1X terms it is
+    // twice as wide and tall. It is drawn into the 1X surface of twice the pitch with the viewport scaled by 2
+    // (StartPass), which aliases what other passes draw at the same base: the XDK clears UE3's 1280-pitch
+    // depth through a 640-pitch 4X rectangle. 2X surfaces keep their own pixel space (they only reach 1X
+    // ones through resolves).
+    // Experimental (airborne_edram_4x_alias): with it off, 4X surfaces keep their own pixel space as before.
+    const bool msaa_4x = edram_4x_alias_ &&
+                         ((r[gr::XE_GPU_REG_RB_SURFACE_INFO] >> 16) & 0x3) == uint32_t(xenos::MsaaSamples::k4X);
+    const uint32_t pitch = (r[gr::XE_GPU_REG_RB_SURFACE_INFO] & 0x3FFF) * (msaa_4x ? 2 : 1);
     const uint32_t reg_mask =
         edram_mode == uint32_t(xenos::EdramMode::kColorDepth) ? r[gr::XE_GPU_REG_RB_COLOR_MASK] : 0;
     static constexpr uint32_t kInfoColor[4] = {
@@ -2474,7 +2486,11 @@ class VulkanDrawerImpl final : public VulkanDrawer {
      * The occlusion guard is free and removes the only doubt: with a game occlusion query open the draw
      * counts even if it is not visible, so there it takes the long path and the usual discard drops it.
      */
-    const bool vegetation_early = only_alpha && without_vegetation_ && !open_occlusion_;
+    // AirborneNX: only in the shadow map (pitch >= 1600, as everywhere else here) and only for shaders that do
+    // not write depth. A colorless draw whose PS writes oDepth is UE3's depth restore before its full-screen
+    // lighting; skipping it let the lights of hidden surfaces add up (see-through walls and characters).
+    const bool vegetation_early = only_alpha && without_vegetation_ && !open_occlusion_ && pitch >= 1600 &&
+                                  !(ps->outputs & 0x10);
     // The ring's verdict for the nfsmw_d3d_vegetacion_juego guard (VeredictoVegetacion) must be this same
     // decision. With the settings read on every draw (cvars_por_fotograma_ false) the alternation can change
     // between the two reads: then no comparison is made.
@@ -2954,6 +2970,11 @@ class VulkanDrawerImpl final : public VulkanDrawer {
      * Otherwise it is computed as usual: the pass change decision is the same as before in every case,
      * collisions included.
      */
+    if (msaa_4x) {  // AirborneNX: a 4X pass has its own scale, so it is not the 1X pass of the same targets
+      for (uint64_t& k : keys) {
+        if (k) k |= uint64_t(1) << 62;
+      }
+    }
     uint64_t pass_key;
     if (fast_pass_key_ && valid_keys_pass_ && std::memcmp(keys, keys_pass_, sizeof(keys)) == 0) {
       const uint64_t n = ++fast_pass_keys_;
@@ -3261,7 +3282,8 @@ class VulkanDrawerImpl final : public VulkanDrawer {
     }
     if (only_alpha && ps) {
       // If vegetation is excluded from the shadow map, this whole draw is unnecessary.
-      if (without_vegetation_) {
+      // AirborneNX: only in the shadow map and not for shaders that write depth (see vegetation_early).
+      if (without_vegetation_ && pitch >= 1600 && !(ps->outputs & 0x10)) {
         return true;
       }
       specialization |= kSpecOnlyAlpha;
@@ -3339,6 +3361,11 @@ class VulkanDrawerImpl final : public VulkanDrawer {
       key.depth_value |= 0x7 << 4;  // test: Z function always
     }
     key.rasterizado = (sc_mode & 0x7) | (restart_flag ? 0x8 : 0) | (with_bias ? 0x10 : 0);
+    // AirborneNX: rectangles are not polygons for face culling (the emulation's IsPrimitivePolygonal): the
+    // depth restore comes with back-face culling on and would be dropped.
+    if (rect_list && edram_4x_alias_) {  // experimental together with the 4X aliasing (they need each other)
+      key.rasterizado &= ~uint32_t(0x3);
+    }
     VkPipeline pipeline = VK_NULL_HANDLE;
     // Looked up with ClaveDeBusqueda (phase 0a: canonical form; phases 1 and 2: without the state set through
     // vkCmdSet*). clave stays raw: the deferred sky (opaco_en_todos), the counter and the dynamic state read
@@ -10225,6 +10252,11 @@ class VulkanDrawerImpl final : public VulkanDrawer {
     scale_pass_ = (is_shadows && pitch && width_px && width_px != pitch)
                        ? float(width_px) / float(pitch)
                        : 1.0f;
+    // AirborneNX: 4X MSAA surfaces are drawn in 1X terms, twice as large (see Draw).
+    if (edram_4x_alias_ &&
+        ((r[gr::XE_GPU_REG_RB_SURFACE_INFO] >> 16) & 0x3) == uint32_t(xenos::MsaaSamples::k4X)) {
+      scale_pass_ *= 2.0f;
+    }
     std::copy(std::begin(formats), std::end(formats), std::begin(formats_pass_));
     rp_pass_ = pass;
     // Phase 0b (nfsmw_nativo_pipeline_entre_pases). Vulkan keeps the bound pipeline across passes of the
@@ -12359,6 +12391,11 @@ class VulkanDrawerImpl final : public VulkanDrawer {
   std::unordered_map<const ShaderEntry*, VkShaderModule> modules_;
   std::array<VkShaderModule, 3> variants_modules_{};  // 1 natural, 2 soft
   VkShaderModule rect_list_gs_ = VK_NULL_HANDLE;  // AirborneNX: shaders/rect_list_gs.hlsl
+  // AirborneNX (experimental, airborne_edram_4x_alias): 4X surfaces drawn in 1X terms and rectangles without
+  // face culling. Both are what the hardware/emulation do, and they only work together: the XDK clears the
+  // scene depth through 640-pitch 4X rectangles, and UE3's depth restore rectangle comes with culling on.
+  // Together they still leave a doubled ghost of the title logo, so they are off by default.
+  const bool edram_4x_alias_ = REXCVAR_GET(airborne_edram_4x_alias);
   std::array<bool, 3> created_variants_modules_{};
   int glow_tracked_ = 0;
   std::unordered_map<uint64_t, std::pair<PipelineKey, VkPipeline>> pipelines_;
