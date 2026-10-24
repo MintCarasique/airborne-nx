@@ -58,6 +58,10 @@ extern "C" void RexSwitchPerfTiron(uint64_t inicio, uint64_t fin);
 #include <unordered_set>
 #include <vector>
 
+REXCVAR_DEFINE_BOOL(airborne_barreras_copias, true, "AirborneNX",
+                    "Native renderer: a memory barrier before and after every image copy and blit (NFSMW "
+                    "relied on NVK ordering; desktop drivers overlap them with the passes around)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_INT32(nfsmw_nativo_resolver_sin_copia_alternar_s, 0, "NFSMW",
                      "Renderizador nativo (prueba, build 154): con N > 0 alterna copiar e intercambiar cada N "
                      "segundos, para comparar capturas del mismo sitio con el juego en pausa");
@@ -757,6 +761,46 @@ using FnBorrarProfundidad = void(VKAPI_PTR*)(VkCommandBuffer, VkImage, VkImageLa
 using FnBlit = void(VKAPI_PTR*)(VkCommandBuffer, VkImage, VkImageLayout, VkImage, VkImageLayout,
                                 uint32_t, const VkImageBlit*, VkFilter);
 
+// AirborneNX: NFSMW records its copies without barriers (on NVK a barrier drains the pipeline and the
+// ordering it relied on happened to hold). On desktop drivers a copy then overlaps the passes around it:
+// the particles read the resolved scene depth half copied (a diagonal edge and 32x32 blocks). With
+// airborne_barreras_copias every copy and blit waits for the writes before it and is visible to what
+// follows. One device per process, so the wrapped functions live in statics.
+struct CopiasConBarreras {
+  static inline PFN_vkCmdPipelineBarrier barrera = nullptr;
+  static inline FnCopiarImagen copiar = nullptr;
+  static inline FnBlit blit = nullptr;
+  static constexpr VkPipelineStageFlags kEtapas =
+      VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT;
+  static void Antes(VkCommandBuffer cb) {
+    VkMemoryBarrier b{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+    b.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                      VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    b.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrera(cb, kEtapas, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &b, 0, nullptr, 0, nullptr);
+  }
+  static void Despues(VkCommandBuffer cb) {
+    VkMemoryBarrier b{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+    b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT |
+                      VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                      VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    barrera(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, kEtapas, 0, 1, &b, 0, nullptr, 0, nullptr);
+  }
+  static void VKAPI_PTR Copiar(VkCommandBuffer cb, VkImage o, VkImageLayout lo, VkImage d, VkImageLayout ld,
+                               uint32_t n, const VkImageCopy* r) {
+    Antes(cb);
+    copiar(cb, o, lo, d, ld, n, r);
+    Despues(cb);
+  }
+  static void VKAPI_PTR Blit(VkCommandBuffer cb, VkImage o, VkImageLayout lo, VkImage d, VkImageLayout ld,
+                             uint32_t n, const VkImageBlit* r, VkFilter f) {
+    Antes(cb);
+    blit(cb, o, lo, d, ld, n, r, f);
+    Despues(cb);
+  }
+};
+
 // Direct3D 11 16.8 fixed point with rounding, like ui::FloatToD3D11Fixed16p8.
 int32_t Fijo16p8(float valor) {
   if (!(std::abs(valor) >= 1.0f / 512.0f)) {
@@ -1025,6 +1069,16 @@ class DestinosVulkan final : public DestinosNativos, public ContextoDestinos {
     blit_ = reinterpret_cast<FnBlit>(
         dispositivo_->vulkan_instance()->functions().vkGetDeviceProcAddr(device_,
                                                                           "vkCmdBlitImage"));
+    if (REXCVAR_GET(airborne_barreras_copias)) {
+      CopiasConBarreras::barrera = dfn_.vkCmdPipelineBarrier;
+      CopiasConBarreras::copiar = copiar_imagen_;
+      copiar_imagen_ = &CopiasConBarreras::Copiar;
+      if (blit_) {
+        CopiasConBarreras::blit = blit_;
+        blit_ = &CopiasConBarreras::Blit;
+      }
+      REXLOG_INFO("[nativo] C2: copias con barreras (airborne_barreras_copias)");
+    }
     // Attachment, copy and clear source and destination, and sampling of the resolved ones (shadows).
     const VkFormatFeatureFlags kUsosProfundidad =
         VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
