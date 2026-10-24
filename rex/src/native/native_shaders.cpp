@@ -40,7 +40,10 @@ namespace {
 // AirborneNX: MoH:A's XDK also rewrites the destination swizzle (a float3 position
 // gets w = 1: 0x688 -> 0xA88, with format 0x39 = 32_32_32_FLOAT), so it is not kept
 // either (NFSMW kept it: 0x80000FFF).
-constexpr uint32_t kFetchConserva[3] = {0x0007FFFF, 0x80000000, 0x80000000};
+// AirborneNX: and the destination register too: the XDK can permute the registers of a group of fetches
+// (a particle VS arrives with r4/r6/r5 where the container has r6/r5/r4). The renderer finds each element's
+// fetch by register in the patched microcode, not by position.
+constexpr uint32_t kFetchConserva[3] = {0x00000FFF, 0x80000000, 0x80000000};
 
 constexpr uint32_t kMaxAvisos = 48;
 
@@ -128,6 +131,7 @@ const char* Leer(const nfsmw::native::Shader& shader, EntradaShader& e) {
         return "elemento de vertices apunta fuera del microcodigo";
       }
       elemento.swizzle = uint16_t(e.microcodigo[size_t(elemento.instruccion) * 3 + 1] & 0xFFF);
+      elemento.registro = uint8_t((e.microcodigo[size_t(elemento.instruccion) * 3] >> 12) & 0x3F);
       e.elementos.push_back(elemento);
       for (size_t j = 0; j < 3; ++j) {
         e.microcodigo[size_t(elemento.instruccion) * 3 + j] &= kFetchConserva[j];
@@ -263,7 +267,7 @@ bool FetchCoherentes(const EntradaShader& vs, std::span<const uint32_t> parchead
     return false;
   }
   for (const ElementoVertice& elemento : vs.elementos) {
-    const uint32_t registro = (vs.microcodigo[size_t(elemento.instruccion) * 3] >> 12) & 0x3F;
+    const uint32_t registro = elemento.registro;
     bool encontrado = false;
     for (const ElementoVertice& otro : vs.elementos) {
       const uint32_t d0 = parcheado[size_t(otro.instruccion) * 3];

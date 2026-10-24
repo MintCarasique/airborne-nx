@@ -3446,7 +3446,7 @@ class SistemaGraficoNativo final : public rex::system::IGraphicsSystem {
     }
     std::string detalle;
     for (const ElementoVertice& elemento : vs.elementos) {
-      const uint32_t registro = (vs.microcodigo[size_t(elemento.instruccion) * 3] >> 12) & 0x3F;
+      const uint32_t registro = elemento.registro;  // AirborneNX: masked in the microcode copy
       size_t p = SIZE_MAX;
       for (const ElementoVertice& otro : vs.elementos) {
         const size_t q = size_t(otro.instruccion) * 3;

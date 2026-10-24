@@ -8337,7 +8337,7 @@ class DibujosVulkanImpl final : public DibujosVulkan {
     }
     uint32_t ubicaciones_usadas = 0;
     for (const ElementoVertice& elemento : vs.elementos) {
-      const uint32_t registro = (vs.microcodigo[size_t(elemento.instruccion) * 3] >> 12) & 0x3F;
+      const uint32_t registro = elemento.registro;  // AirborneNX: masked in the microcode copy
       const uint32_t original = elemento.swizzle;  // AirborneNX: the microcode copy has it masked
       size_t q = SIZE_MAX;
       for (const ElementoVertice& otro : vs.elementos) {
@@ -8360,7 +8360,7 @@ class DibujosVulkanImpl final : public DibujosVulkan {
             const size_t i = size_t(otro.instruccion) * 3;
             detalle += fmt::format(" {}{}@{}: original r{} op{}, parcheado r{} op{} {:08X} {:08X} {:08X};",
                                    NombreUso(otro.uso), otro.indice_uso, otro.instruccion,
-                                   (vs.microcodigo[i] >> 12) & 0x3F, vs.microcodigo[i] & 0x1F,
+                                   uint32_t(otro.registro), vs.microcodigo[i] & 0x1F,
                                    (parcheado[i] >> 12) & 0x3F, parcheado[i] & 0x1F, parcheado[i],
                                    parcheado[i + 1], parcheado[i + 2]);
           }
