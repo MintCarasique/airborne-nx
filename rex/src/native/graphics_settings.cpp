@@ -193,52 +193,52 @@ REXCVAR_DEFINE_STRING(nfsmw_posproceso_lineas, "0.00", "Graficos/Posproceso",
                       "Personalizado: lineas de television antigua, una fila de cada tres (0.00 = sin lineas)")
     .allowed({"0.00", "0.25", "0.50", "0.75", "1.00"});
 
-namespace nfsmw::ajustes {
+namespace nfsmw::settings {
 namespace {
 
-std::atomic<uint64_t> g_version_posproceso{1};
+std::atomic<uint64_t> g_postprocess_version{1};
 std::atomic<bool> g_fxaa{false};
-std::atomic<int> g_resplandor_cielo{0};  // 0 original, 1 natural, 2 soft
-std::atomic<int> g_tratamiento_visual{0};  // 0 original, 1 soft, 2 off
+std::atomic<int> g_glow_sky{0};  // 0 original, 1 natural, 2 soft
+std::atomic<int> g_visual_handling{0};  // 0 original, 1 soft, 2 off
 
-constexpr const char* kCvarsPosproceso[] = {
+constexpr const char* kPostprocessCvars[] = {
     "nfsmw_posproceso",           "nfsmw_posproceso_brillo",      "nfsmw_posproceso_contraste",
     "nfsmw_posproceso_saturacion", "nfsmw_posproceso_vibracion",  "nfsmw_posproceso_temperatura",
     "nfsmw_posproceso_gamma",     "nfsmw_posproceso_vineta",      "nfsmw_posproceso_lineas",
 };
 
 // nfsmw_resplandor_cielo: 0 original, 1 natural, 2 suave.
-int ModoResplandor(std::string_view valor) {
-  return valor == "natural" ? 1 : valor == "suave" ? 2 : 0;
+int GlowMode(std::string_view value) {
+  return value == "natural" ? 1 : value == "suave" ? 2 : 0;
 }
 
 // nfsmw_tratamiento_visual: 0 original, 1 suave, 2 apagado.
-int ModoTratamiento(std::string_view valor) {
-  return valor == "suave" ? 1 : valor == "apagado" ? 2 : 0;
+int TreatmentMode(std::string_view value) {
+  return value == "suave" ? 1 : value == "apagado" ? 2 : 0;
 }
 
-float Numero(const char* nombre, float por_defecto) {
-  const std::string texto = rex::cvar::GetFlagByName(nombre);
-  char* fin = nullptr;
-  const double valor = std::strtod(texto.c_str(), &fin);
-  return fin && fin != texto.c_str() ? float(valor) : por_defecto;
+float Number(const char* name, float per_default) {
+  const std::string texto = rex::cvar::GetFlagByName(name);
+  char* stop_pos = nullptr;
+  const double value = std::strtod(texto.c_str(), &stop_pos);
+  return stop_pos && stop_pos != texto.c_str() ? float(value) : per_default;
 }
 
 // The command line takes precedence (PC tests with --video_mode_width=...). Whatever comes from the
 // configuration file is replaced: SaveConfig saves the cvars that differ from their default value, and an
 // old video mode must not win over the new settings.
-void Poner(const char* nombre, const std::string& valor) {
-  if (rex::cvar::GetFlagInfo(nombre) == nullptr) {
-    REXLOG_WARN("[ajustes] el cvar {} no existe: no se aplica {}", nombre, valor);
+void Put(const char* name, const std::string& value) {
+  if (rex::cvar::GetFlagInfo(name) == nullptr) {
+    REXLOG_WARN("[ajustes] el cvar {} no existe: no se aplica {}", name, value);
     return;
   }
-  if (rex::cvar::GetFlagSource(nombre) == rex::cvar::Source::kCommandLine) {
-    REXLOG_INFO("[ajustes] {} viene de la linea de comandos ({}): no se toca", nombre,
-                rex::cvar::GetFlagByName(nombre));
+  if (rex::cvar::GetFlagSource(name) == rex::cvar::Source::kCommandLine) {
+    REXLOG_INFO("[ajustes] {} viene de la linea de comandos ({}): no se toca", name,
+                rex::cvar::GetFlagByName(name));
     return;
   }
-  if (!rex::cvar::SetFlagByName(nombre, valor)) {
-    REXLOG_WARN("[ajustes] no se pudo poner {} = {}", nombre, valor);
+  if (!rex::cvar::SetFlagByName(name, value)) {
+    REXLOG_WARN("[ajustes] no se pudo poner {} = {}", name, value);
   }
 }
 
@@ -246,17 +246,17 @@ void Poner(const char* nombre, const std::string& valor) {
 
 #if REX_PLATFORM_SWITCH
 // Provided by the SaltyNX module so that the console overlays can show the resolution.
-extern "C" void RexSwitchPerfResolution(unsigned ancho, unsigned alto);
+extern "C" void RexSwitchPerfResolution(unsigned width_px, unsigned height_px);
 extern "C" void RexSwitchPerfIntervaloSwap(unsigned vblanks);
-extern "C" void RexSwitchSaltyNxHabilitar(int habilitado);
-extern "C" void RexSwitchRelojesReverseHabilitar(int habilitado);
+extern "C" void RexSwitchSaltyNxHabilitar(int enabled);
+extern "C" void RexSwitchRelojesReverseHabilitar(int enabled);
 extern "C" void RexSwitchApmPedirGpuMhz(int mhz);
-extern "C" void RexSwitchApmPermitirRam1600(int permitir);
+extern "C" void RexSwitchApmPermitirRam1600(int allow);
 extern "C" void RexSwitchApmAplicar(void);
 #endif
 
-void AplicarAjustesGraficos() {
-  const std::string resolucion = REXCVAR_GET(nfsmw_resolucion_interna);
+void ApplyGraphicsSettings() {
+  const std::string resolution = REXCVAR_GET(nfsmw_resolucion_interna);
   // 1920x1080 is not requested through the video mode. The game has its own table and above 1280x720 it
   // stays at 1280x720, so asking for it does nothing. What does work is writing the size into the mode
   // table of its renderer: nfsmw_render_targets.cpp does that, reading this same cvar, and also switches
@@ -264,12 +264,12 @@ void AplicarAjustesGraficos() {
   // 720p, which is what is presented. Setting the video mode to 1920x1080 so that the game's front buffer
   // would grow with it was tried and does not work: the front buffer is registered earlier and stays at
   // 1280x720.
-  const bool interno_1080p = resolucion == "1920x1080" || resolucion == "automatico";
-  const std::string modo_video = interno_1080p ? std::string("1280x720") : resolucion;
-  const size_t x = modo_video.find('x');
+  const bool p_internal1080 = resolution == "1920x1080" || resolution == "automatico";
+  const std::string video_mode = p_internal1080 ? std::string("1280x720") : resolution;
+  const size_t x = video_mode.find('x');
   if (x != std::string::npos) {
-    Poner("video_mode_width", modo_video.substr(0, x));
-    Poner("video_mode_height", modo_video.substr(x + 1));
+    Put("video_mode_width", video_mode.substr(0, x));
+    Put("video_mode_height", video_mode.substr(x + 1));
   }
 #if REX_PLATFORM_SWITCH
   // FPS and resolution for the console overlays, and honoring Reverse-NX. Can be turned off if it gets in the way.
@@ -281,36 +281,36 @@ void AplicarAjustesGraficos() {
   RexSwitchApmAplicar();
   RexSwitchPerfIntervaloSwap(unsigned(REXCVAR_GET(nfsmw_intervalo_swap)));
 #endif
-  Poner("resolution", "");  // empty preset: the width and height above apply
-  const std::string limite = REXCVAR_GET(nfsmw_limite_fps);
-  Poner("video_mode_refresh_rate", limite == "30" ? "30" : "60");
-  REXLOG_INFO("[ajustes] resolucion interna {} y limite de FPS {}: modo de video {}x{} a {} Hz", resolucion, limite,
+  Put("resolution", "");  // empty preset: the width and height above apply
+  const std::string limit = REXCVAR_GET(nfsmw_limite_fps);
+  Put("video_mode_refresh_rate", limit == "30" ? "30" : "60");
+  REXLOG_INFO("[ajustes] resolucion interna {} y limite de FPS {}: modo de video {}x{} a {} Hz", resolution, limit,
               rex::cvar::GetFlagByName("video_mode_width"), rex::cvar::GetFlagByName("video_mode_height"),
               rex::cvar::GetFlagByName("video_mode_refresh_rate"));
 #if REX_PLATFORM_SWITCH
   {
     // The overlay shows the resolution the game draws at, so with the 1080p internal mode it has to be
     // told 1920x1088, which is the real scene render target, not the video mode.
-    unsigned ancho = unsigned(std::strtoul(rex::cvar::GetFlagByName("video_mode_width").c_str(), nullptr, 10));
-    unsigned alto = unsigned(std::strtoul(rex::cvar::GetFlagByName("video_mode_height").c_str(), nullptr, 10));
+    unsigned width_px = unsigned(std::strtoul(rex::cvar::GetFlagByName("video_mode_width").c_str(), nullptr, 10));
+    unsigned height_px = unsigned(std::strtoul(rex::cvar::GetFlagByName("video_mode_height").c_str(), nullptr, 10));
     // nfsmw_render_targets.cpp publishes the real size every time the mode changes, because with
     // "automatico" it changes on the fly. Only the startup value is set here.
-    if (resolucion == "1920x1080") {
-      ancho = 1920;
-      alto = 1080;
+    if (resolution == "1920x1080") {
+      width_px = 1920;
+      height_px = 1080;
     }
-    if (ancho && alto) {
-      RexSwitchPerfResolution(ancho, alto);  // for the console overlay
+    if (width_px && height_px) {
+      RexSwitchPerfResolution(width_px, height_px);  // for the console overlay
     }
   }
 #endif
 }
 
-void OcultarAjustesSinEfecto() {
-  if (!nfsmw::nativo::Activo()) {
+void HideSettingsWithoutEffect() {
+  if (!nfsmw::native_renderer::Active()) {
     return;  // with emulation, all of them do something
   }
-  const std::vector<std::string> ocultos = {
+  const std::vector<std::string> hidden = {
       // From the emulated path: they do nothing with the native renderer.
       "resolution_scale", "draw_resolution_scale_x", "draw_resolution_scale_y", "vsync", "anisotropic_override",
       "swap_post_effect",
@@ -320,26 +320,26 @@ void OcultarAjustesSinEfecto() {
   // On PC, the emulated path settings are registered by the GPU plugin, which is not loaded with the
   // native renderer: they do not exist there. On the Switch they are built into the executable and do show
   // up in the menu. They are hidden by name in both cases.
-  std::string registrados;
-  std::string sin_registrar;
-  for (const std::string& nombre : ocultos) {
-    std::string& lista = rex::cvar::GetFlagInfo(nombre) ? registrados : sin_registrar;
-    lista += (lista.empty() ? "" : ", ") + nombre;
+  std::string registered;
+  std::string without_register;
+  for (const std::string& name : hidden) {
+    std::string& item_list = rex::cvar::GetFlagInfo(name) ? registered : without_register;
+    item_list += (item_list.empty() ? "" : ", ") + name;
   }
-  rex::ui::OcultarAjustesEnMenu(ocultos);
+  rex::ui::OcultarAjustesEnMenu(hidden);
   REXLOG_INFO("[ajustes] menu: fuera, porque no hacen nada con el renderizador nativo o los sustituye la categoria "
               "Graficos: {}; no registrados en esta build: {}",
-              registrados.empty() ? "ninguno" : registrados, sin_registrar.empty() ? "ninguno" : sin_registrar);
+              registered.empty() ? "ninguno" : registered, without_register.empty() ? "ninguno" : without_register);
 }
 
-Posproceso LeerPosproceso() {
-  struct Preajuste {
-    const char* nombre;
-    Posproceso valores;
+Postprocess ReadPostprocess() {
+  struct Preset {
+    const char* name;
+    Postprocess values;
   };
   // The GoldenEye-Recomp ones (ge_postfx.cpp): brightness, contrast, saturation, vibrance, temperature,
   // gamma, tint (red, green, blue and strength), vignette and scanlines.
-  static const Preajuste kPreajustes[] = {
+  static const Preset kPresets[] = {
       {"cine", {true, -0.04f, 1.15f, 1.05f, 0.15f, -0.10f, 1.0f, 1.0f, 0.95f, 0.85f, 0.12f, 0.40f, 0.0f}},
       {"sepia", {true, -0.02f, 1.05f, 0.20f, 0.0f, 0.25f, 1.0f, 1.0f, 0.82f, 0.55f, 0.50f, 0.30f, 0.0f}},
       {"noir", {true, -0.03f, 1.35f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.55f, 0.0f}},
@@ -349,64 +349,64 @@ Posproceso LeerPosproceso() {
       {"matrix", {true, -0.03f, 1.10f, 0.85f, 0.20f, 0.0f, 1.0f, 0.55f, 1.0f, 0.60f, 0.30f, 0.30f, 0.25f}},
       {"crt", {true, -0.02f, 1.05f, 1.10f, 0.10f, 0.0f, 1.0f, 0.90f, 1.0f, 0.90f, 0.10f, 0.20f, 0.50f}},
   };
-  const std::string modo = rex::cvar::GetFlagByName("nfsmw_posproceso");
-  for (const Preajuste& p : kPreajustes) {
-    if (modo == p.nombre) {
-      return p.valores;
+  const std::string mode = rex::cvar::GetFlagByName("nfsmw_posproceso");
+  for (const Preset& p : kPresets) {
+    if (mode == p.name) {
+      return p.values;
     }
   }
-  Posproceso resultado;
-  if (modo != "personalizado") {
-    return resultado;  // apagado
+  Postprocess result;
+  if (mode != "personalizado") {
+    return result;  // apagado
   }
-  resultado.activo = true;
-  resultado.brillo = Numero("nfsmw_posproceso_brillo", 0.0f);
-  resultado.contraste = Numero("nfsmw_posproceso_contraste", 1.0f);
-  resultado.saturacion = Numero("nfsmw_posproceso_saturacion", 1.0f);
-  resultado.vibracion = Numero("nfsmw_posproceso_vibracion", 0.0f);
-  resultado.temperatura = Numero("nfsmw_posproceso_temperatura", 0.0f);
-  resultado.gamma = Numero("nfsmw_posproceso_gamma", 1.0f);
-  resultado.vineta = Numero("nfsmw_posproceso_vineta", 0.0f);
-  resultado.lineas = Numero("nfsmw_posproceso_lineas", 0.0f);
-  return resultado;
+  result.active = true;
+  result.brightness = Number("nfsmw_posproceso_brillo", 0.0f);
+  result.contrast = Number("nfsmw_posproceso_contraste", 1.0f);
+  result.saturation = Number("nfsmw_posproceso_saturacion", 1.0f);
+  result.rumble = Number("nfsmw_posproceso_vibracion", 0.0f);
+  result.temperatura = Number("nfsmw_posproceso_temperatura", 0.0f);
+  result.gamma = Number("nfsmw_posproceso_gamma", 1.0f);
+  result.vignette = Number("nfsmw_posproceso_vineta", 0.0f);
+  result.lines = Number("nfsmw_posproceso_lineas", 0.0f);
+  return result;
 }
 
-uint64_t VersionPosproceso() {
-  return g_version_posproceso.load(std::memory_order_relaxed);
+uint64_t PostprocessVersion() {
+  return g_postprocess_version.load(std::memory_order_relaxed);
 }
 
 bool AntialiasingFxaa() {
   return g_fxaa.load(std::memory_order_relaxed);
 }
 
-int ResplandorCielo() {
-  return g_resplandor_cielo.load(std::memory_order_relaxed);
+int GlowSky() {
+  return g_glow_sky.load(std::memory_order_relaxed);
 }
 
-int TratamientoVisual() {
-  return g_tratamiento_visual.load(std::memory_order_relaxed);
+int VisualHandling() {
+  return g_visual_handling.load(std::memory_order_relaxed);
 }
 
-void VigilarAjustesEnVivo() {
+void WatchLiveSettings() {
   // The notification arrives with the registry lock held (SetFlagFromSource): only atomics are touched.
-  for (const char* nombre : kCvarsPosproceso) {
-    rex::cvar::RegisterChangeCallback(nombre, [](std::string_view, std::string_view) {
-      g_version_posproceso.fetch_add(1, std::memory_order_relaxed);
+  for (const char* name : kPostprocessCvars) {
+    rex::cvar::RegisterChangeCallback(name, [](std::string_view, std::string_view) {
+      g_postprocess_version.fetch_add(1, std::memory_order_relaxed);
     });
   }
   g_fxaa.store(rex::cvar::GetFlagByName("nfsmw_antialiasing") == "fxaa", std::memory_order_relaxed);
-  rex::cvar::RegisterChangeCallback("nfsmw_antialiasing", [](std::string_view, std::string_view valor) {
-    g_fxaa.store(valor == "fxaa", std::memory_order_relaxed);
+  rex::cvar::RegisterChangeCallback("nfsmw_antialiasing", [](std::string_view, std::string_view value) {
+    g_fxaa.store(value == "fxaa", std::memory_order_relaxed);
   });
-  g_resplandor_cielo.store(ModoResplandor(rex::cvar::GetFlagByName("nfsmw_resplandor_cielo")),
+  g_glow_sky.store(GlowMode(rex::cvar::GetFlagByName("nfsmw_resplandor_cielo")),
                           std::memory_order_relaxed);
-  rex::cvar::RegisterChangeCallback("nfsmw_resplandor_cielo", [](std::string_view, std::string_view valor) {
-    g_resplandor_cielo.store(ModoResplandor(valor), std::memory_order_relaxed);
+  rex::cvar::RegisterChangeCallback("nfsmw_resplandor_cielo", [](std::string_view, std::string_view value) {
+    g_glow_sky.store(GlowMode(value), std::memory_order_relaxed);
   });
-  g_tratamiento_visual.store(ModoTratamiento(rex::cvar::GetFlagByName("nfsmw_tratamiento_visual")),
+  g_visual_handling.store(TreatmentMode(rex::cvar::GetFlagByName("nfsmw_tratamiento_visual")),
                              std::memory_order_relaxed);
-  rex::cvar::RegisterChangeCallback("nfsmw_tratamiento_visual", [](std::string_view, std::string_view valor) {
-    g_tratamiento_visual.store(ModoTratamiento(valor), std::memory_order_relaxed);
+  rex::cvar::RegisterChangeCallback("nfsmw_tratamiento_visual", [](std::string_view, std::string_view value) {
+    g_visual_handling.store(TreatmentMode(value), std::memory_order_relaxed);
   });
 }
 

@@ -43,9 +43,9 @@
 #else
 // The two variants of the glow bright pass are derived from a game shader and are not distributed with the
 // sources. Without them the glow setting keeps the game's own shader.
-#define NFSMW_SIN_VARIANTES_RESPLANDOR 1
-static const uint32_t kSpirvResplandorEnergia[1] = {0};
-static const uint32_t kSpirvResplandorSuave[1] = {0};
+#define NFSMW_NO_GLOW_VARIANTS 1
+static const uint32_t kSpirvGlowEnergy[1] = {0};
+static const uint32_t kSpirvGlowSmooth[1] = {0};
 #endif
 #include "native_shaders.h"
 #include "native_hooks.h"  // nfsmw_d3d_vegetacion_juego
@@ -282,23 +282,23 @@ REXCVAR_DEFINE_INT32(nfsmw_nativo_nvk_alternar_s, 0, "NFSMW",
  * with an unpatched Mesa the address is null and ControlSet4 reports it once.
  */
 extern "C" {
-struct NvkSwitchSet4Cuentas {
-  uint64_t enlaces_diferencia;
-  uint64_t enlaces_completos;
-  uint64_t escrituras_raiz;
-  uint64_t dwords_raiz;
-  uint64_t cbufs_sucios;
-  uint64_t cbufs_ahorrados;
-  uint64_t dibujos;
-  uint64_t comprobaciones;
-  uint64_t diferencias;
+struct NvkSwitchSet4Counts {
+  uint64_t difference_bindings;
+  uint64_t complete_bindings;
+  uint64_t root_writes;
+  uint64_t root_dwords;
+  uint64_t dirty_cbufs;
+  uint64_t saved_cbufs;
+  uint64_t draws;
+  uint64_t checks;
+  uint64_t differences;
 };
 struct NvkSwitchSet4 {
   int32_t version;
-  int32_t pedido;
-  int32_t entorno;
-  int32_t apagado;
-  NvkSwitchSet4Cuentas total;
+  int32_t request;
+  int32_t environment;
+  int32_t disabled;
+  NvkSwitchSet4Counts total;
 };
 extern NvkSwitchSet4 nvk_switch_set4 __attribute__((weak));
 }
@@ -311,32 +311,32 @@ static_assert(sizeof(NvkSwitchSet4) == 16 + 9 * 8, "NvkSwitchSet4 tiene que medi
  * addresses are null and ControlDibujoNvk reports it once.
  */
 extern "C" {
-struct NvkSwParte {
-  uint64_t veces;
+struct NvkSwPart {
+  uint64_t times;
   uint64_t ticks;  // CNTPCT_EL0, a ticks_por_segundo
 };
-struct NvkSwMejora {
-  int32_t pedido;  // written by the app: 1 yes, 0 no
-  int32_t apagado;  // 1: its guard saw a DIFERENCIA
-  uint64_t usos;
-  uint64_t validadas;
-  uint64_t diferencias;
-  uint64_t sin_comprobar;
+struct NvkSwImprovement {
+  int32_t request;  // written by the app: 1 yes, 0 no
+  int32_t disabled;  // 1: its guard saw a DIFERENCIA
+  uint64_t uses;
+  uint64_t validated_items;
+  uint64_t differences;
+  uint64_t without_check;
 };
-struct NvkSwitchDibujo {
+struct NvkSwitchDraw {
   int32_t version;
-  int32_t medir;
-  int32_t medir_fallos;
-  int32_t entorno;
-  uint64_t ticks_por_segundo;
-  NvkSwParte partes[16];   // enum nvk_sw_parte
-  uint64_t cuentas[13];    // enum nvk_sw_cuenta
-  NvkSwMejora mejoras[5];  // emission, cbufs, dynamic, set4_rapido (not applied), prefetch
+  int32_t do_measure;
+  int32_t measure_failures;
+  int32_t environment;
+  uint64_t per_second_ticks;
+  NvkSwPart parts[16];   // enum nvk_sw_parte
+  uint64_t counts[13];    // enum nvk_sw_cuenta
+  NvkSwImprovement improvements[5];  // emission, cbufs, dynamic, set4_rapido (not applied), prefetch
 };
-extern NvkSwitchDibujo nvk_switch_dibujo __attribute__((weak));
+extern NvkSwitchDraw nvk_draw_switch __attribute__((weak));
 void vk_switch_precargar_pipeline(VkPipeline pipeline) __attribute__((weak));
 }
-static_assert(sizeof(NvkSwitchDibujo) == 24 + 16 * 16 + 13 * 8 + 5 * 40, "NvkSwitchDibujo: el mismo tamano que en NVK");
+static_assert(sizeof(NvkSwitchDraw) == 24 + 16 * 16 + 13 * 8 + 5 * 40, "NvkSwitchDibujo: el mismo tamano que en NVK");
 #endif
 /*
  * Sampler caches valid across frames.
@@ -403,11 +403,11 @@ REXCVAR_DEFINE_BOOL(nfsmw_nativo_mipmaps, true, "NFSMW",
  * and releasing textures to upload them again caused stutters. GPU memory on the console: 514 MB used of
  * 1,492 MB budgeted. nfsmw.toml has the same value. */
 #if REX_PLATFORM_SWITCH
-constexpr int32_t kTexturasMbMaxPorDefecto = 512;
+constexpr int32_t kMbMaxTexturesPerDefault = 512;
 #else
-constexpr int32_t kTexturasMbMaxPorDefecto = 384;
+constexpr int32_t kMbMaxTexturesPerDefault = 384;
 #endif
-REXCVAR_DEFINE_INT32(nfsmw_nativo_texturas_mb_max, kTexturasMbMaxPorDefecto, "NFSMW",
+REXCVAR_DEFINE_INT32(nfsmw_nativo_texturas_mb_max, kMbMaxTexturesPerDefault, "NFSMW",
                      "Renderizador nativo: MB de texturas a partir de los que se sueltan las que llevan mas tiempo sin "
                      "usarse (al menos 120 fotogramas), hasta bajar al 75 %. Si el juego las vuelve a pedir, se suben "
                      "otra vez. 0 = sin limite, como antes de la build 144")
@@ -1071,15 +1071,15 @@ REXCVAR_DEFINE_BOOL(nfsmw_nativo_diag_memoria_subida, true, "NFSMW",
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 // The 30 FPS guard lives in nfsmw_recorte_sombras.cpp, which owns the lever.
-namespace nfsmw::guardia30 {
-bool SinSombras(bool del_usuario);
+namespace nfsmw::guard30 {
+bool WithoutShadows(bool user);
 }  // namespace nfsmw::guardia30
 
-namespace nfsmw::nativo {
+namespace nfsmw::native_renderer {
 
 // Incremented by the ring thread when it handles a WAIT_REG_MEM (nfsmw_nativo_sistema.cpp). That is the
 // point where vertex deduplication must forget what it recorded.
-std::atomic<uint32_t> g_sincronizaciones_anillo{0};
+std::atomic<uint32_t> g_ring_syncs{0};
 namespace {
 
 /*
@@ -1090,21 +1090,21 @@ namespace {
  * category vanished from the report. The shadow map is recognized for what it is: a depth-only target, with
  * no color at all.
  */
-inline uint32_t CategoriaDeDestino(uint32_t pitch, const uint64_t* claves) {
-  const bool color = claves[0] || claves[1] || claves[2] || claves[3];
-  if (!color && claves[4] && pitch >= 1600) {
-    return kGpuSombras;
+inline uint32_t TargetCategory(uint32_t pitch, const uint64_t* keys) {
+  const bool color = keys[0] || keys[1] || keys[2] || keys[3];
+  if (!color && keys[4] && pitch >= 1600) {
+    return kGpuShadows;
   }
   if (pitch >= 1280) {
-    return claves[4] ? kGpuEscena : kGpuEscenaSinProfundidad;
+    return keys[4] ? kGpuScene : kGpuSceneWithoutDepth;
   }
   if (pitch >= 640) {
-    return kGpuReflejo;
+    return kGpuReflection;
   }
   if (pitch >= 320) {
     return kGpu320;
   }
-  return kGpuMenores;
+  return kGpuLesser;
 }
 
 namespace gr = rex::graphics;
@@ -1114,36 +1114,36 @@ using rex::ui::vulkan::VulkanDevice;
 constexpr uint32_t kRegConstantesVs = 0x4000;
 constexpr uint32_t kRegConstantesPs = 0x4400;
 constexpr uint32_t kRegFetch = 0x4800;
-constexpr uint32_t kRegBooleanos = 0x4900;
-constexpr uint32_t kRegistrosConstantes = 0x400;  // 256 constantes x 4
+constexpr uint32_t kRegBools = 0x4900;
+constexpr uint32_t kConstantsRegs = 0x400;  // 256 constantes x 4
 
-constexpr uint32_t kCapacidadMonton[4] = {4096, 16, 64, 512};  // 2D, 3D, cubo, samplers
+constexpr uint32_t kHeapCapacity[4] = {4096, 16, 64, 512};  // 2D, 3D, cubo, samplers
 // Work slots. The ones actually used are chosen by nfsmw_nativo_ranuras_trabajo; this is the room reserved
 // for them, and it has to match the array in nfsmw_nativo_destinos.cpp.
-constexpr size_t kRanurasDeTrabajo = 3;
-constexpr VkDeviceSize kTamanoSubida = VkDeviceSize(64) << 20;
+constexpr size_t kJobSlots = 3;
+constexpr VkDeviceSize kUploadSize = VkDeviceSize(64) << 20;
 // Separate buffer for the shared constants, per slot. ~1,400 draws x 512 bytes = 0.7 MB per frame; if it
 // fills up, the work is submitted just as with the upload buffer.
-constexpr VkDeviceSize kTamanoCompartidas = VkDeviceSize(4) << 20;  // per work slot (there are three)
+constexpr VkDeviceSize kSharedSize = VkDeviceSize(4) << 20;  // per work slot (there are three)
 // The pipeline cache and the prewarm list go in a single file in <NRO folder>/cache/ (nothing loose next to
 // the NRO, and a single pipelines .bin). Header "NFPC", version, list bytes and cache bytes (two uint32
 // and two uint64), then both parts: the list as is (its "NFPL" header and the records) and the
 // vkGetPipelineCacheData data.
-constexpr const char* kCarpetaCache = "cache";
-constexpr const char* kFicheroPipelines = "nfsmw_nativo_pipelines.bin";
-constexpr uint32_t kMagiaFicheroPipelines = 0x4350464Eu;  // "NFPC" en little-endian
-constexpr uint32_t kVersionFicheroPipelines = 1;
-constexpr size_t kCabeceraFicheroPipelines = 2 * sizeof(uint32_t) + 2 * sizeof(uint64_t);
+constexpr const char* kCacheFolder = "cache";
+constexpr const char* kPipelinesFile = "nfsmw_nativo_pipelines.bin";
+constexpr uint32_t kPipelinesFileMagic = 0x4350464Eu;  // "NFPC" en little-endian
+constexpr uint32_t kPipelinesFileVersion = 1;
+constexpr size_t kPipelinesFileHeader = 2 * sizeof(uint32_t) + 2 * sizeof(uint64_t);
 // The two files used by earlier versions, next to the NRO: if the new one does not exist yet they are read
 // once (so the existing cache is not lost) and deleted when the new one is written.
-constexpr const char* kFicheroCacheViejo = "nfsmw_nativo_pipelines.bin";
-constexpr const char* kFicheroListaVieja = "nfsmw_nativo_pipelines_lista.bin";
+constexpr const char* kOldCacheFile = "nfsmw_nativo_pipelines.bin";
+constexpr const char* kOldListFile = "nfsmw_nativo_pipelines_lista.bin";
 // The pipeline prewarm list. It holds no game data: state keys, formats and fingerprints. A header of four
 // uint32 ("NFPL", version, record size and record count) followed by the records (RegistroPipeline).
-constexpr uint32_t kMagiaListaPipelines = 0x4C50464Eu;  // "NFPL" en little-endian
-constexpr uint32_t kVersionListaPipelines = 1;
-constexpr size_t kCabeceraLista = 4 * sizeof(uint32_t);
-constexpr size_t kMaxRegistrosLista = 4096;
+constexpr uint32_t kPipelinesListMagic = 0x4C50464Eu;  // "NFPL" en little-endian
+constexpr uint32_t kPipelinesListVersion = 1;
+constexpr size_t kListHeader = 4 * sizeof(uint32_t);
+constexpr size_t kMaxListRegs = 4096;
 // 296 bytes: NFSMW's shader_common.h (g_NdcScale at +280 and g_NdcOffset at +288).
 // Shared constants: texture and sampler indices (0-63), booleans, texcoords, half pixel, alpha threshold
 // (68) and function (69), NDC (64-73) and g_InputRemap for the 16 locations (74-89).
@@ -1152,9 +1152,9 @@ constexpr size_t kMaxRegistrosLista = 4096;
 // AirborneNX: 16 more words (bytes 488..551): the value scale of each texture slot (2^exp_adjust of the
 // fetch constant times the resolve bias of the texture), which the shaders multiply every sample by
 // (<sampler>_Escala, tools/shaders_native). They default to 1.
-constexpr uint32_t kPalabrasCompartidas = 138;
-constexpr uint32_t kPalabraInvTamano = 90;
-constexpr uint32_t kPalabraEscala = 122;
+constexpr uint32_t kSharedWords = 138;
+constexpr uint32_t kSizeInvWord = 90;
+constexpr uint32_t kScaleWord = 122;
 // Constants through a dynamic UBO (nfsmw_nativo_constantes_ubo). The bit is SPEC_CONSTANT_CONSTANTES_UBO
 // from shader_common.h, and the sizes are the blocks the shaders declare: 256 and 224 float4, and 23 shared
 // float4.
@@ -1164,43 +1164,43 @@ constexpr uint32_t kSpecConstantesUbo = uint32_t(1) << 8;
 // (p_000094_resplandor_energia.hlsl) or soft (p_000094_resplandor_suave.hlsl).
 // The shaders take 1/texture size from the shared constants (SPEC_CONSTANT_INV_TAMANO_TEX in XenosRecomp)
 // and do not query the texture size on every sample.
-constexpr uint32_t kSpecInvTamanoTex = uint32_t(1) << 9;
-constexpr uint32_t kSpecResplandorNatural = uint32_t(1) << 12;
-constexpr uint32_t kSpecResplandorSuave = uint32_t(1) << 13;
+constexpr uint32_t kSpecTexSizeInv = uint32_t(1) << 9;
+constexpr uint32_t kSpecGlowNatural = uint32_t(1) << 12;
+constexpr uint32_t kSpecGlowSmooth = uint32_t(1) << 13;
 // The pixel shader is compiled without its color writes (pass without a color target).
-constexpr uint32_t kSpecSoloAlfa = uint32_t(1) << 14;
+constexpr uint32_t kSpecOnlyAlpha = uint32_t(1) << 14;
 // Cheap PCF. The shaders that sample the shadow map use a 3x3 pattern at half-texel offsets (nine samples
 // per pixel; eleven in p_000101, the smoke, which is full-screen quads and 21 % of the scene). With this bit
 // the eight outer offsets are set to zero, the nine samples become identical and the compiler merges them
 // into one. Shadow edges lose some smoothness. Needs the library regenerated with
 // shaders/nfsmw_regenerar_biblioteca_pcf.sh.
-constexpr uint32_t kSpecPcfBarato = uint32_t(1) << 15;
+constexpr uint32_t kSpecCheapPcf = uint32_t(1) << 15;
 // Bits 16-18 = the alpha test function (0-6). See SPEC_CONSTANT_ALPHA_FUNC_SHIFT in shader_common.h: it
 // removes the 7-case switch from every pixel shader.
-constexpr uint32_t kSpecFuncionAlfaDesplazamiento = 16;
+constexpr uint32_t kSpecOffsetAlphaFunction = 16;
 // The radial blur of the final composite (see SPEC_CONSTANT_SIN_DESENFOQUE).
-constexpr uint32_t kSpecSinDesenfoque = uint32_t(1) << 19;
+constexpr uint32_t kSpecWithoutBlur = uint32_t(1) << 19;
 // Internal bit of the pipeline key that no shader reads (shader_common.h goes up to bit 19). It marks that
 // the pixel shader module is the copy with OpExecutionMode EarlyFragmentTests.
-constexpr uint32_t kSpecZTemprana = uint32_t(1) << 20;
+constexpr uint32_t kSpecZEarly = uint32_t(1) << 20;
 // nfsmw_nativo_sombra_minimo. SPEC_CONSTANT_SOMBRA_MINIMO from shader_common.h: tfetch2DSombraMin takes the
 // minimum of the shadow map and its pair, which goes in the 3D index word of that register.
-constexpr uint32_t kSpecSombraMinimo = uint32_t(1) << 23;
-constexpr uint64_t kHuellaComposicion = 0x19C0C358044A29BFull;  // p_000139, the race VisualTreatment
+constexpr uint32_t kSpecShadowMin = uint32_t(1) << 23;
+constexpr uint64_t kCompositionFingerprint = 0x19C0C358044A29BFull;  // p_000139, the race VisualTreatment
 // nfsmw_tratamiento_visual. The final composite (kHuellaComposicion, p_000139) tints each channel with a polynomial
 // curve (Coeffs0..3 = c6..c9, evaluated at MISCMAP1.w), mixes in a desaturated part with its x component and adds a
 // vignette (VisualEffectVignette.x = c1). With a neutral curve (Coeffs0 = (0, 1, 1, 1) and Coeffs1..3 = 0) and the
 // vignette at 0 the picture has no filter; the glow (g_fBloomScale, c4) and the brightness of the fades
 // (CombinedBrightness, c10) stay the same. suave: halfway between the game's values and the neutral ones (the curve is
 // linear in its coefficients). The registers are those of the microcode, the same in every edition.
-constexpr uint32_t kBytesTratamiento = 11 * 16;  // c0 to c10
-void AplicarTratamientoVisual(float* c, int modo) {
-  static constexpr float kNeutro[4][4] = {{0, 1, 1, 1}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}};
-  const float f = modo == 2 ? 1.0f : 0.5f;
+constexpr uint32_t kHandlingBytes = 11 * 16;  // c0 to c10
+void ApplyVisualTreatment(float* c, int mode) {
+  static constexpr float kNeutral[4][4] = {{0, 1, 1, 1}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}};
+  const float f = mode == 2 ? 1.0f : 0.5f;
   for (int k = 0; k < 4; ++k) {
     for (int i = 0; i < 4; ++i) {
       float& v = c[(6 + k) * 4 + i];
-      v += (kNeutro[k][i] - v) * f;
+      v += (kNeutral[k][i] - v) * f;
     }
   }
   c[1 * 4 + 0] *= 1.0f - f;
@@ -1238,7 +1238,7 @@ REXCVAR_DEFINE_BOOL(nfsmw_nativo_pase_area_util, true, "NFSMW",
                     "verdad en vez de sobre la imagen entera. El alto de los destinos se deduce del pitch, "
                     "asi que la escena abre 1280x1280 para dibujar 1280x720 y el cubo 320x720 para dibujar "
                     "320x256. La imagen es identica: Vulkan solo carga y guarda el renderArea");
-constexpr uint64_t kHuellaBrightPass = 0xE849A9F6D3323B87ull;
+constexpr uint64_t kBrightPassFingerprint = 0xE849A9F6D3323B87ull;
 /*
  * The pixel shader of the sky dome (nfsmw_nativo_cielo_aplazado).
  *
@@ -1252,11 +1252,11 @@ constexpr uint64_t kHuellaBrightPass = 0xE849A9F6D3323B87ull;
  * library (152 containers) that names the sky: it cannot be confused with any other. In the log it shows
  * up as PS n29.
  */
-constexpr uint64_t kHuellaCielo = 0x28AA3CDAC6C19705ull;
+constexpr uint64_t kSkyFingerprint = 0x28AA3CDAC6C19705ull;
 // The sky dome is 480 indices = 160 triangles, measured in the log (the C6 diag line of the draw with
 // PS n29). That is the mark that tells the dome draw apart from the other six that share its pixel
 // shader, which were the ones that broke the image in an earlier version.
-constexpr uint32_t kIndicesDomoCielo = 480;
+constexpr uint32_t kSkyDomeIndices = 480;
 /*
  * How long the sky guard's test lasts, counting only the frames in which the dome appears (menus and
  * loading screens do not count, see CerrarFotogramaDeLaGuardiaDelCielo). 90 frames are about 3 seconds
@@ -1264,18 +1264,18 @@ constexpr uint32_t kIndicesDomoCielo = 480;
  * the race begins. All 90 must have exactly one dome: as soon as two appear in the same frame (the
  * earlier failure) it switches off for good.
  */
-constexpr uint32_t kCieloFotogramasPrueba = 90;
-constexpr uint32_t kCieloFotogramasConUno = 90;
+constexpr uint32_t kSkyTestFrames = 90;
+constexpr uint32_t kSkyFramesWithOne = 90;
 constexpr VkDeviceSize kUboBytesVs = 256 * 16;
 constexpr VkDeviceSize kUboBytesPs = 224 * 16;
-constexpr VkDeviceSize kUboBytesCompartidas = 35 * 16;  // AirborneNX: was 31 (+ the 16 slot scales)
-constexpr uint32_t kRemapeoIdentidad = 0xFFF;
-constexpr uint32_t kMaxVerticesPorDibujo = uint32_t(1) << 20;
-constexpr uint32_t kMemoriaFisica = 0x20000000;
+constexpr VkDeviceSize kSharedUboBytes = 35 * 16;  // AirborneNX: was 31 (+ the 16 slot scales)
+constexpr uint32_t kIdentityRemap = 0xFFF;
+constexpr uint32_t kMaxVerticesPerDraw = uint32_t(1) << 20;
+constexpr uint32_t kPhysicalMemory = 0x20000000;
 // Times a statement in the timed draws (C6 subetapas).
 #define NFSMW_SUB(k, ...) \
   do { \
-    if (cronometrar_) { \
+    if (time_) { \
       const auto t0_sub_ = std::chrono::steady_clock::now(); \
       __VA_ARGS__; \
       sub_ns_[k] += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>( \
@@ -1294,46 +1294,46 @@ constexpr uint32_t kMemoriaFisica = 0x20000000;
  * the draws that actually carried a stopwatch, so their scale does not change: they just have 8 times
  * fewer samples (~600-1,400 per second in a race).
  */
-constexpr uint32_t kCronometroCada = 64;  // draws per stage-timed draw (power of 2)
-constexpr size_t kCopiasPorAviso = 64;   // copies queued between wake-ups of the copy thread (power of 2)
+constexpr uint32_t kStopwatchEvery = 64;  // draws per stage-timed draw (power of 2)
+constexpr size_t kCopiesPerWarning = 64;   // copies queued between wake-ups of the copy thread (power of 2)
 // Copies taken in one batch (nfsmw_nativo_subidas_ayuda). In a race they are ~2 KB each: a batch is
 // ~30 KB, about 20 us. That is how long the ring may have to wait for the thread, already with its
 // priority lent.
-constexpr size_t kCopiasPorTrozo = 16;
+constexpr size_t kCopiesPerChunk = 16;
 // Waits with pending copies in the observing phase (the ring waits as before and checks the marks)
 // before it starts helping. In the menus that is a few seconds.
-constexpr uint64_t kEsperasCopiasMirando = 512;
+constexpr uint64_t kPeekingCopiesWaits = 512;
 
 // One guest vertex binding into the upload buffer, as host words with the fetch constant's byte order.
 // Done by the ring thread or by the copy thread (nfsmw_nativo_subidas_hilo).
-struct TrabajoCopia {
-  const uint8_t* origen = nullptr;
-  uint8_t* destino = nullptr;
-  uint32_t palabras = 0;
+struct CopyJob {
+  const uint8_t* src = nullptr;
+  uint8_t* target = nullptr;
+  uint32_t word_data = 0;
   xenos::Endian orden = xenos::Endian::kNone;
 };
 
-void CopiarVertices(const TrabajoCopia& t) {
+void CopyVertices(const CopyJob& t) {
   // The fields go into local variables: the destination is a byte pointer and, as far as the compiler
   // knows, writing through it could change the structure itself. With t.* inside the loop it was not
   // vectorized (935 ms per 5.3 GB of vertices in a race, against 490 ms with the loop inside Dibujar).
-  const uint8_t* const origen = t.origen;
-  uint8_t* const destino = t.destino;
-  const uint32_t palabras = t.palabras;
+  const uint8_t* const src = t.src;
+  uint8_t* const target = t.target;
+  const uint32_t word_data = t.word_data;
   const xenos::Endian orden = t.orden;
   if (orden == xenos::Endian::k8in32) {
-    for (uint32_t i = 0; i < palabras; ++i) {
+    for (uint32_t i = 0; i < word_data; ++i) {
       uint32_t v;
-      std::memcpy(&v, origen + size_t(i) * 4, 4);
+      std::memcpy(&v, src + size_t(i) * 4, 4);
       v = std::byteswap(v);
-      std::memcpy(destino + size_t(i) * 4, &v, 4);
+      std::memcpy(target + size_t(i) * 4, &v, 4);
     }
   } else {
-    for (uint32_t i = 0; i < palabras; ++i) {
+    for (uint32_t i = 0; i < word_data; ++i) {
       uint32_t v;
-      std::memcpy(&v, origen + size_t(i) * 4, 4);
+      std::memcpy(&v, src + size_t(i) * 4, 4);
       v = xenos::GpuSwap(v, orden);
-      std::memcpy(destino + size_t(i) * 4, &v, 4);
+      std::memcpy(target + size_t(i) * 4, &v, 4);
     }
   }
 }
@@ -1341,14 +1341,14 @@ void CopiarVertices(const TrabajoCopia& t) {
 // Allocator that leaves whatever resize adds uninitialized: indices_, convertidos_ and indices16_ are
 // fully rewritten right after, and std::vector's zero fill was 1.4 % of the ring thread on PC.
 template <class T>
-struct SinInicializar : std::allocator<T> {
+struct NoInitAllocator : std::allocator<T> {
   using value_type = T;
-  SinInicializar() = default;
+  NoInitAllocator() = default;
   template <class U>
-  SinInicializar(const SinInicializar<U>&) noexcept {}
+  NoInitAllocator(const NoInitAllocator<U>&) noexcept {}
   template <class U>
   struct rebind {
-    using other = SinInicializar<U>;
+    using other = NoInitAllocator<U>;
   };
   template <class U>
   void construct(U* p) noexcept(std::is_nothrow_default_constructible_v<U>) {
@@ -1360,21 +1360,21 @@ struct SinInicializar : std::allocator<T> {
   }
 };
 
-using FnDireccionBufer = VkDeviceAddress(VKAPI_PTR*)(VkDevice, const VkBufferDeviceAddressInfo*);
-using FnCopiarImagen = void(VKAPI_PTR*)(VkCommandBuffer, VkImage, VkImageLayout, VkImage,
+using BufferAddressFn = VkDeviceAddress(VKAPI_PTR*)(VkDevice, const VkBufferDeviceAddressInfo*);
+using CopyImageFn = void(VKAPI_PTR*)(VkCommandBuffer, VkImage, VkImageLayout, VkImage,
                                         VkImageLayout, uint32_t, const VkImageCopy*);
 
-float Flotante(uint32_t valor) {
-  return std::bit_cast<float>(valor);
+float Float(uint32_t value) {
+  return std::bit_cast<float>(value);
 }
 
 // Arithmetic of the Xenos mip level layout (pipeline/texture/util.cpp: GetPackedMipLevel,
 // GetPackedMipOffset and GetGuestTextureLayout).
-uint32_t Log2Techo(uint32_t v) {
+uint32_t CeilingLog2(uint32_t v) {
   return v <= 1 ? 0 : 32 - uint32_t(std::countl_zero(v - 1));
 }
 
-uint32_t Log2Suelo(uint32_t v) {
+uint32_t Log2Floor(uint32_t v) {
   return v ? 31 - uint32_t(std::countl_zero(v)) : 0;
 }
 
@@ -1387,68 +1387,68 @@ uint32_t Log2Suelo(uint32_t v) {
  * on PC: BytesMuestra matches what is read for every size from 1 byte to 300 KB, and a one-byte change is
  * seen if and only if it falls in a sampled block.
  */
-constexpr uint64_t kBloqueMuestra = 4096;
-constexpr uint64_t kMuestraCada = 8;
+constexpr uint64_t kSampleBlock = 4096;
+constexpr uint64_t kSampleEvery = 8;
 
 // Bytes HuellaMuestra reads in a region of that size.
-inline uint64_t BytesMuestra(uint64_t bytes) {
+inline uint64_t SampleBytes(uint64_t bytes) {
   if (!bytes) {
     return 0;
   }
-  const uint64_t ultimo = (bytes - 1) / kBloqueMuestra;
-  return (ultimo + kMuestraCada - 1) / kMuestraCada * kBloqueMuestra + (bytes - ultimo * kBloqueMuestra);
+  const uint64_t is_last = (bytes - 1) / kSampleBlock;
+  return (is_last + kSampleEvery - 1) / kSampleEvery * kSampleBlock + (bytes - is_last * kSampleBlock);
 }
 
 // Chained XXH3 of blocks 0, 8, 16... below the last one, and of the last one (which may be partial).
-inline uint64_t HuellaMuestra(const uint8_t* datos, uint64_t bytes, uint64_t semilla) {
+inline uint64_t SampleFingerprint(const uint8_t* payload, uint64_t bytes, uint64_t seed) {
   if (!bytes) {
-    return semilla;
+    return seed;
   }
-  const uint64_t ultimo = (bytes - 1) / kBloqueMuestra;
-  uint64_t huella = semilla;
-  for (uint64_t b = 0; b < ultimo; b += kMuestraCada) {
-    huella = XXH3_64bits_withSeed(datos + b * kBloqueMuestra, size_t(kBloqueMuestra), huella);
+  const uint64_t is_last = (bytes - 1) / kSampleBlock;
+  uint64_t fingerprint = seed;
+  for (uint64_t b = 0; b < is_last; b += kSampleEvery) {
+    fingerprint = XXH3_64bits_withSeed(payload + b * kSampleBlock, size_t(kSampleBlock), fingerprint);
   }
-  return XXH3_64bits_withSeed(datos + ultimo * kBloqueMuestra, size_t(bytes - ultimo * kBloqueMuestra), huella);
+  return XXH3_64bits_withSeed(payload + is_last * kSampleBlock, size_t(bytes - is_last * kSampleBlock), fingerprint);
 }
 
 // First level of the packed tail: once the short side is 16 texels or less.
-uint32_t NivelEmpaquetado(uint32_t ancho, uint32_t alto) {
-  const uint32_t l = Log2Techo(std::min(ancho, alto));
+uint32_t PackedLevel(uint32_t width_px, uint32_t height_px) {
+  const uint32_t l = CeilingLog2(std::min(width_px, height_px));
   return l > 4 ? l - 4 : 0;
 }
 
 // Blocks from the start of the packed tail to a level of a 2D texture; 0 if the level is not packed.
-void DesplazamientoEmpaquetado(uint32_t ancho, uint32_t alto, uint32_t bloque, uint32_t nivel, uint32_t& x,
+void PackedOffset(uint32_t width_px, uint32_t height_px, uint32_t block, uint32_t mip_level, uint32_t& x,
                                uint32_t& y) {
-  const uint32_t l2_ancho = Log2Techo(ancho);
-  const uint32_t l2_alto = Log2Techo(alto);
-  const uint32_t l2 = std::min(l2_ancho, l2_alto);
+  const uint32_t l2_width = CeilingLog2(width_px);
+  const uint32_t l2_height = CeilingLog2(height_px);
+  const uint32_t l2 = std::min(l2_width, l2_height);
   x = 0;
   y = 0;
-  if (l2 > 4 + nivel) {
+  if (l2 > 4 + mip_level) {
     return;
   }
   const uint32_t base = l2 > 4 ? l2 - 4 : 0;
-  const uint32_t m = nivel - base;
+  const uint32_t m = mip_level - base;
   if (m < 3) {
-    if (l2_ancho > l2_alto) {
+    if (l2_width > l2_height) {
       y = 16u >> m;  // wider than tall: levels are stacked vertically
     } else {
       x = 16u >> m;
     }
-  } else if (l2_ancho > l2_alto) {
-    x = (1u << (l2_ancho - base)) >> (m - 2);
+  } else if (l2_width > l2_height) {
+    x = (1u << (l2_width - base)) >> (m - 2);
   } else {
-    y = (1u << (l2_alto - base)) >> (m - 2);
+    y = (1u << (l2_height - base)) >> (m - 2);
   }
-  x /= bloque;
-  y /= bloque;
+  x /= block;
+  y /= block;
 }
 
 // Address of a block in a texture tiled in 32x32 blocks, copied from GetTiledOffset2D
 // (graphics/pipeline/texture/util.cpp). pitch in blocks.
-int32_t DesplazamientoMosaico2D(int32_t x, int32_t y, uint32_t pitch, uint32_t log2_bytes) {
+int32_t Tile2dOffset(int32_t x, int32_t y, uint32_t pitch, uint32_t log2_bytes) {
   pitch = (pitch + 31) & ~uint32_t(31);
   const int32_t macro = ((x >> 5) + (y >> 5) * int32_t(pitch >> 5)) << (log2_bytes + 7);
   const int32_t micro = ((x & 7) + ((y & 0xE) << 2)) << log2_bytes;
@@ -1465,33 +1465,33 @@ int32_t DesplazamientoMosaico2D(int32_t x, int32_t y, uint32_t pitch, uint32_t l
 //     of micro change), so 16 bytes are copied at once (8 for textures with 1 byte per block).
 // It gives exactly the same addresses as DesplazamientoMosaico2D (checked block by block on PC).
 template <uint32_t kLog2>
-void DesenmosaicarNivel(const uint8_t* origen, uint32_t pitch, uint32_t ox, uint32_t oy, uint32_t bx, uint32_t by,
-                        uint32_t bx_host, uint8_t* destino) {
+void UntileLevel(const uint8_t* src, uint32_t pitch, uint32_t ox, uint32_t oy, uint32_t bx, uint32_t by,
+                        uint32_t bx_host, uint8_t* target) {
   constexpr uint32_t kBytes = 1u << kLog2;
-  constexpr uint32_t kGrupo = (16u >> kLog2) < 8u ? (16u >> kLog2) : 8u;  // blocks contiguous in the source
-  const int32_t macros_fila = int32_t(((pitch + 31) & ~uint32_t(31)) >> 5);
-  for (uint32_t fila = 0; fila < by; ++fila) {
-    const int32_t y = int32_t(oy + fila);
-    const int32_t macro_y = (y >> 5) * macros_fila;
+  constexpr uint32_t kGroup = (16u >> kLog2) < 8u ? (16u >> kLog2) : 8u;  // blocks contiguous in the source
+  const int32_t row_macros = int32_t(((pitch + 31) & ~uint32_t(31)) >> 5);
+  for (uint32_t row = 0; row < by; ++row) {
+    const int32_t y = int32_t(oy + row);
+    const int32_t macro_y = (y >> 5) * row_macros;
     const int32_t micro_y = (y & 0xE) << 2;
     const int32_t y1 = (y & 1) << 4;
     const int32_t y16 = (y & 16) << 7;
     const int32_t y8 = (y & 8) >> 2;
-    uint8_t* salida = destino + size_t(fila) * bx_host * kBytes;
-    uint32_t columna = 0;
-    while (columna < bx) {
-      const int32_t x = int32_t(ox + columna);
+    uint8_t* output = target + size_t(row) * bx_host * kBytes;
+    uint32_t column = 0;
+    while (column < bx) {
+      const int32_t x = int32_t(ox + column);
       const int32_t macro = ((x >> 5) + macro_y) << (kLog2 + 7);
       const int32_t micro = ((x & 7) + micro_y) << kLog2;
       const int32_t offset = macro + ((micro & ~0xF) << 1) + (micro & 0xF) + y1;
-      const int32_t desplazamiento = ((offset & ~0x1FF) << 3) + y16 + ((offset & 0x1C0) << 2) +
+      const int32_t byte_offset = ((offset & ~0x1FF) << 3) + y16 + ((offset & 0x1C0) << 2) +
                                      (((y8 + (x >> 3)) & 3) << 6) + (offset & 0x3F);
-      if (kGrupo > 1 && (uint32_t(x) % kGrupo) == 0 && columna + kGrupo <= bx) {
-        std::memcpy(salida + size_t(columna) * kBytes, origen + desplazamiento, kGrupo * kBytes);
-        columna += kGrupo;
+      if (kGroup > 1 && (uint32_t(x) % kGroup) == 0 && column + kGroup <= bx) {
+        std::memcpy(output + size_t(column) * kBytes, src + byte_offset, kGroup * kBytes);
+        column += kGroup;
       } else {
-        std::memcpy(salida + size_t(columna) * kBytes, origen + desplazamiento, kBytes);
-        ++columna;
+        std::memcpy(output + size_t(column) * kBytes, src + byte_offset, kBytes);
+        ++column;
       }
     }
   }
@@ -1500,102 +1500,102 @@ void DesenmosaicarNivel(const uint8_t* origen, uint32_t pitch, uint32_t ox, uint
 // Byte swap of a whole texture in one go (instead of GpuSwap word by word, with the switch on the order
 // inside the loop). Same result as GpuSwap: for 16-bit units only k8in16 changes anything; for 32-bit
 // units, k8in16, k8in32 and k16in32. It only touches complete units, like the plain loop.
-inline void CambiarOrdenBytes(uint8_t* datos, size_t bytes, uint32_t unidad, uint32_t orden) {
+inline void ChangeOrderBytes(uint8_t* payload, size_t bytes, uint32_t unit, uint32_t orden) {
   constexpr uint32_t k8in16 = 1, k8in32 = 2, k16in32 = 3;  // xenos::Endian
-  size_t n = unidad == 2 ? bytes & ~size_t(1) : bytes & ~size_t(3);
-  if ((unidad == 2 && orden != k8in16) || (unidad != 2 && unidad != 4) || orden == 0) {
+  size_t n = unit == 2 ? bytes & ~size_t(1) : bytes & ~size_t(3);
+  if ((unit == 2 && orden != k8in16) || (unit != 2 && unit != 4) || orden == 0) {
     return;
   }
   size_t i = 0;
 #if defined(__aarch64__)
   for (; i + 16 <= n; i += 16) {
-    const uint8x16_t v = vld1q_u8(datos + i);
+    const uint8x16_t v = vld1q_u8(payload + i);
     uint8x16_t r;
-    if (unidad == 2 || orden == k8in16) {
+    if (unit == 2 || orden == k8in16) {
       r = vrev16q_u8(v);
     } else if (orden == k8in32) {
       r = vrev32q_u8(v);
     } else {
       r = vreinterpretq_u8_u16(vrev32q_u16(vreinterpretq_u16_u8(v)));
     }
-    vst1q_u8(datos + i, r);
+    vst1q_u8(payload + i, r);
   }
 #endif
-  if (unidad == 2 || orden == k8in16) {
+  if (unit == 2 || orden == k8in16) {
     for (; i + 2 <= n; i += 2) {
-      std::swap(datos[i], datos[i + 1]);
+      std::swap(payload[i], payload[i + 1]);
     }
   } else if (orden == k8in32) {
     for (; i + 4 <= n; i += 4) {
-      std::swap(datos[i], datos[i + 3]);
-      std::swap(datos[i + 1], datos[i + 2]);
+      std::swap(payload[i], payload[i + 3]);
+      std::swap(payload[i + 1], payload[i + 2]);
     }
   } else if (orden == k16in32) {
     for (; i + 4 <= n; i += 4) {
-      std::swap(datos[i], datos[i + 2]);
-      std::swap(datos[i + 1], datos[i + 3]);
+      std::swap(payload[i], payload[i + 2]);
+      std::swap(payload[i + 1], payload[i + 3]);
     }
   }
 }
 
 // The same for a 3D texture tiled in 32x32x4 blocks, copied from GetTiledOffset3D
 // (graphics/pipeline/texture/util.cpp:438-459). pitch and height in blocks.
-int32_t DesplazamientoMosaico3D(int32_t x, int32_t y, int32_t z, uint32_t pitch, uint32_t alto,
+int32_t Tile3dOffset(int32_t x, int32_t y, int32_t z, uint32_t pitch, uint32_t height_px,
                                 uint32_t log2_bytes) {
   pitch = (pitch + 31) & ~uint32_t(31);
-  alto = (alto + 31) & ~uint32_t(31);
-  const int32_t macro_exterior = ((y >> 4) + (z >> 2) * int32_t(alto >> 4)) * int32_t(pitch >> 5);
-  const int32_t macro = ((((x >> 5) + macro_exterior) << (log2_bytes + 6)) & 0xFFFFFFF) << 1;
+  height_px = (height_px + 31) & ~uint32_t(31);
+  const int32_t outer_macro = ((y >> 4) + (z >> 2) * int32_t(height_px >> 4)) * int32_t(pitch >> 5);
+  const int32_t macro = ((((x >> 5) + outer_macro) << (log2_bytes + 6)) & 0xFFFFFFF) << 1;
   const int32_t micro = (((x & 7) + ((y & 6) << 2)) << (log2_bytes + 6)) >> 6;
-  const int32_t exterior = ((y >> 3) + (z >> 2)) & 1;
-  const int32_t offset1 = exterior + ((((x >> 3) + (exterior << 1)) & 3) << 1);
+  const int32_t outer = ((y >> 3) + (z >> 2)) & 1;
+  const int32_t offset1 = outer + ((((x >> 3) + (outer << 1)) & 3) << 1);
   const int32_t offset2 = ((macro + (micro & ~15)) << 1) + (micro & 15) +
                           ((z & 3) << (log2_bytes + 6)) + ((y & 1) << 4);
-  int32_t direccion = (offset1 & 1) << 3;
-  direccion += (offset2 >> 6) & 7;
-  direccion <<= 3;
-  direccion += offset1 & ~1;
-  direccion <<= 2;
-  direccion += offset2 & ~511;
-  direccion <<= 3;
-  direccion += offset2 & 63;
-  return direccion;
+  int32_t address = (offset1 & 1) << 3;
+  address += (offset2 >> 6) & 7;
+  address <<= 3;
+  address += offset1 & ~1;
+  address <<= 2;
+  address += offset2 & ~511;
+  address <<= 3;
+  address += offset2 & 63;
+  return address;
 }
 
 // USAGE_LOCATIONS de XenosRecomp (shader_recompiler.cpp).
-int32_t UbicacionDeUso(uint8_t uso, uint8_t indice) {
-  switch (uso) {
+int32_t UseLocation(uint8_t use, uint8_t index) {
+  switch (use) {
     case 0:  // posicion
-      return indice == 0 ? 0 : (indice == 1 ? 15 : -1);
+      return index == 0 ? 0 : (index == 1 ? 15 : -1);
     case 3:  // normal
-      return indice == 0 ? 1 : -1;
+      return index == 0 ? 1 : -1;
     case 6:  // tangente
-      return indice == 0 ? 2 : -1;
+      return index == 0 ? 2 : -1;
     case 7:  // binormal
-      return indice == 0 ? 3 : -1;
+      return index == 0 ? 3 : -1;
     case 5:  // texcoord
-      return indice < 4 ? 4 + indice : (indice < 8 ? 12 + (indice - 4) : -1);
+      return index < 4 ? 4 + index : (index < 8 ? 12 + (index - 4) : -1);
     case 10:  // color
-      return indice == 0 ? 8 : (indice == 1 ? 11 : -1);
+      return index == 0 ? 8 : (index == 1 ? 11 : -1);
     case 2:  // indices de mezcla
-      return indice == 0 ? 9 : -1;
+      return index == 0 ? 9 : -1;
     case 1:  // pesos de mezcla
-      return indice == 0 ? 10 : -1;
+      return index == 0 ? 10 : -1;
     default:
       return -1;
   }
 }
 
 // USAGE_TYPES: these inputs are uint4 in the translated shaders.
-bool EntradaEntera(uint8_t uso) {
+bool IntEntry(uint8_t use) {
   // Only BLENDINDICES. Since the nfsmw_validado_normales library, normals, tangents and binormals are
   // float4: NFSMW stores them as 16-bit integers (format 26) or as floats, and with uint4 the shader's
   // asfloat gave degenerate directions (seen in the rear-view mirror).
-  return uso == 2;
+  return use == 2;
 }
 
-uint32_t ComponentesVertice(uint32_t formato) {
-  switch (formato) {
+uint32_t VertexComponents(uint32_t format_id) {
+  switch (format_id) {
     case 33:
     case 36:
       return 1;
@@ -1614,98 +1614,98 @@ uint32_t ComponentesVertice(uint32_t formato) {
 }
 
 // Components written by a fetch swizzle (the ones that are not 7), as a 4-bit mask.
-uint32_t MascaraEscrita(uint32_t swizzle) {
-  uint32_t mascara = 0;
+uint32_t WrittenMask(uint32_t swizzle) {
+  uint32_t mask = 0;
   for (uint32_t i = 0; i < 4; ++i) {
     if (((swizzle >> (i * 3)) & 0x7) != 7) {
-      mascara |= 1u << i;
+      mask |= 1u << i;
     }
   }
-  return mascara;
+  return mask;
 }
 
 // g_InputRemap code: the SPIR-V writes r[i] = entrada[orig[i]] and the fetch patched by D3D writes
 // r[i] = dato[parcheado[i]] (or 0 / 1). For each written component, the host input at orig[i] has to
 // come from parcheado[i]. 7 = the same component.
-uint32_t CodigoRemapeo(uint32_t original, uint32_t parcheado) {
-  uint32_t codigo = kRemapeoIdentidad;
+uint32_t RemapCode(uint32_t original, uint32_t patched) {
+  uint32_t code = kIdentityRemap;
   for (uint32_t i = 0; i < 4; ++i) {
     const uint32_t o = (original >> (i * 3)) & 0x7;
-    const uint32_t d = (parcheado >> (i * 3)) & 0x7;
+    const uint32_t d = (patched >> (i * 3)) & 0x7;
     if (o <= 3 && d != 7) {
-      codigo = (codigo & ~(uint32_t(0x7) << (o * 3))) | (d << (o * 3));
+      code = (code & ~(uint32_t(0x7) << (o * 3))) | (d << (o * 3));
     }
   }
-  return codigo;
+  return code;
 }
 
-VkFormat FormatoAtributo(uint32_t formato, bool entrada_entera, bool con_signo, bool entero,
-                         bool rojo_azul, bool& r11g11b10) {
+VkFormat AttributeFormat(uint32_t format_id, bool int_entry, bool with_sign, bool integer_value,
+                         bool red_blue, bool& r11g11b10) {
   r11g11b10 = false;
-  const auto elegir = [&](VkFormat unorm, VkFormat snorm, VkFormat uscaled, VkFormat sscaled,
+  const auto choose = [&](VkFormat unorm, VkFormat snorm, VkFormat uscaled, VkFormat sscaled,
                           VkFormat uint_, VkFormat sint) {
-    if (entrada_entera) {
-      return con_signo ? sint : uint_;
+    if (int_entry) {
+      return with_sign ? sint : uint_;
     }
-    if (entero) {
-      return con_signo ? sscaled : uscaled;
+    if (integer_value) {
+      return with_sign ? sscaled : uscaled;
     }
-    return con_signo ? snorm : unorm;
+    return with_sign ? snorm : unorm;
   };
-  switch (formato) {
+  switch (format_id) {
     case 6:  // k_8_8_8_8
-      return rojo_azul ? elegir(VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_B8G8R8A8_SNORM,
+      return red_blue ? choose(VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_B8G8R8A8_SNORM,
                                 VK_FORMAT_B8G8R8A8_USCALED, VK_FORMAT_B8G8R8A8_SSCALED,
                                 VK_FORMAT_B8G8R8A8_UINT, VK_FORMAT_B8G8R8A8_SINT)
-                       : elegir(VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R8G8B8A8_SNORM,
+                       : choose(VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R8G8B8A8_SNORM,
                                 VK_FORMAT_R8G8B8A8_USCALED, VK_FORMAT_R8G8B8A8_SSCALED,
                                 VK_FORMAT_R8G8B8A8_UINT, VK_FORMAT_R8G8B8A8_SINT);
     case 7:  // k_2_10_10_10
-      if (rojo_azul) break;
-      return elegir(VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_FORMAT_A2B10G10R10_SNORM_PACK32,
+      if (red_blue) break;
+      return choose(VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_FORMAT_A2B10G10R10_SNORM_PACK32,
                     VK_FORMAT_A2B10G10R10_USCALED_PACK32, VK_FORMAT_A2B10G10R10_SSCALED_PACK32,
                     VK_FORMAT_A2B10G10R10_UINT_PACK32, VK_FORMAT_A2B10G10R10_SINT_PACK32);
     case 16:  // k_10_11_11: packed normal decoded by the shader itself
-      if (!entrada_entera || rojo_azul) break;
+      if (!int_entry || red_blue) break;
       r11g11b10 = true;
       return VK_FORMAT_R32_UINT;
     case 25:  // k_16_16
-      if (rojo_azul) break;
-      return elegir(VK_FORMAT_R16G16_UNORM, VK_FORMAT_R16G16_SNORM, VK_FORMAT_R16G16_USCALED,
+      if (red_blue) break;
+      return choose(VK_FORMAT_R16G16_UNORM, VK_FORMAT_R16G16_SNORM, VK_FORMAT_R16G16_USCALED,
                     VK_FORMAT_R16G16_SSCALED, VK_FORMAT_R16G16_UINT, VK_FORMAT_R16G16_SINT);
     case 26:  // k_16_16_16_16
-      if (rojo_azul) break;
-      return elegir(VK_FORMAT_R16G16B16A16_UNORM, VK_FORMAT_R16G16B16A16_SNORM,
+      if (red_blue) break;
+      return choose(VK_FORMAT_R16G16B16A16_UNORM, VK_FORMAT_R16G16B16A16_SNORM,
                     VK_FORMAT_R16G16B16A16_USCALED, VK_FORMAT_R16G16B16A16_SSCALED,
                     VK_FORMAT_R16G16B16A16_UINT, VK_FORMAT_R16G16B16A16_SINT);
     case 31:  // k_16_16_FLOAT
-      return entrada_entera || rojo_azul ? VK_FORMAT_UNDEFINED : VK_FORMAT_R16G16_SFLOAT;
+      return int_entry || red_blue ? VK_FORMAT_UNDEFINED : VK_FORMAT_R16G16_SFLOAT;
     case 32:  // k_16_16_16_16_FLOAT
-      return entrada_entera || rojo_azul ? VK_FORMAT_UNDEFINED : VK_FORMAT_R16G16B16A16_SFLOAT;
+      return int_entry || red_blue ? VK_FORMAT_UNDEFINED : VK_FORMAT_R16G16B16A16_SFLOAT;
     case 33:  // k_32
-      return entrada_entera && !rojo_azul ? (con_signo ? VK_FORMAT_R32_SINT : VK_FORMAT_R32_UINT)
+      return int_entry && !red_blue ? (with_sign ? VK_FORMAT_R32_SINT : VK_FORMAT_R32_UINT)
                                          : VK_FORMAT_UNDEFINED;
     case 34:  // k_32_32
-      return entrada_entera && !rojo_azul
-                 ? (con_signo ? VK_FORMAT_R32G32_SINT : VK_FORMAT_R32G32_UINT)
+      return int_entry && !red_blue
+                 ? (with_sign ? VK_FORMAT_R32G32_SINT : VK_FORMAT_R32G32_UINT)
                  : VK_FORMAT_UNDEFINED;
     case 35:  // k_32_32_32_32
-      return entrada_entera && !rojo_azul
-                 ? (con_signo ? VK_FORMAT_R32G32B32A32_SINT : VK_FORMAT_R32G32B32A32_UINT)
+      return int_entry && !red_blue
+                 ? (with_sign ? VK_FORMAT_R32G32B32A32_SINT : VK_FORMAT_R32G32B32A32_UINT)
                  : VK_FORMAT_UNDEFINED;
     // Floats: a uint4 input reinterprets the bits (asfloat in the shader).
     case 36:  // k_32_FLOAT
-      return rojo_azul ? VK_FORMAT_UNDEFINED
-                       : (entrada_entera ? VK_FORMAT_R32_UINT : VK_FORMAT_R32_SFLOAT);
+      return red_blue ? VK_FORMAT_UNDEFINED
+                       : (int_entry ? VK_FORMAT_R32_UINT : VK_FORMAT_R32_SFLOAT);
     case 37:  // k_32_32_FLOAT
-      return rojo_azul ? VK_FORMAT_UNDEFINED
-                       : (entrada_entera ? VK_FORMAT_R32G32_UINT : VK_FORMAT_R32G32_SFLOAT);
+      return red_blue ? VK_FORMAT_UNDEFINED
+                       : (int_entry ? VK_FORMAT_R32G32_UINT : VK_FORMAT_R32G32_SFLOAT);
     case 57:  // k_32_32_32_FLOAT
-      return rojo_azul ? VK_FORMAT_UNDEFINED
-                       : (entrada_entera ? VK_FORMAT_R32G32B32_UINT : VK_FORMAT_R32G32B32_SFLOAT);
+      return red_blue ? VK_FORMAT_UNDEFINED
+                       : (int_entry ? VK_FORMAT_R32G32B32_UINT : VK_FORMAT_R32G32B32_SFLOAT);
     case 38:  // k_32_32_32_32_FLOAT
-      return rojo_azul ? VK_FORMAT_UNDEFINED
-                       : (entrada_entera ? VK_FORMAT_R32G32B32A32_UINT
+      return red_blue ? VK_FORMAT_UNDEFINED
+                       : (int_entry ? VK_FORMAT_R32G32B32A32_UINT
                                          : VK_FORMAT_R32G32B32A32_SFLOAT);
     default:
       break;
@@ -1718,18 +1718,18 @@ constexpr uint16_t kSwizzleRGGG = (1 << 3) | (1 << 6) | (1 << 9);
 constexpr uint16_t kSwizzleRGBA = (1 << 3) | (2 << 6) | (3 << 9);
 constexpr uint16_t kSwizzleBGRA = 2 | (1 << 3) | (0 << 6) | (3 << 9);
 
-struct FormatoTextura {
-  VkFormat formato = VK_FORMAT_UNDEFINED;
-  uint8_t bloque = 1;       // texels per block side
+struct TextureFormat {
+  VkFormat format_id = VK_FORMAT_UNDEFINED;
+  uint8_t block = 1;       // texels per block side
   uint8_t bytes = 1;        // bytes per block
-  uint8_t unidad_orden = 0;  // 0 = no byte swap, else 2 or 4 bytes
+  uint8_t order_unit = 0;  // 0 = no byte swap, else 2 or 4 bytes
   uint16_t swizzle_host = kSwizzleRGBA;
 };
 
 // Same host formats as the emulation (vulkan/texture_cache.cpp:123-397).
 // AirborneNX: sRGB variant of a texture format, or VK_FORMAT_UNDEFINED.
-VkFormat FormatoSrgb(VkFormat formato) {
-  switch (formato) {
+VkFormat SrgbFormat(VkFormat format_id) {
+  switch (format_id) {
     case VK_FORMAT_R8G8B8A8_UNORM:
       return VK_FORMAT_R8G8B8A8_SRGB;
     case VK_FORMAT_B8G8R8A8_UNORM:
@@ -1745,8 +1745,8 @@ VkFormat FormatoSrgb(VkFormat formato) {
   }
 }
 
-bool FormatoTexturaDe(uint32_t formato, FormatoTextura& f) {
-  switch (formato) {
+bool TextureFormatOf(uint32_t format_id, TextureFormat& f) {
+  switch (format_id) {
     case 2:  // k_8
     case 8:  // k_8_A
       f = {VK_FORMAT_R8_UNORM, 1, 1, 0, kSwizzleRRRR};
@@ -1812,119 +1812,119 @@ bool FormatoTexturaDe(uint32_t formato, FormatoTextura& f) {
   }
 }
 
-bool EsProfundidad(VkFormat formato) {
-  return formato == VK_FORMAT_D24_UNORM_S8_UINT || formato == VK_FORMAT_D32_SFLOAT_S8_UINT;
+bool IsDepth(VkFormat format_id) {
+  return format_id == VK_FORMAT_D24_UNORM_S8_UINT || format_id == VK_FORMAT_D32_SFLOAT_S8_UINT;
 }
 
 // GuestToHostSwizzle: the fetch constant's swizzle, mapped through the channels the host format has.
-VkComponentMapping MapeoComponentes(uint32_t swizzle_guest, uint16_t swizzle_host) {
-  VkComponentMapping mapeo{};
-  VkComponentSwizzle* salida[4] = {&mapeo.r, &mapeo.g, &mapeo.b, &mapeo.a};
+VkComponentMapping ComponentsMapping(uint32_t swizzle_guest, uint16_t swizzle_host) {
+  VkComponentMapping mapping{};
+  VkComponentSwizzle* output[4] = {&mapping.r, &mapping.g, &mapping.b, &mapping.a};
   for (uint32_t i = 0; i < 4; ++i) {
-    const uint32_t valor = (swizzle_guest >> (i * 3)) & 0x7;
-    if (valor <= 3) {
-      const uint32_t host = (swizzle_host >> (valor * 3)) & 0x7;
-      *salida[i] = VkComponentSwizzle(VK_COMPONENT_SWIZZLE_R + host);
-    } else if (valor == 4) {
-      *salida[i] = VK_COMPONENT_SWIZZLE_ZERO;
+    const uint32_t value = (swizzle_guest >> (i * 3)) & 0x7;
+    if (value <= 3) {
+      const uint32_t host = (swizzle_host >> (value * 3)) & 0x7;
+      *output[i] = VkComponentSwizzle(VK_COMPONENT_SWIZZLE_R + host);
+    } else if (value == 4) {
+      *output[i] = VK_COMPONENT_SWIZZLE_ZERO;
     } else {
-      *salida[i] = VK_COMPONENT_SWIZZLE_ONE;
+      *output[i] = VK_COMPONENT_SWIZZLE_ONE;
     }
   }
-  return mapeo;
+  return mapping;
 }
 
-struct AtributoVertices {
-  uint32_t ubicacion;
-  uint32_t enlace;
-  VkFormat formato;
+struct VertexAttribute {
+  uint32_t loc_index;
+  uint32_t bind_index;
+  VkFormat format_id;
   uint32_t offset;
 };
 
-struct EnlaceVertices {
+struct VertexBinding {
   uint32_t ranura;   // fetch constant de vertices (0-95)
-  uint32_t zancada;  // bytes
+  uint32_t stride_bytes;  // bytes
 };
 
-struct EntradaVertices {
-  std::vector<AtributoVertices> atributos;
-  std::vector<EnlaceVertices> enlaces;
-  std::array<uint32_t, 16> remapeos{};  // g_InputRemap by location
-  uint32_t especializacion = 0;
-  uint64_t huella = 0;
+struct VertexInput {
+  std::vector<VertexAttribute> attributes;
+  std::vector<VertexBinding> bindings;
+  std::array<uint32_t, 16> remaps{};  // g_InputRemap by location
+  uint32_t specialization = 0;
+  uint64_t fingerprint = 0;
 };
 
 // Copy of the SPIR-V without the writes to the color targets (output variables with Location 0..3).
 // Returns empty if the module cannot be walked or there was nothing to remove.
-std::vector<uint32_t> PodarEscriturasDeColor(const std::vector<uint32_t>& spirv, uint32_t& quitadas) {
-  constexpr uint32_t kMagia = 0x07230203u;
+std::vector<uint32_t> PruneColorWrites(const std::vector<uint32_t>& spirv, uint32_t& removed) {
+  constexpr uint32_t kMagic = 0x07230203u;
   constexpr uint32_t kOpEntryPoint = 15, kOpDecorate = 71, kOpVariable = 59, kOpStore = 62;
   constexpr uint32_t kOpAccessChain = 65, kOpInBoundsAccessChain = 66;
   constexpr uint32_t kDecoracionBuiltIn = 11, kDecoracionLocation = 30, kDecoracionIndex = 29;
-  constexpr uint32_t kAlmacenSalida = 3;
-  quitadas = 0;
-  if (spirv.size() < 5 || spirv[0] != kMagia) {
+  constexpr uint32_t kOutputStore = 3;
+  removed = 0;
+  if (spirv.size() < 5 || spirv[0] != kMagic) {
     return {};
   }
-  std::unordered_set<uint32_t> con_location, descartadas;
+  std::unordered_set<uint32_t> con_location, discarded;
   // 1) decorations: Location 0..3 marks a color target; BuiltIn or Index != 0 rule it out (gl_FragDepth
   // and the second blend source are not touched).
   for (size_t i = 5; i < spirv.size();) {
-    const uint32_t palabras = spirv[i] >> 16;
-    const uint32_t codigo = spirv[i] & 0xFFFF;
-    if (palabras == 0 || i + palabras > spirv.size()) {
+    const uint32_t word_data = spirv[i] >> 16;
+    const uint32_t code = spirv[i] & 0xFFFF;
+    if (word_data == 0 || i + word_data > spirv.size()) {
       return {};
     }
-    if (codigo == kOpDecorate && palabras >= 3) {
-      const uint32_t objetivo = spirv[i + 1];
+    if (code == kOpDecorate && word_data >= 3) {
+      const uint32_t goal = spirv[i + 1];
       const uint32_t decoracion = spirv[i + 2];
-      if (decoracion == kDecoracionLocation && palabras >= 4 && spirv[i + 3] <= 3) {
-        con_location.insert(objetivo);
+      if (decoracion == kDecoracionLocation && word_data >= 4 && spirv[i + 3] <= 3) {
+        con_location.insert(goal);
       } else if (decoracion == kDecoracionBuiltIn ||
-                 (decoracion == kDecoracionIndex && palabras >= 4 && spirv[i + 3] != 0)) {
-        descartadas.insert(objetivo);
+                 (decoracion == kDecoracionIndex && word_data >= 4 && spirv[i + 3] != 0)) {
+        discarded.insert(goal);
       }
     }
-    i += palabras;
+    i += word_data;
   }
   // 2) pointers to those targets: the output variable and whatever is derived from it through
   // OpAccessChain.
-  std::unordered_set<uint32_t> punteros;
+  std::unordered_set<uint32_t> pointers;
   for (size_t i = 5; i < spirv.size();) {
-    const uint32_t palabras = spirv[i] >> 16;
-    const uint32_t codigo = spirv[i] & 0xFFFF;
-    if (codigo == kOpVariable && palabras >= 4 && spirv[i + 3] == kAlmacenSalida) {
+    const uint32_t word_data = spirv[i] >> 16;
+    const uint32_t code = spirv[i] & 0xFFFF;
+    if (code == kOpVariable && word_data >= 4 && spirv[i + 3] == kOutputStore) {
       const uint32_t id = spirv[i + 2];
-      if (con_location.count(id) && !descartadas.count(id)) {
-        punteros.insert(id);
+      if (con_location.count(id) && !discarded.count(id)) {
+        pointers.insert(id);
       }
-    } else if ((codigo == kOpAccessChain || codigo == kOpInBoundsAccessChain) && palabras >= 4 &&
-               punteros.count(spirv[i + 3])) {
-      punteros.insert(spirv[i + 2]);
+    } else if ((code == kOpAccessChain || code == kOpInBoundsAccessChain) && word_data >= 4 &&
+               pointers.count(spirv[i + 3])) {
+      pointers.insert(spirv[i + 2]);
     }
-    i += palabras;
+    i += word_data;
   }
-  if (punteros.empty()) {
+  if (pointers.empty()) {
     return {};
   }
   // 3) the writes to those pointers are dropped. The rest of the module is copied as is: the output
   // variable stays declared and in the entry point's interface, which is valid even if it is never written.
-  std::vector<uint32_t> salida;
-  salida.reserve(spirv.size());
-  salida.insert(salida.end(), spirv.begin(), spirv.begin() + 5);
+  std::vector<uint32_t> output;
+  output.reserve(spirv.size());
+  output.insert(output.end(), spirv.begin(), spirv.begin() + 5);
   for (size_t i = 5; i < spirv.size();) {
-    const uint32_t palabras = spirv[i] >> 16;
-    const uint32_t codigo = spirv[i] & 0xFFFF;
-    const bool fuera = codigo == kOpStore && palabras >= 3 && punteros.count(spirv[i + 1]);
-    if (fuera) {
-      ++quitadas;
+    const uint32_t word_data = spirv[i] >> 16;
+    const uint32_t code = spirv[i] & 0xFFFF;
+    const bool outside = code == kOpStore && word_data >= 3 && pointers.count(spirv[i + 1]);
+    if (outside) {
+      ++removed;
     } else {
-      salida.insert(salida.end(), spirv.begin() + i, spirv.begin() + i + palabras);
+      output.insert(output.end(), spirv.begin() + i, spirv.begin() + i + word_data);
     }
-    i += palabras;
+    i += word_data;
   }
   (void)kOpEntryPoint;
-  return quitadas ? salida : std::vector<uint32_t>();
+  return removed ? output : std::vector<uint32_t>();
 }
 
 /*
@@ -1939,83 +1939,83 @@ std::vector<uint32_t> PodarEscriturasDeColor(const std::vector<uint32_t>& spirv,
  * already declared it, or if it writes gl_FragDepth (DepthReplacing): in that last case testing earlier
  * would change the result, because the Z being tested is computed by the shader itself.
  */
-std::vector<uint32_t> ConPruebasTempranas(const std::vector<uint32_t>& spirv, const char*& motivo) {
-  constexpr uint32_t kMagia = 0x07230203u;
+std::vector<uint32_t> WithEarlyTests(const std::vector<uint32_t>& spirv, const char*& reason) {
+  constexpr uint32_t kMagic = 0x07230203u;
   constexpr uint32_t kOpEntryPoint = 15, kOpExecutionMode = 16;
-  constexpr uint32_t kModeloFragmento = 4;
-  constexpr uint32_t kModoEarly = 9, kModoDepthReplacing = 12;
-  motivo = "";
-  if (spirv.size() < 5 || spirv[0] != kMagia) {
-    motivo = "no es SPIR-V";
+  constexpr uint32_t kFragmentModel = 4;
+  constexpr uint32_t kEarlyMode = 9, kDepthReplacingMode = 12;
+  reason = "";
+  if (spirv.size() < 5 || spirv[0] != kMagic) {
+    reason = "no es SPIR-V";
     return {};
   }
-  uint32_t entrada = 0;
-  size_t donde = 0;  // first word after the execution mode section
+  uint32_t entry = 0;
+  size_t where = 0;  // first word after the execution mode section
   for (size_t i = 5; i < spirv.size();) {
-    const uint32_t palabras = spirv[i] >> 16;
-    const uint32_t codigo = spirv[i] & 0xFFFF;
-    if (palabras == 0 || i + palabras > spirv.size()) {
-      motivo = "modulo mal formado";
+    const uint32_t word_data = spirv[i] >> 16;
+    const uint32_t code = spirv[i] & 0xFFFF;
+    if (word_data == 0 || i + word_data > spirv.size()) {
+      reason = "modulo mal formado";
       return {};
     }
-    if (codigo == kOpEntryPoint && palabras >= 3) {
-      if (spirv[i + 1] == kModeloFragmento) {
-        if (entrada) {
-          motivo = "mas de un punto de entrada de fragmentos";
+    if (code == kOpEntryPoint && word_data >= 3) {
+      if (spirv[i + 1] == kFragmentModel) {
+        if (entry) {
+          reason = "mas de un punto de entrada de fragmentos";
           return {};
         }
-        entrada = spirv[i + 2];
+        entry = spirv[i + 2];
       }
-      if (donde < i + palabras) {
-        donde = i + palabras;
+      if (where < i + word_data) {
+        where = i + word_data;
       }
-    } else if (codigo == kOpExecutionMode && palabras >= 3) {
-      if (spirv[i + 2] == kModoEarly) {
-        motivo = "ya la declaraba";
+    } else if (code == kOpExecutionMode && word_data >= 3) {
+      if (spirv[i + 2] == kEarlyMode) {
+        reason = "ya la declaraba";
         return {};
       }
-      if (spirv[i + 2] == kModoDepthReplacing) {
-        motivo = "escribe gl_FragDepth";
+      if (spirv[i + 2] == kDepthReplacingMode) {
+        reason = "escribe gl_FragDepth";
         return {};
       }
-      if (donde < i + palabras) {
-        donde = i + palabras;
+      if (where < i + word_data) {
+        where = i + word_data;
       }
     }
-    i += palabras;
+    i += word_data;
   }
-  if (!entrada || !donde) {
-    motivo = "sin punto de entrada de fragmentos";
+  if (!entry || !where) {
+    reason = "sin punto de entrada de fragmentos";
     return {};
   }
-  std::vector<uint32_t> salida;
-  salida.reserve(spirv.size() + 3);
-  salida.insert(salida.end(), spirv.begin(), spirv.begin() + donde);
-  salida.push_back((3u << 16) | kOpExecutionMode);
-  salida.push_back(entrada);
-  salida.push_back(kModoEarly);
-  salida.insert(salida.end(), spirv.begin() + donde, spirv.end());
-  return salida;
+  std::vector<uint32_t> output;
+  output.reserve(spirv.size() + 3);
+  output.insert(output.end(), spirv.begin(), spirv.begin() + where);
+  output.push_back((3u << 16) | kOpExecutionMode);
+  output.push_back(entry);
+  output.push_back(kEarlyMode);
+  output.insert(output.end(), spirv.begin() + where, spirv.end());
+  return output;
 }
 
-struct ClavePipeline {
+struct PipelineKey {
   uint32_t vs = 0;
   uint32_t ps = 0;
-  uint64_t entrada = 0;
-  uint32_t topologia = 0;
-  uint32_t especializacion = 0;
-  uint32_t formatos[5] = {};
-  uint32_t mezcla[4] = {};
-  uint32_t mascaras = 0;
-  uint32_t profundidad = 0;
+  uint64_t entry = 0;
+  uint32_t topo = 0;
+  uint32_t specialization = 0;
+  uint32_t formats[5] = {};
+  uint32_t blend[4] = {};
+  uint32_t masks = 0;
+  uint32_t depth_value = 0;
   uint32_t rasterizado = 0;
   // The key is hashed and compared byte by byte (PipelineDe). With 76 bytes of fields and 8-byte alignment
   // it had 4 bytes of uninitialized implicit padding: stack garbage that made identical keys differ and
   // created duplicate pipelines (125-134, and 193-203 in a later version, with no change in the image).
-  uint32_t relleno = 0;
-  uint32_t relleno2 = 0;
+  uint32_t padding = 0;
+  uint32_t fill2 = 0;
 };
-static_assert(std::has_unique_object_representations_v<ClavePipeline>,
+static_assert(std::has_unique_object_representations_v<PipelineKey>,
               "ClavePipeline no puede tener relleno implicito: se hashea y se compara byte a byte");
 
 /*
@@ -2027,136 +2027,136 @@ static_assert(std::has_unique_object_representations_v<ClavePipeline>,
  * key only carries as a fingerprint. It is stored on disk byte for byte, so it cannot have implicit
  * padding.
  */
-struct AtributoRegistro {
-  uint32_t ubicacion = 0;
-  uint32_t enlace = 0;
-  uint32_t formato = 0;  // VkFormat
+struct AttributeRecord {
+  uint32_t loc_index = 0;
+  uint32_t bind_index = 0;
+  uint32_t format_id = 0;  // VkFormat
   uint32_t offset = 0;
 };
 
-struct RegistroPipeline {
-  static constexpr uint32_t kMaxAtributos = 16;
-  static constexpr uint32_t kMaxEnlaces = 16;
-  ClavePipeline clave;
-  uint64_t huella_vs = 0;  // nfsmw::native::Shader::huella
-  uint64_t huella_ps = 0;  // 0 without a fragment stage (clave.ps == 0)
-  uint32_t n_atributos = 0;
-  uint32_t n_enlaces = 0;
-  AtributoRegistro atributos[kMaxAtributos] = {};
-  uint32_t zancadas[kMaxEnlaces] = {};
+struct PipelineRecord {
+  static constexpr uint32_t kMaxAttributes = 16;
+  static constexpr uint32_t kMaxBindings = 16;
+  PipelineKey key;
+  uint64_t vs_fingerprint = 0;  // nfsmw::native::Shader::huella
+  uint64_t ps_fingerprint = 0;  // 0 without a fragment stage (clave.ps == 0)
+  uint32_t n_attributes = 0;
+  uint32_t n_bindings = 0;
+  AttributeRecord attributes[kMaxAttributes] = {};
+  uint32_t strides[kMaxBindings] = {};
 };
-static_assert(std::has_unique_object_representations_v<RegistroPipeline>,
+static_assert(std::has_unique_object_representations_v<PipelineRecord>,
               "RegistroPipeline se guarda en disco byte a byte: sin relleno implicito");
 
-struct Textura {
-  ImagenNativa imagen;
-  uint32_t capas = 1;  // 6 for cubemaps
-  uint32_t fondo = 0;  // slices of 3D textures; 0 for the rest
-  uint64_t huella = 0;
-  uint64_t fotograma = UINT64_MAX;
-  uint64_t huella_cruda = 0;  // XXH3 of the guest bytes (2D and cubemaps)
-  uint64_t siguiente = 0;     // frame of the next check
-  uint32_t intervalo = 1;     // frames between checks: 1 to 32
-  uint32_t aplazamientos = 0;  // consecutive checks deferred by the budget
+struct Texture {
+  NativeImage img;
+  uint32_t layer_count = 1;  // 6 for cubemaps
+  uint32_t background = 0;  // slices of 3D textures; 0 for the rest
+  uint64_t fingerprint = 0;
+  uint64_t frame = UINT64_MAX;
+  uint64_t raw_fingerprint = 0;  // XXH3 of the guest bytes (2D and cubemaps)
+  uint64_t next = 0;     // frame of the next check
+  uint32_t interval = 1;     // frames between checks: 1 to 32
+  uint32_t deferrals = 0;  // consecutive checks deferred by the budget
   // Sample fingerprint (HuellaMuestra) of the same content as huella_cruda if muestra_valida, and how many
   // consecutive rechecks have been accepted on it alone (nfsmw_nativo_huellas_muestreo).
-  uint64_t huella_muestra = 0;
-  bool muestra_valida = false;
-  uint8_t muestras_seguidas = 0;
-  bool subir = false;
-  std::vector<uint8_t> datos;  // levels already laid out for the host: level after level and, in each, layer after layer
-  uint32_t niveles = 1;        // mip levels of the host image
-  std::array<uint32_t, 16> desplazamiento_nivel{};  // data bytes up to each level
+  uint64_t sample_fingerprint = 0;
+  bool valid_sample = false;
+  uint8_t consecutive_samples = 0;
+  bool do_upload = false;
+  std::vector<uint8_t> payload;  // levels already laid out for the host: level after level and, in each, layer after layer
+  uint32_t levels = 1;        // mip levels of the host image
+  std::array<uint32_t, 16> level_offset{};  // data bytes up to each level
   uint64_t bytes = 0;          // what it counts in bytes_texturas_ (for eviction)
   // 1 + its index in en_vuelo_ while the bind thread runs its vkBindImageMemory; 0 = no. While set, the
   // image exists but has no memory: no command may reference it until RecogerEnlaces.
-  uint32_t en_vuelo = 0;
+  uint32_t in_flight = 0;
   // Its data and huella_cruda are prepared by the hash thread (nfsmw_nativo_texturas_huella_hilo). 0 = no;
   // 1 + its index in huellas_planeadas_ until SubirTextura; kTrabajoHuellaPublicado until RecogerHuellas
   // sets its huella_cruda. While nonzero it is not evicted and its huella_cruda is not valid yet.
-  uint32_t huella_trabajo = 0;
+  uint32_t job_fingerprint = 0;
   // Measurement only (nfsmw_nativo_diag_reutilizar): its shape without the address (when the image is
   // created), its address (only for the log), the content key it is filed under in vivas_por_contenido_
   // (0 = none) and whether it is new and its first fingerprint has not been measured yet.
-  uint64_t forma_contenido = 0;
-  uint64_t clave_contenido = 0;
-  uint32_t direccion = 0;
-  bool contenido_por_medir = false;
+  uint64_t content_shape = 0;
+  uint64_t content_key = 0;
+  uint32_t address = 0;
+  bool content_per_measure = false;
 };
 
-struct Vista {
-  VkImage imagen = VK_NULL_HANDLE;
-  VkImageView vista = VK_NULL_HANDLE;
+struct View {
+  VkImage img = VK_NULL_HANDLE;
+  VkImageView view = VK_NULL_HANDLE;
   uint32_t ranura = 0;
-  uint32_t monton = 0;  // 0 2D textures, 2 cubemaps
+  uint32_t heap = 0;  // 0 2D textures, 2 cubemaps
 };
 
-class DibujosVulkanImpl final : public DibujosVulkan {
+class VulkanDrawerImpl final : public VulkanDrawer {
  public:
-  DibujosVulkanImpl(const VulkanDevice* dispositivo, rex::memory::Memory* memoria,
-                    ContextoDestinos* contexto)
-      : dispositivo_(dispositivo),
-        dfn_(dispositivo->functions()),
-        device_(dispositivo->device()),
-        memoria_(memoria),
+  VulkanDrawerImpl(const VulkanDevice* dev, rex::memory::Memory* mem,
+                    TargetsContext* contexto)
+      : vk_device_(dev),
+        dfn_(dev->functions()),
+        device_(dev->device()),
+        mem_(mem),
         contexto_(contexto) {}
 
-  ~DibujosVulkanImpl() override {
-    PararPrecalentado();  // uses the pipeline cache and the layout: first
-    PararCopias();
-    PararEnlaces();  // in-flight vkBindImageMemory calls finish before any image is destroyed
-    PararHuellas();  // the hash thread writes to the upload buffer: join it before releasing that
-    GuardarCachePipelines();
-    PararEscritorCache();  // writes whatever is still pending
-    for (auto& [clave, par] : pipelines_) {
+  ~VulkanDrawerImpl() override {
+    StopPrewarmed();  // uses the pipeline cache and the layout: first
+    StopCopies();
+    StopBindings();  // in-flight vkBindImageMemory calls finish before any image is destroyed
+    StopFingerprints();  // the hash thread writes to the upload buffer: join it before releasing that
+    SaveCachePipelines();
+    StopCacheWriter();  // writes whatever is still pending
+    for (auto& [key, par] : pipelines_) {
       dfn_.vkDestroyPipeline(device_, par.second, nullptr);
     }
     if (cache_pipelines_ != VK_NULL_HANDLE) {
-      destruir_cache_(device_, cache_pipelines_, nullptr);
+      destroy_cache_(device_, cache_pipelines_, nullptr);
     }
-    for (auto& [clave, framebuffer] : framebuffers_) {
+    for (auto& [key, framebuffer] : framebuffers_) {
       dfn_.vkDestroyFramebuffer(device_, framebuffer, nullptr);
     }
-    for (VkFramebuffer framebuffer : fb_retirados_) {  // the ones OlvidarVista retired
+    for (VkFramebuffer framebuffer : fb_retired_) {  // the ones OlvidarVista retired
       dfn_.vkDestroyFramebuffer(device_, framebuffer, nullptr);
     }
-    for (auto& [clave, pase] : pases_) {
-      dfn_.vkDestroyRenderPass(device_, pase, nullptr);
+    for (auto& [key, pass] : passes_) {
+      dfn_.vkDestroyRenderPass(device_, pass, nullptr);
     }
-    for (auto& [entrada, modulo] : modulos_) {
-      dfn_.vkDestroyShaderModule(device_, modulo, nullptr);
+    for (auto& [entry, spv_module] : modules_) {
+      dfn_.vkDestroyShaderModule(device_, spv_module, nullptr);
     }
-    for (auto& [entrada, modulo] : modulos_solo_alfa_) {
-      if (modulo != VK_NULL_HANDLE) {
-        dfn_.vkDestroyShaderModule(device_, modulo, nullptr);
+    for (auto& [entry, spv_module] : alpha_only_modules_) {
+      if (spv_module != VK_NULL_HANDLE) {
+        dfn_.vkDestroyShaderModule(device_, spv_module, nullptr);
       }
     }
-    for (auto& [entrada, modulo] : modulos_z_temprana_) {
-      if (modulo != VK_NULL_HANDLE) {
-        dfn_.vkDestroyShaderModule(device_, modulo, nullptr);
+    for (auto& [entry, spv_module] : early_modules_z_) {
+      if (spv_module != VK_NULL_HANDLE) {
+        dfn_.vkDestroyShaderModule(device_, spv_module, nullptr);
       }
     }
-    for (VkShaderModule modulo : modulos_variantes_) {
-      if (modulo != VK_NULL_HANDLE) {
-        dfn_.vkDestroyShaderModule(device_, modulo, nullptr);
+    for (VkShaderModule spv_module : variants_modules_) {
+      if (spv_module != VK_NULL_HANDLE) {
+        dfn_.vkDestroyShaderModule(device_, spv_module, nullptr);
       }
     }
-    for (auto& [clave, vista] : vistas_) {
-      dfn_.vkDestroyImageView(device_, vista.vista, nullptr);
+    for (auto& [key, view] : views_) {
+      dfn_.vkDestroyImageView(device_, view.view, nullptr);
     }
-    for (auto& [clave, textura] : texturas_) {
-      DestruirImagen(textura.imagen);
+    for (auto& [key, texture] : textures_) {
+      DestroyImage(texture.img);
     }
-    for (auto& [clave, par] : samplers_) {
+    for (auto& [key, par] : samplers_) {
       dfn_.vkDestroySampler(device_, par.first, nullptr);
     }
-    for (ImagenNativa& vacia : vacias_) {
-      DestruirImagen(vacia);
+    for (NativeImage& empty_image : empty_) {
+      DestroyImage(empty_image);
     }
     // The pool's slabs are released after destroying every image that lives in them. The other way round
     // would free memory that the VkImages still have bound.
-    pool_texturas_.Terminar();
-    if (sampler_vacio_ != VK_NULL_HANDLE) dfn_.vkDestroySampler(device_, sampler_vacio_, nullptr);
+    textures_pool_.Finish();
+    if (empty_sampler_ != VK_NULL_HANDLE) dfn_.vkDestroySampler(device_, empty_sampler_, nullptr);
     if (layout_pipeline_ != VK_NULL_HANDLE)
       dfn_.vkDestroyPipelineLayout(device_, layout_pipeline_, nullptr);
     if (pool_ != VK_NULL_HANDLE) dfn_.vkDestroyDescriptorPool(device_, pool_, nullptr);
@@ -2165,184 +2165,184 @@ class DibujosVulkanImpl final : public DibujosVulkan {
     for (VkDescriptorSetLayout layout : layouts_) {
       if (layout != VK_NULL_HANDLE) dfn_.vkDestroyDescriptorSetLayout(device_, layout, nullptr);
     }
-    for (const BuferSubida& s : compartidas_bufs_) {
-      if (s.datos) dfn_.vkUnmapMemory(device_, s.memoria);
-      if (s.bufer != VK_NULL_HANDLE) dfn_.vkDestroyBuffer(device_, s.bufer, nullptr);
-      if (s.memoria != VK_NULL_HANDLE) dfn_.vkFreeMemory(device_, s.memoria, nullptr);
+    for (const UploadBuffer& s : bufs_shared_) {
+      if (s.payload) dfn_.vkUnmapMemory(device_, s.mem);
+      if (s.buf != VK_NULL_HANDLE) dfn_.vkDestroyBuffer(device_, s.buf, nullptr);
+      if (s.mem != VK_NULL_HANDLE) dfn_.vkFreeMemory(device_, s.mem, nullptr);
     }
-    for (const BuferSubida& s : subidas_) {
-      if (s.datos) dfn_.vkUnmapMemory(device_, s.memoria);
-      if (s.bufer != VK_NULL_HANDLE) dfn_.vkDestroyBuffer(device_, s.bufer, nullptr);
-      if (s.memoria != VK_NULL_HANDLE) dfn_.vkFreeMemory(device_, s.memoria, nullptr);
+    for (const UploadBuffer& s : uploads_) {
+      if (s.payload) dfn_.vkUnmapMemory(device_, s.mem);
+      if (s.buf != VK_NULL_HANDLE) dfn_.vkDestroyBuffer(device_, s.buf, nullptr);
+      if (s.mem != VK_NULL_HANDLE) dfn_.vkFreeMemory(device_, s.mem, nullptr);
     }
   }
 
-  bool Inicializar() {
-    const auto& propiedades = dispositivo_->properties();
-    const std::pair<bool, const char*> requisitos[] = {
-        {propiedades.shaderInt64, "shaderInt64"},
-        {propiedades.bufferDeviceAddress, "bufferDeviceAddress"},
-        {propiedades.runtimeDescriptorArray, "runtimeDescriptorArray"},
-        {propiedades.shaderSampledImageArrayDynamicIndexing,
+  bool Initialize() {
+    const auto& props = vk_device_->properties();
+    const std::pair<bool, const char*> requirements[] = {
+        {props.shaderInt64, "shaderInt64"},
+        {props.bufferDeviceAddress, "bufferDeviceAddress"},
+        {props.runtimeDescriptorArray, "runtimeDescriptorArray"},
+        {props.shaderSampledImageArrayDynamicIndexing,
          "shaderSampledImageArrayDynamicIndexing"},
-        {propiedades.descriptorBindingPartiallyBound, "descriptorBindingPartiallyBound"},
-        {propiedades.descriptorBindingSampledImageUpdateAfterBind,
+        {props.descriptorBindingPartiallyBound, "descriptorBindingPartiallyBound"},
+        {props.descriptorBindingSampledImageUpdateAfterBind,
          "descriptorBindingSampledImageUpdateAfterBind"},
-        {propiedades.descriptorBindingUpdateUnusedWhilePending,
+        {props.descriptorBindingUpdateUnusedWhilePending,
          "descriptorBindingUpdateUnusedWhilePending"},
     };
-    for (const auto& [presente, nombre] : requisitos) {
-      if (!presente) {
-        REXLOG_ERROR("[nativo] C6: el dispositivo Vulkan no tiene {}: no se dibuja", nombre);
+    for (const auto& [present, name] : requirements) {
+      if (!present) {
+        REXLOG_ERROR("[nativo] C6: el dispositivo Vulkan no tiene {}: no se dibuja", name);
         return false;
       }
     }
-    direccion_bufer_ = reinterpret_cast<FnDireccionBufer>(
-        dispositivo_->vulkan_instance()->functions().vkGetDeviceProcAddr(device_,
+    buffer_address_ = reinterpret_cast<BufferAddressFn>(
+        vk_device_->vulkan_instance()->functions().vkGetDeviceProcAddr(device_,
                                                                           "vkGetBufferDeviceAddress"));
-    copiar_imagen_ = reinterpret_cast<FnCopiarImagen>(
-        dispositivo_->vulkan_instance()->functions().vkGetDeviceProcAddr(device_, "vkCmdCopyImage"));
-    CargarCachePipelines();
-    CargarEstadoDinamico();  // dynamic state phases 1 and 2
-    if (!direccion_bufer_ || !CrearSubida() || !CrearDescriptores()) {
+    copy_image_ = reinterpret_cast<CopyImageFn>(
+        vk_device_->vulkan_instance()->functions().vkGetDeviceProcAddr(device_, "vkCmdCopyImage"));
+    LoadCachePipelines();
+    LoadDynamicState();  // dynamic state phases 1 and 2
+    if (!buffer_address_ || !CreateUpload() || !CreateDescriptors()) {
       return false;
     }
     // The pool is created after CrearDescriptores (where texturas_mb_max_ is read) and before CrearVacias,
     // so the three empty images can already come from it. The slabs are prewarmed here, while the game is
     // still loading: a 32 MB memset during a race would be a 10-15 ms stutter.
-    pool_texturas_.Iniciar(dispositivo_, texturas_mb_max_);
-    return CrearVacias();
+    textures_pool_.Start(vk_device_, textures_max_mb_);
+    return CreateEmpty();
   }
 
-  bool Dibujar(const PeticionDibujo& p) override {
-    VeredictoVegetacion(p);  // the ring's versus the game's (nfsmw_d3d_vegetacion_juego)
+  bool Draw(const DrawRequest& p) override {
+    VegetationVerdict(p);  // the ring's versus the game's (nfsmw_d3d_vegetacion_juego)
     // Stage stopwatch on 1 in kCronometroCada draws: reading the clock 12 times per draw took almost a
     // quarter of the ring thread's busy CPU on PC, and on the Switch each read costs more. The C6 averages
     // come from the sample.
-    cronometrar_ = (++cronometro_contador_ & (kCronometroCada - 1)) == 0;
-    auto marca = cronometrar_ ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
-    const uint32_t* r = p.registros;
+    time_ = (++counter_stopwatch_ & (kStopwatchEvery - 1)) == 0;
+    auto mark = time_ ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    const uint32_t* r = p.regs;
     if (!r || !p.vs) {
       return false;
     }
     // --- Tipo de primitiva ---------------------------------------------------
-    const uint32_t modo_edram = r[gr::XE_GPU_REG_RB_MODECONTROL] & 0x7;
-    if (modo_edram != uint32_t(xenos::EdramMode::kColorDepth) && modo_edram != 5) {
-      return Rechazar(1, "modo EDRAM sin color ni profundidad");
+    const uint32_t edram_mode = r[gr::XE_GPU_REG_RB_MODECONTROL] & 0x7;
+    if (edram_mode != uint32_t(xenos::EdramMode::kColorDepth) && edram_mode != 5) {
+      return Reject(1, "modo EDRAM sin color ni profundidad");
     }
     // Mode 5 (depth only): the Xenos does not run the pixel shader (IsPixelShaderNeededWithRasterization,
     // graphics/util/draw.cpp:125-129). Without a PS there are no textures, pixel constants or alpha test,
     // and the pipeline has no fragment stage. The race shadows work this way, and some arrive with the PS
     // object set to 0.
-    const EntradaShader* ps =  // can be removed if it writes no color and does not discard
-        modo_edram == uint32_t(xenos::EdramMode::kColorDepth) ? p.ps : nullptr;
-    if (!ps && modo_edram == uint32_t(xenos::EdramMode::kColorDepth)) {
+    const ShaderEntry* ps =  // can be removed if it writes no color and does not discard
+        edram_mode == uint32_t(xenos::EdramMode::kColorDepth) ? p.ps : nullptr;
+    if (!ps && edram_mode == uint32_t(xenos::EdramMode::kColorDepth)) {
       return false;
     }
     // Diagnostic: PS whose draws are skipped (nfsmw_nativo_diag_omitir_ps).
-    const std::string& omitir = diag_omitir_ps_texto_;
-    if (omitir != omitir_texto_) {
-      omitir_texto_ = omitir;
-      omitir_ps_.clear();
-      uint32_t numero = 0;
+    const std::string& skip = diag_skip_text_ps_;
+    if (skip != skip_text_) {
+      skip_text_ = skip;
+      skip_ps_.clear();
+      uint32_t number = 0;
       bool hay = false;
-      for (char c : omitir + ",") {
+      for (char c : skip + ",") {
         if (c >= '0' && c <= '9') {
-          numero = numero * 10 + uint32_t(c - '0');
+          number = number * 10 + uint32_t(c - '0');
           hay = true;
         } else if (hay) {
-          omitir_ps_.insert(numero);
-          numero = 0;
+          skip_ps_.insert(number);
+          number = 0;
           hay = false;
         }
       }
-      if (!omitir_ps_.empty()) {
-        REXLOG_WARN("[nativo] C6 diag: no se dibujan los PS {}", omitir_texto_);
+      if (!skip_ps_.empty()) {
+        REXLOG_WARN("[nativo] C6 diag: no se dibujan los PS {}", skip_text_);
       }
     }
-    if (ps && !omitir_ps_.empty() && omitir_ps_.count(ps->numero)) {
+    if (ps && !skip_ps_.empty() && skip_ps_.count(ps->number)) {
       return true;
     }
-    const uint32_t iniciador = r[gr::XE_GPU_REG_VGT_DRAW_INITIATOR];
-    const uint32_t tipo = iniciador & 0x3F;
-    const uint32_t fuente = (iniciador >> 6) & 0x3;
-    const bool indices32 = (iniciador >> 11) & 0x1;
-    const uint32_t cuenta = iniciador >> 16;
-    if (!cuenta) {
+    const uint32_t initiator = r[gr::XE_GPU_REG_VGT_DRAW_INITIATOR];
+    const uint32_t type = initiator & 0x3F;
+    const uint32_t src_select = (initiator >> 6) & 0x3;
+    const bool indices32 = (initiator >> 11) & 0x1;
+    const uint32_t num = initiator >> 16;
+    if (!num) {
       return true;
     }
-    VkPrimitiveTopology topologia;
-    bool cuadrilateros = false;
-    bool admite_reinicio = false;
-    switch (tipo) {
+    VkPrimitiveTopology topo;
+    bool quads = false;
+    bool supports_reset = false;
+    switch (type) {
       case 2:
-        topologia = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
+        topo = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
         break;
       case 3:
-        topologia = VK_PRIMITIVE_TOPOLOGY_LINE_STRIP;
-        admite_reinicio = true;
+        topo = VK_PRIMITIVE_TOPOLOGY_LINE_STRIP;
+        supports_reset = true;
         break;
       case 4:
-        topologia = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
         break;
       case 5:
-        topologia = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN;
-        admite_reinicio = true;
+        topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN;
+        supports_reset = true;
         break;
       case 6:
-        topologia = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
-        admite_reinicio = true;
+        topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+        supports_reset = true;
         break;
       case 13:
-        topologia = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-        cuadrilateros = true;
+        topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        quads = true;
         break;
       default:
-        return Rechazar(100 + tipo, "tipo de primitiva todavia no soportado");
+        return Reject(100 + type, "tipo de primitiva todavia no soportado");
     }
-    if (fuente == uint32_t(xenos::SourceSelect::kImmediate)) {
-      return Rechazar(2, "indices inmediatos");
+    if (src_select == uint32_t(xenos::SourceSelect::kImmediate)) {
+      return Reject(2, "indices inmediatos");
     }
     // Clipping disabled on the Xenos: the position may come in pixels (videos). It is drawn with a viewport
     // the size of the render target and the transform in the VS, like the emulation
     // (graphics/util/draw.cpp:341-363).
-    const bool sin_recorte = (r[gr::XE_GPU_REG_PA_CL_CLIP_CNTL] >> 16) & 0x1;
-    const uint32_t modo_sc = r[gr::XE_GPU_REG_PA_SU_SC_MODE_CNTL];
-    if (((modo_sc >> 3) & 0x3) == 2 && ((modo_sc >> 5) & 0x7) != 2) {
-      return Rechazar(4, "poligonos dibujados como puntos o lineas");
+    const bool without_clip = (r[gr::XE_GPU_REG_PA_CL_CLIP_CNTL] >> 16) & 0x1;
+    const uint32_t sc_mode = r[gr::XE_GPU_REG_PA_SU_SC_MODE_CNTL];
+    if (((sc_mode >> 3) & 0x3) == 2 && ((sc_mode >> 5) & 0x7) != 2) {
+      return Reject(4, "poligonos dibujados como puntos o lineas");
     }
 
-    const EntradaVertices* entrada = EntradaDe(p);
-    if (!entrada) {
+    const VertexInput* entry = EntryFor(p);
+    if (!entry) {
       return false;
     }
-    Etapa(0, marca);
-    std::chrono::steady_clock::time_point t_indices_185 = marca;  // C6 subetapas 15-18
+    Stage(0, mark);
+    std::chrono::steady_clock::time_point t_indices_185 = mark;  // C6 subetapas 15-18
 
     // --- Destinos --------------------------------------------------------------
     const uint32_t pitch = r[gr::XE_GPU_REG_RB_SURFACE_INFO] & 0x3FFF;
-    const uint32_t mascara_registro =
-        modo_edram == uint32_t(xenos::EdramMode::kColorDepth) ? r[gr::XE_GPU_REG_RB_COLOR_MASK] : 0;
+    const uint32_t reg_mask =
+        edram_mode == uint32_t(xenos::EdramMode::kColorDepth) ? r[gr::XE_GPU_REG_RB_COLOR_MASK] : 0;
     static constexpr uint32_t kInfoColor[4] = {
         gr::XE_GPU_REG_RB_COLOR_INFO, gr::XE_GPU_REG_RB_COLOR1_INFO,
         gr::XE_GPU_REG_RB_COLOR2_INFO, gr::XE_GPU_REG_RB_COLOR3_INFO};
-    uint64_t claves[5] = {};
-    uint32_t mascaras = 0;
-    bool hay_destino = false;
+    uint64_t keys[5] = {};
+    uint32_t masks = 0;
+    bool has_target = false;
     for (uint32_t i = 0; i < 4; ++i) {
-      const uint32_t mascara = (mascara_registro >> (i * 4)) & 0xF;
-      if (!mascara || !ps || !((ps->salidas >> i) & 0x1)) {
+      const uint32_t mask = (reg_mask >> (i * 4)) & 0xF;
+      if (!mask || !ps || !((ps->outputs >> i) & 0x1)) {
         continue;
       }
       const uint32_t info = r[kInfoColor[i]];
-      const uint32_t formato = (info >> 16) & 0xF;
-      if (!FormatoDestinoColorSoportado(formato)) {
-        return Rechazar(200 + formato, "formato de destino de color todavia no soportado");
+      const uint32_t format_id = (info >> 16) & 0xF;
+      if (!SupportedColorTargetFormat(format_id)) {
+        return Reject(200 + format_id, "formato de destino de color todavia no soportado");
       }
-      claves[i] = (uint64_t(1) << 63) | (uint64_t(info & 0xFFF) << 24) | (uint64_t(formato) << 16) |
+      keys[i] = (uint64_t(1) << 63) | (uint64_t(info & 0xFFF) << 24) | (uint64_t(format_id) << 16) |
                   pitch;
-      mascaras |= mascara << (i * 4);
-      hay_destino = true;
+      masks |= mask << (i * 4);
+      has_target = true;
     }
     /*
      * Draws that cannot change a single pixel (nfsmw_nativo_saltar_invisibles).
@@ -2361,41 +2361,41 @@ class DibujosVulkanImpl final : public DibujosVulkan {
      * its depth would be lost. Removing the color write saves too little to be worth it.
      * The pruning is skipped while an occlusion query is open: the game reads those samples.
      */
-    if (saltar_invisibles_ && mascaras) {
-      static constexpr uint32_t kMezclaDe[4] = {
+    if (skip_invisible_ && masks) {
+      static constexpr uint32_t kBlendOf[4] = {
           gr::XE_GPU_REG_RB_BLENDCONTROL0, gr::XE_GPU_REG_RB_BLENDCONTROL1,
           gr::XE_GPU_REG_RB_BLENDCONTROL2, gr::XE_GPU_REG_RB_BLENDCONTROL3};
       const uint32_t control_color_inv = r[gr::XE_GPU_REG_RB_COLORCONTROL];
-      const bool alfa_nunca =
+      const bool never_alpha =
           ((control_color_inv >> 3) & 0x1) && (control_color_inv & 0x7) == 0;  // function NEVER
-      uint32_t mascaras_utiles = 0;
+      uint32_t usable_masks = 0;
       for (uint32_t i = 0; i < 4; ++i) {
-        const uint32_t mascara_i = (mascaras >> (i * 4)) & 0xF;
-        if (!mascara_i) {
+        const uint32_t mask_i = (masks >> (i * 4)) & 0xF;
+        if (!mask_i) {
           continue;
         }
-        const uint32_t m = r[kMezclaDe[i]] & 0x1FFF1FFF;
-        const bool copia_color = (m & 0x1F) == 0 && ((m >> 8) & 0x1F) == 1 && ((m >> 5) & 0x7) == 0;
-        const bool copia_alfa =
+        const uint32_t m = r[kBlendOf[i]] & 0x1FFF1FFF;
+        const bool color_copy = (m & 0x1F) == 0 && ((m >> 8) & 0x1F) == 1 && ((m >> 5) & 0x7) == 0;
+        const bool alpha_copy =
             ((m >> 16) & 0x1F) == 0 && ((m >> 24) & 0x1F) == 1 && ((m >> 21) & 0x7) == 0;
-        const bool escribe_rgb = (mascara_i & 0x7) != 0 && !copia_color;
-        const bool escribe_alfa = (mascara_i & 0x8) != 0 && !copia_alfa;
-        if (escribe_rgb || escribe_alfa) {
-          mascaras_utiles |= mascara_i << (i * 4);
+        const bool rgb_write = (mask_i & 0x7) != 0 && !color_copy;
+        const bool alpha_write = (mask_i & 0x8) != 0 && !alpha_copy;
+        if (rgb_write || alpha_write) {
+          usable_masks |= mask_i << (i * 4);
         }
       }
-      if ((!mascaras_utiles || alfa_nunca) && !oclusion_abierta_) {
+      if ((!usable_masks || never_alpha) && !open_occlusion_) {
         // With the NEVER function even the depth write dies (clip() runs in the shader, before the merger),
         // so the draw leaves no trace of any kind. With the blending that copies the destination, the draw can
         // only be dropped if it writes neither Z nor stencil either.
         const uint32_t dc = r[gr::XE_GPU_REG_RB_DEPTHCONTROL];
-        const bool deja_rastro =
-            !alfa_nunca && ((((dc >> 1) & 0x1) && ((dc >> 2) & 0x1)) || (dc & 0x1));
-        ++cuentas_z_[alfa_nunca ? kInvisibleAlfa : kInvisibleMezcla];
-        if (!deja_rastro) {
+        const bool trace_leaves =
+            !never_alpha && ((((dc >> 1) & 0x1) && ((dc >> 2) & 0x1)) || (dc & 0x1));
+        ++counts_z_[never_alpha ? kInvisibleAlfa : kBlendInvisible];
+        if (!trace_leaves) {
           return true;
         }
-        ++cuentas_z_[kInvisibleSoloColor];  // drawn anyway: only counts what is left to gain
+        ++counts_z_[kColorOnlyInvisible];  // drawn anyway: only counts what is left to gain
       }
     }
     // With no color to write, the pixel shader can only have an effect by discarding pixels (alpha test or
@@ -2403,40 +2403,40 @@ class DibujosVulkanImpl final : public DibujosVulkan {
     // is identical: the GPU saves shading the whole shadow map.
     // Of the draws that do write color, how many can use early depth rejection and how many force shading
     // before testing. That is what decides whether a depth pre-pass would help at all.
-    if (mascaras && ps && hay_destino) {
-      const uint32_t control_color_ahora = r[gr::XE_GPU_REG_RB_COLORCONTROL];
-      const bool prueba_alfa =
-          ((control_color_ahora >> 3) & 0x1) && (control_color_ahora & 0x7) != 7;
-      const bool descarta = prueba_alfa || ps->descarta || (ps->salidas & 0x10);
+    if (masks && ps && has_target) {
+      const uint32_t now_control_color = r[gr::XE_GPU_REG_RB_COLORCONTROL];
+      const bool alpha_test =
+          ((now_control_color >> 3) & 0x1) && (now_control_color & 0x7) != 7;
+      const bool discards = alpha_test || ps->discards || (ps->outputs & 0x10);
       if (pitch >= 1600) {
         // shadow map: already counted separately
-      } else if (descarta) {
-        ++escena_con_descarte_;
+      } else if (discards) {
+        ++scene_with_discard_;
       } else {
-        ++escena_sin_descarte_;
+        ++scene_without_discard_;
       }
     }
-    bool solo_alfa = false;
-    if (!mascaras && ps) {
-      const uint32_t control_color_ahora = r[gr::XE_GPU_REG_RB_COLORCONTROL];
-      const bool prueba_alfa =
-          ((control_color_ahora >> 3) & 0x1) && (control_color_ahora & 0x7) != 7;
-      if (!prueba_alfa && !ps->descarta && !(ps->salidas & 0x10)) {
-        ++dibujos_ps_inutil_;
-        if (cvars_por_fotograma_ ? sin_ps_sin_color_fotograma_ : SinPsSinColor()) {
+    bool only_alpha = false;
+    if (!masks && ps) {
+      const uint32_t now_control_color = r[gr::XE_GPU_REG_RB_COLORCONTROL];
+      const bool alpha_test =
+          ((now_control_color >> 3) & 0x1) && (now_control_color & 0x7) != 7;
+      if (!alpha_test && !ps->discards && !(ps->outputs & 0x10)) {
+        ++useless_ps_draws_;
+        if (cvars_per_frame_ ? without_ps_without_frame_color_ : NoPsNoColor()) {
           ps = nullptr;
         }
       } else {
-        ++dibujos_ps_necesario_;
+        ++required_ps_draws_;
         // Diagnostic: in the shadow map the pixel shader reads constant c1 (g_bShadowMapAlphaEnabled). With
         // that constant at 0 it neither samples nor discards: the stage would be unnecessary.
         if (pitch >= 1600) {
-          (Flotante(r[kRegConstantesPs + 4]) != 0.0f ? ++sombras_alfa_activa_ : ++sombras_alfa_apagada_);
+          (Float(r[kRegConstantesPs + 4]) != 0.0f ? ++shadows_active_alpha_ : ++shadows_alpha_disabled_);
         }
         // Needed for the alpha test or a kill, but its color goes nowhere: it is compiled without those
         // writes.
-        if (cvars_por_fotograma_ ? ps_solo_alfa_fotograma_ : PsSoloAlfa()) {
-          solo_alfa = true;
+        if (cvars_per_frame_ ? frame_alpha_only_ps_ : PsAlphaOnly()) {
+          only_alpha = true;
         }
       }
     }
@@ -2459,252 +2459,252 @@ class DibujosVulkanImpl final : public DibujosVulkan {
      * The occlusion guard is free and removes the only doubt: with a game occlusion query open the draw
      * counts even if it is not visible, so there it takes the long path and the usual discard drops it.
      */
-    const bool vegetacion_temprana = solo_alfa && sin_vegetacion_ && !oclusion_abierta_;
+    const bool vegetation_early = only_alpha && without_vegetation_ && !open_occlusion_;
     // The ring's verdict for the nfsmw_d3d_vegetacion_juego guard (VeredictoVegetacion) must be this same
     // decision. With the settings read on every draw (cvars_por_fotograma_ false) the alternation can change
     // between the two reads: then no comparison is made.
-    if (vegetacion_calculada_ && cvars_por_fotograma_ && vegetacion_anillo_ != vegetacion_temprana) {
-      vegetacion_detalle_.temprana = vegetacion_temprana;
-      AnotarVegetacionModelo(vegetacion_banderas_, vegetacion_detalle_);
+    if (vegetation_computed_ && cvars_per_frame_ && vegetation_ring_ != vegetation_early) {
+      vegetation_detail_.early = vegetation_early;
+      TrackModelVegetation(vegetation_flags_, vegetation_detail_);
     }
-    if (vegetacion_temprana) {
-      ++dibujos_vegetacion_pronto_;
+    if (vegetation_early) {
+      ++soon_vegetation_draws_;
       return true;
     }
-    const uint32_t control_profundidad = r[gr::XE_GPU_REG_RB_DEPTHCONTROL];
-    if (control_profundidad & 0x3) {  // stencil o z
+    const uint32_t depth_control = r[gr::XE_GPU_REG_RB_DEPTHCONTROL];
+    if (depth_control & 0x3) {  // stencil o z
       const uint32_t info = r[gr::XE_GPU_REG_RB_DEPTH_INFO];
-      claves[4] = (uint64_t(1) << 62) | (uint64_t(info & 0xFFF) << 24) |
+      keys[4] = (uint64_t(1) << 62) | (uint64_t(info & 0xFFF) << 24) |
                   (uint64_t((info >> 16) & 0x1) << 16) | pitch;
-      hay_destino = true;
+      has_target = true;
     }
-    if (!hay_destino || !pitch) {
+    if (!has_target || !pitch) {
       // Diagnostic: a draw inside an occlusion query that writes nothing counts no samples.
-      if (oclusion_abierta_ && pitch >= 640 && avisos_oclusion_dibujo_ < 8) {
-        ++avisos_oclusion_dibujo_;
+      if (open_occlusion_ && pitch >= 640 && draw_occlusion_warnings_ < 8) {
+        ++draw_occlusion_warnings_;
         REXLOG_INFO("[nativo] C2 oclusion dibujo {}: SIN DESTINO (no se dibuja): VS n{} PS n{} tipo {} cuenta {} pitch {} "
                     "mascara {:08X} profundidad {:08X} modo EDRAM {}",
-                    avisos_oclusion_dibujo_, p.vs->numero, ps ? int(ps->numero) : -1, tipo, cuenta, pitch,
-                    mascara_registro, control_profundidad, modo_edram);
+                    draw_occlusion_warnings_, p.vs->number, ps ? int(ps->number) : -1, type, num, pitch,
+                    reg_mask, depth_control, edram_mode);
       }
       return true;  // writes nothing visible
     }
     // FPS test nfsmw_nativo_omitir_sombras: the shadow map is depth-only and 1600 wide. With
     // nfsmw_nativo_omitir_sombras_alternar_s = N they are skipped in the odd N-second intervals.
-    const bool destino_sombras =  // also used for its depth bias
-        pitch >= 1600 && claves[4] && !claves[0] && !claves[1] && !claves[2] && !claves[3];
-    if (destino_sombras) {
+    const bool shadows_target =  // also used for its depth bias
+        pitch >= 1600 && keys[4] && !keys[0] && !keys[1] && !keys[2] && !keys[3];
+    if (shadows_target) {
       // Step 2 of the 30 FPS guard. Removing the whole pass does not flicker; skipping it on 2 of every
       // 3 frames does, which is why that step no longer exists.
-      bool omitir = nfsmw::guardia30::SinSombras(REXCVAR_GET(nfsmw_nativo_omitir_sombras));
+      bool skip = nfsmw::guard30::WithoutShadows(REXCVAR_GET(nfsmw_nativo_omitir_sombras));
       const int32_t alternar = REXCVAR_GET(nfsmw_nativo_omitir_sombras_alternar_s);
-      if (!omitir && alternar > 0) {
-        const auto segundos = std::chrono::duration_cast<std::chrono::seconds>(
-                                  std::chrono::steady_clock::now() - inicio_sombras_)
+      if (!skip && alternar > 0) {
+        const auto secs = std::chrono::duration_cast<std::chrono::seconds>(
+                                  std::chrono::steady_clock::now() - shadows_start_)
                                   .count();
-        omitir = (segundos / alternar) % 2 == 1;
-        if (omitir != sombras_omitidas_) {
-          sombras_omitidas_ = omitir;
+        skip = (secs / alternar) % 2 == 1;
+        if (skip != shadows_skipped_) {
+          shadows_skipped_ = skip;
           REXLOG_INFO("[nativo] prueba de sombras: {} (fotograma {})",
-                      omitir ? "sin sombras" : "con sombras", fotograma_);
+                      skip ? "sin sombras" : "con sombras", frame_);
         }
       }
-      if (omitir) {
+      if (skip) {
         return true;
       }
     }
 
-    CortarSubetapa(15, t_indices_185);  // render targets and discards
+    CutSubstage(15, t_indices_185);  // render targets and discards
     // --- Rango de vertices e indices --------------------------------------------
-    const uint32_t desplazamiento = r[gr::XE_GPU_REG_VGT_INDX_OFFSET] & 0xFFFFFF;
-    const bool reinicio = admite_reinicio && ((modo_sc >> 21) & 0x1);
+    const uint32_t byte_offset = r[gr::XE_GPU_REG_VGT_INDX_OFFSET] & 0xFFFFFF;
+    const bool restart_flag = supports_reset && ((sc_mode >> 21) & 0x1);
     // Depth bias as in the emulation with host render targets (GetPreferredFacePolygonOffset,
     // graphics/util/draw.cpp:92-118).
-    float escala_sesgo = 0.0f, desplazamiento_sesgo = 0.0f;
-    if (tipo >= 4) {  // poligonos
-      if (((modo_sc >> 11) & 0x1) && !(modo_sc & 0x1)) {
-        escala_sesgo = Flotante(r[gr::XE_GPU_REG_PA_SU_POLY_OFFSET_FRONT_SCALE]);
-        desplazamiento_sesgo = Flotante(r[gr::XE_GPU_REG_PA_SU_POLY_OFFSET_FRONT_OFFSET]);
+    float bias_scale = 0.0f, bias_offset = 0.0f;
+    if (type >= 4) {  // poligonos
+      if (((sc_mode >> 11) & 0x1) && !(sc_mode & 0x1)) {
+        bias_scale = Float(r[gr::XE_GPU_REG_PA_SU_POLY_OFFSET_FRONT_SCALE]);
+        bias_offset = Float(r[gr::XE_GPU_REG_PA_SU_POLY_OFFSET_FRONT_OFFSET]);
       }
-      if (((modo_sc >> 12) & 0x1) && !((modo_sc >> 1) & 0x1) && escala_sesgo == 0.0f &&
-          desplazamiento_sesgo == 0.0f) {
-        escala_sesgo = Flotante(r[gr::XE_GPU_REG_PA_SU_POLY_OFFSET_BACK_SCALE]);
-        desplazamiento_sesgo = Flotante(r[gr::XE_GPU_REG_PA_SU_POLY_OFFSET_BACK_OFFSET]);
+      if (((sc_mode >> 12) & 0x1) && !((sc_mode >> 1) & 0x1) && bias_scale == 0.0f &&
+          bias_offset == 0.0f) {
+        bias_scale = Float(r[gr::XE_GPU_REG_PA_SU_POLY_OFFSET_BACK_SCALE]);
+        bias_offset = Float(r[gr::XE_GPU_REG_PA_SU_POLY_OFFSET_BACK_OFFSET]);
       }
-    } else if ((modo_sc >> 13) & 0x1) {
-      escala_sesgo = Flotante(r[gr::XE_GPU_REG_PA_SU_POLY_OFFSET_FRONT_SCALE]);
-      desplazamiento_sesgo = Flotante(r[gr::XE_GPU_REG_PA_SU_POLY_OFFSET_FRONT_OFFSET]);
+    } else if ((sc_mode >> 13) & 0x1) {
+      bias_scale = Float(r[gr::XE_GPU_REG_PA_SU_POLY_OFFSET_FRONT_SCALE]);
+      bias_offset = Float(r[gr::XE_GPU_REG_PA_SU_POLY_OFFSET_FRONT_OFFSET]);
     }
     // Constant scaled by the guest format's minimum value (2^24-1 for D24S8, 2^24 for D24FS8) and slope
     // from subpixels to pixels (vulkan/command_processor.cpp:5786-5799).
-    float sesgo[2] = {
-        desplazamiento_sesgo * (((r[gr::XE_GPU_REG_RB_DEPTH_INFO] >> 16) & 0x1)
+    float bias[2] = {
+        bias_offset * (((r[gr::XE_GPU_REG_RB_DEPTH_INFO] >> 16) & 0x1)
                                     ? float(uint32_t(1) << 24)
                                     : float((uint32_t(1) << 24) - 1)),
-        escala_sesgo * (1.0f / 16.0f)};
+        bias_scale * (1.0f / 16.0f)};
     // nfsmw_nativo_sombras_sesgo_*, only in the shadow map and only if the game does not set its own.
-    if (destino_sombras && tipo >= 4 && sesgo[0] == 0.0f && sesgo[1] == 0.0f &&
-        (sombras_sesgo_constante_ != 0 || sombras_sesgo_pendiente_ != 0)) {
-      sesgo[0] = float(sombras_sesgo_constante_) * 1000.0f;
-      sesgo[1] = float(sombras_sesgo_pendiente_) * 0.1f;
+    if (shadows_target && type >= 4 && bias[0] == 0.0f && bias[1] == 0.0f &&
+        (shadows_constant_bias_ != 0 || shadows_slope_bias_ != 0)) {
+      bias[0] = float(shadows_constant_bias_) * 1000.0f;
+      bias[1] = float(shadows_slope_bias_) * 0.1f;
     }
-    const bool con_sesgo = sesgo[0] != 0.0f || sesgo[1] != 0.0f;
-    if (con_sesgo && avisos_sesgo_ < 8 &&
-        std::memcmp(sesgo, sesgo_avisado_, sizeof(sesgo)) != 0) {
-      ++avisos_sesgo_;
-      std::memcpy(sesgo_avisado_, sesgo, sizeof(sesgo));
+    const bool with_bias = bias[0] != 0.0f || bias[1] != 0.0f;
+    if (with_bias && bias_warnings_ < 8 &&
+        std::memcmp(bias, warned_bias_, sizeof(bias)) != 0) {
+      ++bias_warnings_;
+      std::memcpy(warned_bias_, bias, sizeof(bias));
       REXLOG_INFO("[nativo] C6: desplazamiento de profundidad: escala {} desplazamiento {} "
                   "(modo {:08X}) -> constante {} pendiente {}",
-                  escala_sesgo, desplazamiento_sesgo, modo_sc, sesgo[0], sesgo[1]);
+                  bias_scale, bias_offset, sc_mode, bias[0], bias[1]);
     }
-    CortarSubetapa(16, t_indices_185);  // depth bias
+    CutSubstage(16, t_indices_185);  // depth bias
     uint32_t vmin = UINT32_MAX;
     uint32_t vmax = 0;
-    bool con_indices = false;
-    bool indices_de_16 = false;  // in indices16_ instead of indices_
+    bool with_indices = false;
+    bool indices16 = false;  // in indices16_ instead of indices_
     indices_.clear();
-    if (fuente == uint32_t(xenos::SourceSelect::kDMA)) {
-      const uint32_t tamano = r[gr::XE_GPU_REG_VGT_DMA_SIZE];
-      const auto orden = static_cast<xenos::Endian>(tamano >> 30);
+    if (src_select == uint32_t(xenos::SourceSelect::kDMA)) {
+      const uint32_t byte_size = r[gr::XE_GPU_REG_VGT_DMA_SIZE];
+      const auto orden = static_cast<xenos::Endian>(byte_size >> 30);
       const uint32_t bytes = indices32 ? 4 : 2;
       const uint32_t base = r[gr::XE_GPU_REG_VGT_DMA_BASE] & ~(bytes - 1);
-      if (cuenta > (tamano & 0xFFFFFF) || uint64_t(base & 0x1FFFFFFF) + uint64_t(cuenta) * bytes >
-                                               kMemoriaFisica) {
-        if (avisos_indices_ < 8) {
-          ++avisos_indices_;
+      if (num > (byte_size & 0xFFFFFF) || uint64_t(base & 0x1FFFFFFF) + uint64_t(num) * bytes >
+                                               kPhysicalMemory) {
+        if (indices_warnings_ < 8) {
+          ++indices_warnings_;
           REXLOG_WARN("[nativo] C6 diag: indices: cuenta {} palabras {} VGT_DMA_SIZE {:08X} "
                       "VGT_DMA_BASE {:08X} 32 bits {} tipo {} VS n{} PS n{}",
-                      cuenta, tamano & 0xFFFFFF, tamano, r[gr::XE_GPU_REG_VGT_DMA_BASE], indices32,
-                      tipo, p.vs->numero, ps ? int(ps->numero) : -1);
+                      num, byte_size & 0xFFFFFF, byte_size, r[gr::XE_GPU_REG_VGT_DMA_BASE], indices32,
+                      type, p.vs->number, ps ? int(ps->number) : -1);
         }
-        return Rechazar(7, "indices fuera de su bufer");
+        return Reject(7, "indices fuera de su bufer");
       }
-      const uint8_t* datos = memoria_->TranslatePhysical(base & 0x1FFFFFFF);
-      const uint32_t indice_reinicio = r[gr::XE_GPU_REG_VGT_MULTI_PRIM_IB_RESET_INDX] & 0xFFFFFF;
-      if (!indices32 && !reinicio && !desplazamiento && !cuadrilateros &&
+      const uint8_t* payload = mem_->TranslatePhysical(base & 0x1FFFFFFF);
+      const uint32_t reset_index = r[gr::XE_GPU_REG_VGT_MULTI_PRIM_IB_RESET_INDX] & 0xFFFFFF;
+      if (!indices32 && !restart_flag && !byte_offset && !quads &&
           (orden == xenos::Endian::k8in16 || orden == xenos::Endian::kNone)) {
         // The normal case in NFSMW: 16 bits without restart or offset. They are uploaded as 16 bits, with a
         // branch-free loop the compiler can vectorize.
-        indices16_.resize(cuenta);
-        uint16_t* salida = indices16_.data();
-        uint32_t minimo = 0xFFFF;
-        uint32_t maximo = 0;
+        indices16_.resize(num);
+        uint16_t* output = indices16_.data();
+        uint32_t min_value = 0xFFFF;
+        uint32_t max_value = 0;
         // With hand-written NEON and its guard (IndicesDe16, nfsmw_nativo_indices_neon).
-        IndicesDe16(datos, cuenta, salida, orden == xenos::Endian::k8in16, minimo, maximo);
-        vmin = minimo;
-        vmax = maximo;
-        indices_de_16 = true;
+        Indices16(payload, num, output, orden == xenos::Endian::k8in16, min_value, max_value);
+        vmin = min_value;
+        vmax = max_value;
+        indices16 = true;
       } else {
-        indices_.resize(cuenta);
-        uint32_t* salida = indices_.data();
-        for (uint32_t i = 0; i < cuenta; ++i) {
+        indices_.resize(num);
+        uint32_t* output = indices_.data();
+        for (uint32_t i = 0; i < num; ++i) {
           uint32_t v;
           if (indices32) {
-            uint32_t crudo;
-            std::memcpy(&crudo, datos + size_t(i) * 4, 4);
-            v = xenos::GpuSwap(crudo, orden) & 0xFFFFFF;
+            uint32_t raw;
+            std::memcpy(&raw, payload + size_t(i) * 4, 4);
+            v = xenos::GpuSwap(raw, orden) & 0xFFFFFF;
           } else {
-            uint16_t crudo;
-            std::memcpy(&crudo, datos + size_t(i) * 2, 2);
-            v = xenos::GpuSwap(crudo, orden);
+            uint16_t raw;
+            std::memcpy(&raw, payload + size_t(i) * 2, 2);
+            v = xenos::GpuSwap(raw, orden);
           }
-          if (reinicio && v == indice_reinicio) {
-            salida[i] = UINT32_MAX;
+          if (restart_flag && v == reset_index) {
+            output[i] = UINT32_MAX;
             continue;
           }
-          v = (v + desplazamiento) & 0xFFFFFF;
+          v = (v + byte_offset) & 0xFFFFFF;
           vmin = std::min(vmin, v);
           vmax = std::max(vmax, v);
-          salida[i] = v;
+          output[i] = v;
         }
       }
       if (vmin > vmax) {
         return true;  // resets only
       }
-      con_indices = true;
+      with_indices = true;
     } else {
-      vmin = desplazamiento;
-      vmax = desplazamiento + cuenta - 1;
-      if (cuadrilateros) {
-        indices_.resize(cuenta);
-        for (uint32_t i = 0; i < cuenta; ++i) {
-          indices_[i] = desplazamiento + i;
+      vmin = byte_offset;
+      vmax = byte_offset + num - 1;
+      if (quads) {
+        indices_.resize(num);
+        for (uint32_t i = 0; i < num; ++i) {
+          indices_[i] = byte_offset + i;
         }
-        con_indices = true;
+        with_indices = true;
       }
     }
-    if (vmax - vmin >= kMaxVerticesPorDibujo) {
-      return Rechazar(8, "rango de vertices demasiado grande");
+    if (vmax - vmin >= kMaxVerticesPerDraw) {
+      return Reject(8, "rango de vertices demasiado grande");
     }
-    if (cuadrilateros) {
+    if (quads) {
       const size_t n = indices_.size() / 4;
-      convertidos_.resize(n * 6);
+      converted_.resize(n * 6);
       for (size_t q = 0; q < n; ++q) {
         const uint32_t* i = &indices_[q * 4];
-        uint32_t* o = &convertidos_[q * 6];
+        uint32_t* o = &converted_[q * 6];
         o[0] = i[0]; o[1] = i[1]; o[2] = i[2];
         o[3] = i[0]; o[4] = i[2]; o[5] = i[3];
       }
-      indices_.swap(convertidos_);
+      indices_.swap(converted_);
     }
-    CortarSubetapa(17, t_indices_185);  // indices
+    CutSubstage(17, t_indices_185);  // indices
     // The indices stay as they come: vkCmdDrawIndexed subtracts vmin through vertexOffset.
     const uint32_t vertices = vmax - vmin + 1;
 
     // Bytes of each vertex binding in guest memory.
-    struct Origen {
-      const uint8_t* datos;
+    struct VertexSource {
+      const uint8_t* payload;
       xenos::Endian orden;
       uint32_t bytes;
-      uint64_t direccion;  // physical, of the first byte used
+      uint64_t address;  // physical, of the first byte used
     };
-    std::array<Origen, 16> origenes{};
-    if (entrada->enlaces.size() > origenes.size()) {
-      return Rechazar(9, "demasiados streams de vertices");
+    std::array<VertexSource, 16> sources{};
+    if (entry->bindings.size() > sources.size()) {
+      return Reject(9, "demasiados streams de vertices");
     }
     VkDeviceSize bytes_vertices = 0;
-    for (size_t b = 0; b < entrada->enlaces.size(); ++b) {
-      const EnlaceVertices& enlace = entrada->enlaces[b];
-      const uint32_t d0 = r[kRegFetch + enlace.ranura * 2];
-      const uint32_t d1 = r[kRegFetch + enlace.ranura * 2 + 1];
+    for (size_t b = 0; b < entry->bindings.size(); ++b) {
+      const VertexBinding& bind_index = entry->bindings[b];
+      const uint32_t d0 = r[kRegFetch + bind_index.ranura * 2];
+      const uint32_t d1 = r[kRegFetch + bind_index.ranura * 2 + 1];
       if ((d0 & 0x3) != uint32_t(xenos::FetchConstantType::kVertex)) {
-        return Rechazar(10, "fetch constant de vertices invalida");
+        return Reject(10, "fetch constant de vertices invalida");
       }
-      const uint64_t direccion = uint64_t(d0 & 0x1FFFFFFC);
-      const uint64_t disponibles = uint64_t((d1 >> 2) & 0xFFFFFF) * 4;
-      const uint64_t inicio = uint64_t(vmin) * enlace.zancada;
-      uint64_t necesarios = uint64_t(vertices) * enlace.zancada;
-      if (inicio + necesarios > disponibles) {
-        Avisar(11, "vertices mas alla del final de su bufer: se recorta");
-        necesarios = disponibles > inicio ? (disponibles - inicio) / enlace.zancada * enlace.zancada : 0;
+      const uint64_t address = uint64_t(d0 & 0x1FFFFFFC);
+      const uint64_t available = uint64_t((d1 >> 2) & 0xFFFFFF) * 4;
+      const uint64_t start = uint64_t(vmin) * bind_index.stride_bytes;
+      uint64_t required = uint64_t(vertices) * bind_index.stride_bytes;
+      if (start + required > available) {
+        Warn(11, "vertices mas alla del final de su bufer: se recorta");
+        required = available > start ? (available - start) / bind_index.stride_bytes * bind_index.stride_bytes : 0;
       }
-      if (!necesarios || direccion + inicio + necesarios > kMemoriaFisica) {
-        return Rechazar(12, "vertices fuera de la memoria");
+      if (!required || address + start + required > kPhysicalMemory) {
+        return Reject(12, "vertices fuera de la memoria");
       }
-      origenes[b] = {memoria_->TranslatePhysical(uint32_t(direccion + inicio)),
-                     static_cast<xenos::Endian>(d1 & 0x3), uint32_t(necesarios),
-                     direccion + inicio};
-      bytes_vertices += (necesarios + 3) & ~VkDeviceSize(3);
+      sources[b] = {mem_->TranslatePhysical(uint32_t(address + start)),
+                     static_cast<xenos::Endian>(d1 & 0x3), uint32_t(required),
+                     address + start};
+      bytes_vertices += (required + 3) & ~VkDeviceSize(3);
     }
 
     // Diagnostic: one line per combination of VS, PS and render target (at most 32).
-    if (diagnosticos_ < 32) {
-      const uint64_t clave_diagnostico = (uint64_t(p.vs->numero) << 44) ^
-                                         (uint64_t(ps ? ps->numero + 1 : 0) << 32) ^ claves[0] ^
-                                         (sin_recorte ? 1 : 0);
-      if (diagnosticados_.insert(clave_diagnostico).second) {
-        ++diagnosticos_;
-        float posicion[4] = {};
-        for (const AtributoVertices& a : entrada->atributos) {
-          if (a.ubicacion != 0) {
+    if (diagnostics_ < 32) {
+      const uint64_t diagnostic_key = (uint64_t(p.vs->number) << 44) ^
+                                         (uint64_t(ps ? ps->number + 1 : 0) << 32) ^ keys[0] ^
+                                         (without_clip ? 1 : 0);
+      if (diagnosed_.insert(diagnostic_key).second) {
+        ++diagnostics_;
+        float position[4] = {};
+        for (const VertexAttribute& a : entry->attributes) {
+          if (a.loc_index != 0) {
             continue;
           }
-          const Origen& origen = origenes[a.enlace];
-          if (origen.bytes >= a.offset + 16) {
+          const VertexSource& src = sources[a.bind_index];
+          if (src.bytes >= a.offset + 16) {
             for (uint32_t k = 0; k < 4; ++k) {
-              uint32_t palabra;
-              std::memcpy(&palabra, origen.datos + a.offset + k * 4, 4);
-              posicion[k] = Flotante(xenos::GpuSwap(palabra, origen.orden));
+              uint32_t word_value;
+              std::memcpy(&word_value, src.payload + a.offset + k * 4, 4);
+              position[k] = Float(xenos::GpuSwap(word_value, src.orden));
             }
           }
           break;
@@ -2714,147 +2714,147 @@ class DibujosVulkanImpl final : public DibujosVulkan {
             "vp x {}+-{} y {}+-{} z {}+{} ventana {:08X} sc {:08X} superficie {:08X} "
             "color0 {:08X} mascara {:08X} profundidad {:08X} edram {} vtx {:08X} "
             "pos0 ({:.3f} {:.3f} {:.3f} {:.3f}){}",
-            p.vs->numero, ps ? int(ps->numero) : -1, tipo, cuenta,
-            fuente == 0 ? "indices" : "auto",
+            p.vs->number, ps ? int(ps->number) : -1, type, num,
+            src_select == 0 ? "indices" : "auto",
             r[gr::XE_GPU_REG_PA_CL_VTE_CNTL], r[gr::XE_GPU_REG_PA_CL_CLIP_CNTL],
-            Flotante(r[gr::XE_GPU_REG_PA_CL_VPORT_XOFFSET]),
-            Flotante(r[gr::XE_GPU_REG_PA_CL_VPORT_XSCALE]),
-            Flotante(r[gr::XE_GPU_REG_PA_CL_VPORT_YOFFSET]),
-            Flotante(r[gr::XE_GPU_REG_PA_CL_VPORT_YSCALE]),
-            Flotante(r[gr::XE_GPU_REG_PA_CL_VPORT_ZOFFSET]),
-            Flotante(r[gr::XE_GPU_REG_PA_CL_VPORT_ZSCALE]), r[gr::XE_GPU_REG_PA_SC_WINDOW_OFFSET],
-            modo_sc, r[gr::XE_GPU_REG_RB_SURFACE_INFO], r[gr::XE_GPU_REG_RB_COLOR_INFO],
-            r[gr::XE_GPU_REG_RB_COLOR_MASK], control_profundidad, modo_edram,
-            r[gr::XE_GPU_REG_PA_SU_VTX_CNTL], posicion[0], posicion[1], posicion[2], posicion[3],
-            sin_recorte ? " [sin recorte]" : "");
+            Float(r[gr::XE_GPU_REG_PA_CL_VPORT_XOFFSET]),
+            Float(r[gr::XE_GPU_REG_PA_CL_VPORT_XSCALE]),
+            Float(r[gr::XE_GPU_REG_PA_CL_VPORT_YOFFSET]),
+            Float(r[gr::XE_GPU_REG_PA_CL_VPORT_YSCALE]),
+            Float(r[gr::XE_GPU_REG_PA_CL_VPORT_ZOFFSET]),
+            Float(r[gr::XE_GPU_REG_PA_CL_VPORT_ZSCALE]), r[gr::XE_GPU_REG_PA_SC_WINDOW_OFFSET],
+            sc_mode, r[gr::XE_GPU_REG_RB_SURFACE_INFO], r[gr::XE_GPU_REG_RB_COLOR_INFO],
+            r[gr::XE_GPU_REG_RB_COLOR_MASK], depth_control, edram_mode,
+            r[gr::XE_GPU_REG_PA_SU_VTX_CNTL], position[0], position[1], position[2], position[3],
+            without_clip ? " [sin recorte]" : "");
       }
     }
 
-    CortarSubetapa(18, t_indices_185);  // vertices and diagnostics
-    Etapa(1, marca);
+    CutSubstage(18, t_indices_185);  // vertices and diagnostics
+    Stage(1, mark);
     // --- Textures and samplers ----------------------------------------------------
-    uint32_t compartidas[kPalabrasCompartidas] = {};
+    uint32_t shared[kSharedWords] = {};
     for (uint32_t i = 0; i < 16; ++i) {
-      EscribirEscala(compartidas, i, 1.0f);
+      WriteScale(shared, i, 1.0f);
     }
-    VkDeviceSize bytes_texturas = 0;
-    DescartarHuellasPlaneadas();  // those of the previous draw that never reached SubirTextura
-    texturas_a_subir_.clear();
+    VkDeviceSize textures_bytes = 0;
+    DiscardPlannedFingerprints();  // those of the previous draw that never reached SubirTextura
+    textures_to_upload_.clear();
     const auto t_samplers =
-        cronometrar_ ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+        time_ ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     /*
      * nfsmw_nativo_profundidad_perezosa. In the final composite without blur, the depth sample (HEIGHTMAP)
      * is dead: C2 is told so that requesting it does not force a copy. The same value decides
      * kSpecSinDesenfoque further down, so textures and specialization always agree.
      */
-    const bool composicion_sin_desenfoque =
-        ps && ps->shader && ps->shader->huella == kHuellaComposicion && sin_desenfoque_fotograma_;
-    if (composicion_sin_desenfoque) {
-      contexto_->LecturasDeProfundidadMuertas(true);
+    const bool composition_without_blur =
+        ps && ps->shader && ps->shader->fingerprint == kCompositionFingerprint && without_frame_blur_;
+    if (composition_without_blur) {
+      contexto_->DeadDepthReads(true);
     }
-    bool lee_reflejo = false;  // nfsmw_reflejo_visibilidad
+    bool reflection_reads = false;  // nfsmw_reflejo_visibilidad
     for (const SamplerShader& sampler :
          ps ? std::span<const SamplerShader>(ps->samplers) : std::span<const SamplerShader>()) {
-      if (sampler.registro >= 16) {
+      if (sampler.reg_index >= 16) {
         continue;
       }
-      const uint32_t* fetch = r + kRegFetch + uint32_t(sampler.registro) * 6;
+      const uint32_t* fetch = r + kRegFetch + uint32_t(sampler.reg_index) * 6;
       // nfsmw_reflejo_visibilidad. Here and not in TexturaResuelta, which, because of the caches, only sees
       // the first draw of each frame that samples it. Without checking the dimension: over-counting only
       // means the reflection gets drawn.
-      if (medir_visibilidad_ && (fetch[0] & 0x3) == uint32_t(xenos::FetchConstantType::kTexture) &&
-          ((fetch[1] & 0xFFFFF000u) & 0x1FFFFFFFu) == nfsmw::reflejo_demanda::kDireccion) {
-        lee_reflejo = true;
+      if (measure_visibility_ && (fetch[0] & 0x3) == uint32_t(xenos::FetchConstantType::kTexture) &&
+          ((fetch[1] & 0xFFFFF000u) & 0x1FFFFFFFu) == nfsmw::demand_reflection::kAddress) {
+        reflection_reads = true;
       }
-      ++samplers_preparados_;
-      bool sin_cache = false;  // depth requested but not sampled, kept out of the caches
+      ++prepared_samplers_;
+      bool without_cache = false;  // depth requested but not sampled, kept out of the caches
       // Per-register cache: same fetch constant, same frame and no C2 copies in between.
-      CacheSampler& cache = cache_samplers_[sampler.registro];
+      CacheSampler& cache = cache_samplers_[sampler.reg_index];
       // Valid until cache.valido_hasta (with the cross-frame cache disabled, only its own frame)
-      if ((cache_entre_fotogramas_ ? fotograma_ <= cache.valido_hasta : cache.fotograma == fotograma_) &&
-          cache.generacion == generacion_texturas_ &&
+      if ((cache_between_frames_ ? frame_ <= cache.valid_until : cache.frame == frame_) &&
+          cache.generacion == textures_generation_ &&
           std::memcmp(cache.fetch.data(), fetch, sizeof(cache.fetch)) == 0) {
-        compartidas[cache.monton * 16 + sampler.registro] = cache.ranura;
-        compartidas[48 + sampler.registro] = cache.sampler;
-        EscribirInvTamano(compartidas, sampler.registro, cache.ancho, cache.alto);
-        EscribirEscala(compartidas, sampler.registro, cache.escala);
+        shared[cache.heap * 16 + sampler.reg_index] = cache.ranura;
+        shared[48 + sampler.reg_index] = cache.sampler;
+        WriteInvSize(shared, sampler.reg_index, cache.width_px, cache.height_px);
+        WriteScale(shared, sampler.reg_index, cache.scale);
         ++samplers_cache_;
         continue;
       }
-      uint32_t ranura_textura = 0;
-      uint32_t monton = 0;
+      uint32_t texture_slot = 0;
+      uint32_t heap = 0;
       uint32_t ranura_sampler = 0;
-      uint32_t ancho_host = 0, alto_host = 0;
-      float escala = 1.0f;
+      uint32_t host_width = 0, host_height = 0;
+      float scale = 1.0f;
       // Second cache, keyed by the whole fetch constant within the same frame and generation: a register
       // changes texture between draws, but textures repeat a lot within a frame, and PrepararTextura already
       // queued their upload the first time.
       CacheSampler& por_fetch =
           cache_fetch_[XXH3_64bits(fetch, sizeof(uint32_t) * 6) & (cache_fetch_.size() - 1)];
-      uint64_t valido_hasta = fotograma_;
-      if ((cache_entre_fotogramas_ ? fotograma_ <= por_fetch.valido_hasta : por_fetch.fotograma == fotograma_) &&
-          por_fetch.generacion == generacion_texturas_ &&
+      uint64_t valid_until = frame_;
+      if ((cache_between_frames_ ? frame_ <= por_fetch.valid_until : por_fetch.frame == frame_) &&
+          por_fetch.generacion == textures_generation_ &&
           std::memcmp(por_fetch.fetch.data(), fetch, sizeof(por_fetch.fetch)) == 0) {
-        ranura_textura = por_fetch.ranura;
-        monton = por_fetch.monton;
+        texture_slot = por_fetch.ranura;
+        heap = por_fetch.heap;
         ranura_sampler = por_fetch.sampler;
-        valido_hasta = por_fetch.valido_hasta;
-        ancho_host = por_fetch.ancho;
-        alto_host = por_fetch.alto;
-        escala = por_fetch.escala;
+        valid_until = por_fetch.valid_until;
+        host_width = por_fetch.width_px;
+        host_height = por_fetch.height_px;
+        scale = por_fetch.scale;
         ++samplers_cache_fetch_;
       } else {
         // Why the table misses ("C6 cache por fetch" report, every 10 s).
         if (std::memcmp(por_fetch.fetch.data(), fetch, sizeof(por_fetch.fetch)) != 0) {
-          ++(por_fetch.fotograma == UINT64_MAX ? fetch_fallos_vacia_ : fetch_fallos_choque_);
-        } else if (por_fetch.generacion != generacion_texturas_) {
-          ++fetch_fallos_generacion_;
+          ++(por_fetch.frame == UINT64_MAX ? empty_failures_fetch_ : collision_failures_fetch_);
+        } else if (por_fetch.generacion != textures_generation_) {
+          ++generation_failures_fetch_;
         } else {
-          ++fetch_fallos_caducada_;
+          ++expired_failures_fetch_;
         }
-        bool muestreo_puntual = false;
-        PrepararTextura(fetch, ranura_textura, monton, bytes_texturas, muestreo_puntual, valido_hasta,
-                        ancho_host, alto_host, escala);
-        ranura_sampler = RanuraSampler(fetch, muestreo_puntual);
-        por_fetch.fotograma = fotograma_;
-        por_fetch.generacion = generacion_texturas_;
+        bool point_sampling = false;
+        PrepareTexture(fetch, texture_slot, heap, textures_bytes, point_sampling, valid_until,
+                        host_width, host_height, scale);
+        ranura_sampler = RanuraSampler(fetch, point_sampling);
+        por_fetch.frame = frame_;
+        por_fetch.generacion = textures_generation_;
         std::memcpy(por_fetch.fetch.data(), fetch, sizeof(por_fetch.fetch));
-        por_fetch.ranura = ranura_textura;
-        por_fetch.monton = monton;
+        por_fetch.ranura = texture_slot;
+        por_fetch.heap = heap;
         por_fetch.sampler = ranura_sampler;
-        por_fetch.valido_hasta = valido_hasta;
-        por_fetch.ancho = ancho_host;
-        por_fetch.alto = alto_host;
-        por_fetch.escala = escala;
+        por_fetch.valid_until = valid_until;
+        por_fetch.width_px = host_width;
+        por_fetch.height_px = host_height;
+        por_fetch.scale = scale;
         // A depth requested without being sampled is not stored in the caches: the next draw that really
         // samples it has to go through TexturaResuelta, which is where it is recorded if it was deferred.
-        if (composicion_sin_desenfoque && muestreo_puntual) {
-          por_fetch.fotograma = 0;
-          por_fetch.valido_hasta = 0;
-          valido_hasta = 0;
-          sin_cache = true;
+        if (composition_without_blur && point_sampling) {
+          por_fetch.frame = 0;
+          por_fetch.valid_until = 0;
+          valid_until = 0;
+          without_cache = true;
         }
       }
-      compartidas[monton * 16 + sampler.registro] = ranura_textura;
-      compartidas[48 + sampler.registro] = ranura_sampler;
-      EscribirInvTamano(compartidas, sampler.registro, ancho_host, alto_host);
-      EscribirEscala(compartidas, sampler.registro, escala);
-      cache.fotograma = fotograma_;
-      cache.generacion = generacion_texturas_;
+      shared[heap * 16 + sampler.reg_index] = texture_slot;
+      shared[48 + sampler.reg_index] = ranura_sampler;
+      WriteInvSize(shared, sampler.reg_index, host_width, host_height);
+      WriteScale(shared, sampler.reg_index, scale);
+      cache.frame = frame_;
+      cache.generacion = textures_generation_;
       std::memcpy(cache.fetch.data(), fetch, sizeof(cache.fetch));
-      cache.ranura = ranura_textura;
-      cache.monton = monton;
+      cache.ranura = texture_slot;
+      cache.heap = heap;
       cache.sampler = ranura_sampler;
-      cache.valido_hasta = valido_hasta;
-      cache.ancho = ancho_host;
-      cache.alto = alto_host;
-      cache.escala = escala;
-      if (sin_cache) {
-        cache.fotograma = 0;  // with valido_hasta at 0 it is not valid across frames either
+      cache.valid_until = valid_until;
+      cache.width_px = host_width;
+      cache.height_px = host_height;
+      cache.scale = scale;
+      if (without_cache) {
+        cache.frame = 0;  // with valido_hasta at 0 it is not valid across frames either
       }
     }
-    if (composicion_sin_desenfoque) {
-      contexto_->LecturasDeProfundidadMuertas(false);
+    if (composition_without_blur) {
+      contexto_->DeadDepthReads(false);
     }
     /*
      * nfsmw_nativo_sombra_minimo. If this draw samples the shadow map texture with cars (the game's
@@ -2864,70 +2864,70 @@ class DibujosVulkanImpl final : public DibujosVulkan {
      * left. While C2 is observing, the pair is the texture itself (the same texel), so the pipelines with
      * the bit already exist when applying starts. Every read is reported to C2, which decides and watches.
      */
-    bool sombra_minimo_dibujo = false;
+    bool shadow_min_draw = false;
     if (ps && !ps->samplers.empty()) {
-      if (const uint32_t dir_coches = contexto_->DireccionSombraCoches()) {
+      if (const uint32_t cars_dir = contexto_->CarShadowAddress()) {
         for (const SamplerShader& s : ps->samplers) {
-          if (s.registro >= 16) {
+          if (s.reg_index >= 16) {
             continue;
           }
-          const uint32_t* f = r + kRegFetch + uint32_t(s.registro) * 6;
+          const uint32_t* f = r + kRegFetch + uint32_t(s.reg_index) * 6;
           if ((f[0] & 0x3) != uint32_t(xenos::FetchConstantType::kTexture) ||
-              (((f[1] >> 12) << 12) & 0x1FFFFFFF) != dir_coches) {
+              (((f[1] >> 12) << 12) & 0x1FFFFFFF) != cars_dir) {
             continue;
           }
-          const bool capaz = ps->sombra_minimo && s.mapa_sombras &&
+          const bool capable = ps->shadow_min && s.shadows_map &&
                              ((f[5] >> 9) & 0x3) == uint32_t(xenos::DataDimension::k2DOrStacked);
-          const ImagenNativa* pareja = contexto_->CompaneraSombraCoches(capaz, ps->numero);
-          if (!pareja) {
+          const NativeImage* shader_pair = contexto_->CarShadowCompanion(capable, ps->number);
+          if (!shader_pair) {
             continue;
           }
-          const uint32_t ranura_pareja =
-              RanuraVista(pareja->imagen, pareja->formato, (f[3] >> 1) & 0xFFF, kSwizzleRRRR);
-          if (!ranura_pareja) {
-            contexto_->CompaneraSombraCoches(false, ps->numero);  // no view, no minimum: C2 records it
+          const uint32_t pair_slot =
+              ViewSlot(shader_pair->img, shader_pair->format_id, (f[3] >> 1) & 0xFFF, kSwizzleRRRR);
+          if (!pair_slot) {
+            contexto_->CarShadowCompanion(false, ps->number);  // no view, no minimum: C2 records it
             continue;
           }
-          compartidas[16 + s.registro] = ranura_pareja;
-          sombra_minimo_dibujo = true;
+          shared[16 + s.reg_index] = pair_slot;
+          shadow_min_draw = true;
         }
       }
     }
 
-    if (cronometrar_) {  // C6 subetapas: the sampler loop inside the texturas stage
+    if (time_) {  // C6 subetapas: the sampler loop inside the texturas stage
       sub_ns_[14] += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
                                   std::chrono::steady_clock::now() - t_samplers)
                                   .count());
       ++sub_n_[14];
     }
-    Etapa(2, marca);
+    Stage(2, mark);
     // --- Upload buffer space ----------------------------------------------------------
     const VkDeviceSize bytes_indices =
-        indices_de_16 ? VkDeviceSize(indices16_.size()) * 2 : VkDeviceSize(indices_.size()) * 4;
+        indices16 ? VkDeviceSize(indices16_.size()) * 2 : VkDeviceSize(indices_.size()) * 4;
     // With a single binding the copy goes to a multiple of the stride: up to stride - 4 bytes of padding.
-    const VkDeviceSize hueco_base_cero =
-        vertices_base_cero_ && entrada->enlaces.size() == 1 ? VkDeviceSize(entrada->enlaces[0].zancada) : 0;
-    const VkDeviceSize necesarios = hueco_base_cero + bytes_vertices + bytes_indices + bytes_texturas +
-                                    2 * VkDeviceSize(kRegistrosConstantes) * 4 +
-                                    kPalabrasCompartidas * 4 + 64 * 8 +
+    const VkDeviceSize zero_base_slot =
+        zero_vertices_base_ && entry->bindings.size() == 1 ? VkDeviceSize(entry->bindings[0].stride_bytes) : 0;
+    const VkDeviceSize required = zero_base_slot + bytes_vertices + bytes_indices + textures_bytes +
+                                    2 * VkDeviceSize(kConstantsRegs) * 4 +
+                                    kSharedWords * 4 + 64 * 8 +
                                     // With UBOs the blocks go whole and aligned to alineacion_ubo_
-                                    (usar_ubo_ ? kUboBytesVs + kUboBytesPs + kUboBytesCompartidas +
-                                                     3 * alineacion_ubo_
+                                    (use_ubo_ ? kUboBytesVs + kUboBytesPs + kSharedUboBytes +
+                                                     3 * ubo_alignment_
                                                : 0);
-    if (necesarios > kTamanoSubida) {
-      return Rechazar(13, "dibujo mayor que el bufer de subida");
+    if (required > kUploadSize) {
+      return Reject(13, "dibujo mayor que el bufer de subida");
     }
-    const bool compartidas_llenas =
-        compartidas_aparte_ && usar_ubo_ &&
-        compartidas_usado_ + kUboBytesCompartidas + alineacion_ubo_ > kTamanoCompartidas;
-    if (subida_usado_ + necesarios > kTamanoSubida || compartidas_llenas) {
-      const auto antes_envio = std::chrono::steady_clock::now();
-      const bool enviado = contexto_->EnviarYEsperar();
-      ++envios_llenos_;
-      ns_envios_llenos_ += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                        std::chrono::steady_clock::now() - antes_envio)
+    const bool full_shared =
+        separately_shared_ && use_ubo_ &&
+        used_shared_ + kSharedUboBytes + ubo_alignment_ > kSharedSize;
+    if (used_upload_ + required > kUploadSize || full_shared) {
+      const auto before_send = std::chrono::steady_clock::now();
+      const bool sent = contexto_->SendAndWait();
+      ++full_sends_;
+      full_sends_ns_ += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                        std::chrono::steady_clock::now() - before_send)
                                         .count());
-      if (!enviado) {
+      if (!sent) {
         return false;
       }
     }
@@ -2939,153 +2939,153 @@ class DibujosVulkanImpl final : public DibujosVulkan {
      * Otherwise it is computed as usual: the pass change decision is the same as before in every case,
      * collisions included.
      */
-    uint64_t clave_pase;
-    if (clave_pase_rapida_ && pase_claves_validas_ && std::memcmp(claves, pase_claves_, sizeof(claves)) == 0) {
-      const uint64_t n = ++claves_pase_rapidas_;
-      clave_pase = (n <= kClavesPaseAComprobar || (n & 4095) == 0) ? ComprobarClavePase(claves, n) : pase_clave_;
+    uint64_t pass_key;
+    if (fast_pass_key_ && valid_keys_pass_ && std::memcmp(keys, keys_pass_, sizeof(keys)) == 0) {
+      const uint64_t n = ++fast_pass_keys_;
+      pass_key = (n <= kPassKeysToCheck || (n & 4095) == 0) ? CheckPassKey(keys, n) : key_pass_;
     } else {
-      clave_pase = XXH3_64bits(claves, sizeof(claves));
+      pass_key = XXH3_64bits(keys, sizeof(keys));
     }
-    if (!pase_activo_ || clave_pase != pase_clave_ ||
-        pase_generacion_ != contexto_->GeneracionComandos()) {
-      const auto antes_pase = std::chrono::steady_clock::now();
-      if (pase_generacion_ != contexto_->GeneracionComandos()) {
-        ++pases_por_generacion_;
-      } else if (!pase_activo_ && clave_pase == pase_clave_) {
-        ++pases_reanudados_;
+    if (!active_pass_ || pass_key != key_pass_ ||
+        generation_pass_ != contexto_->CommandsGeneration()) {
+      const auto before_pass = std::chrono::steady_clock::now();
+      if (generation_pass_ != contexto_->CommandsGeneration()) {
+        ++passes_per_generation_;
+      } else if (!active_pass_ && pass_key == key_pass_) {
+        ++resumed_passes_;
       } else {
-        ++pases_por_destino_;
+        ++passes_per_target_;
       }
-      TerminarPase();
+      FinishPass();
       // The pass change is split. TerminarPase closes the previous pass; EmpezarPase finds or creates the
       // render targets (it may create images, record barriers and clear them), builds the render pass and
       // the framebuffer, and opens the pass.
-      const auto tras_terminar = std::chrono::steady_clock::now();
-      if (cronometrar_) {
-        etapas_ns_[8] += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
-            tras_terminar - antes_pase).count());
+      const auto after_finish = std::chrono::steady_clock::now();
+      if (time_) {
+        stages_ns_[8] += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
+            after_finish - before_pass).count());
       }
-      const bool empezado = EmpezarPase(r, claves, pitch, clave_pase);
-      const auto tras_pase = std::chrono::steady_clock::now();
-      ns_pases_ += uint64_t(
-          std::chrono::duration_cast<std::chrono::nanoseconds>(tras_pase - antes_pase).count());
+      const bool started = StartPass(r, keys, pitch, pass_key);
+      const auto after_pass = std::chrono::steady_clock::now();
+      passes_ns_ += uint64_t(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(after_pass - before_pass).count());
       // The pass change, separate from what the stage costs on each draw.
-      if (cronometrar_) {
-        etapas_ns_[7] += uint64_t(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(tras_pase - antes_pase).count());
+      if (time_) {
+        stages_ns_[7] += uint64_t(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(after_pass - before_pass).count());
       }
-      if (!empezado) {
+      if (!started) {
         return false;
       }
     }
-    const VkCommandBuffer cmd = pase_comandos_;
-    if (grabacion_generacion_ != contexto_->GeneracionComandos()) {
-      grabacion_generacion_ = contexto_->GeneracionComandos();
-      pipeline_enlazado_ = VK_NULL_HANDLE;
-      eds_valido_ = false;  // phases 1 and 2: nothing is set in the new buffer
-      clave_enlazada_valida_ = false;  // New command buffer (ContarCambioPipeline)
-      sets_enlazados_ = false;
-      ubo_enlazado_ = false;
-      estado_grabado_ = false;
-      enlaces_grabados_ = 0;  // different command buffer: nothing is bound
+    const VkCommandBuffer cmd = commands_pass_;
+    if (generation_recording_ != contexto_->CommandsGeneration()) {
+      generation_recording_ = contexto_->CommandsGeneration();
+      bound_pipeline_ = VK_NULL_HANDLE;
+      eds_valid_ = false;  // phases 1 and 2: nothing is set in the new buffer
+      valid_bound_key_ = false;  // New command buffer (ContarCambioPipeline)
+      bound_sets_ = false;
+      bound_ubo_ = false;
+      recorded_state_ = false;
+      recorded_bindings_ = 0;  // different command buffer: nothing is bound
     }
 
-    Etapa(3, marca);
+    Stage(3, mark);
     // --- Uploads: textures, vertices, indices and constants ------------------------------
-    for (Textura* textura : texturas_a_subir_) {
-      if (!SubirTextura(*textura)) {
+    for (Texture* texture : textures_to_upload_) {
+      if (!UploadTexture(*texture)) {
         return false;
       }
     }
     std::array<VkDeviceSize, 16> offsets_vertices{};
     // If the guest has waited for the GPU since the last draw, it may legally have rewritten an already
     // referenced range: what was recorded is no longer valid.
-    if (dedupe_activo_) {
-      const uint32_t sinc = g_sincronizaciones_anillo.load(std::memory_order_relaxed);
-      if (sinc != dedupe_sinc_vista_) {
-        dedupe_sinc_vista_ = sinc;
-        dedupe_.Olvidar();
+    if (active_dedupe_) {
+      const uint32_t sync = g_ring_syncs.load(std::memory_order_relaxed);
+      if (sync != view_sync_dedupe_) {
+        view_sync_dedupe_ = sync;
+        dedupe_.Forget();
       }
     }
-    const auto antes_vertices =
-        cronometrar_ ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
-    for (size_t b = 0; b < entrada->enlaces.size(); ++b) {
-      const Origen& origen = origenes[b];
-      if (diag_vertices_repetidos_) {
-        AnotarVerticesRepetidos(origen.direccion, origen.bytes, uint32_t(origen.orden), origen.datos);
+    const auto before_vertices =
+        time_ ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    for (size_t b = 0; b < entry->bindings.size(); ++b) {
+      const VertexSource& src = sources[b];
+      if (diag_repeated_vertices_) {
+        TrackRepeatedVertices(src.address, src.bytes, uint32_t(src.orden), src.payload);
       }
       VkDeviceSize offset;
       // If this same range was already copied in this frame, its place in the upload buffer is reused and
       // nothing is copied. See native_vertex_dedupe.h.
-      if (dedupe_activo_ &&
-          dedupe_.Buscar(origen.direccion, origen.bytes, uint32_t(origen.orden), offset)) {
+      if (active_dedupe_ &&
+          dedupe_.Lookup(src.address, src.bytes, uint32_t(src.orden), offset)) {
         offsets_vertices[b] = offset;
         continue;
       }
       // With a single binding, at a multiple of its stride (nfsmw_nativo_vertices_base_cero).
-      if (vertices_base_cero_ && entrada->enlaces.size() == 1) {
-        ReservarMultiplo(origen.bytes, entrada->enlaces[0].zancada, offset);
+      if (zero_vertices_base_ && entry->bindings.size() == 1) {
+        ReserveMultiple(src.bytes, entry->bindings[0].stride_bytes, offset);
       } else {
-        Reservar(origen.bytes, 4, offset);
+        Reserve(src.bytes, 4, offset);
       }
-      const TrabajoCopia trabajo{origen.datos, subida_datos_ + offset, origen.bytes / 4, origen.orden};
-      if (!copias_activas_ || !EncolarCopia(trabajo)) {
-        CopiarVertices(trabajo);
+      const CopyJob job{src.payload, data_upload_ + offset, src.bytes / 4, src.orden};
+      if (!active_copies_ || !EnqueueCopy(job)) {
+        CopyVertices(job);
       }
-      bytes_vertices_ += origen.bytes;
+      bytes_vertices_ += src.bytes;
       offsets_vertices[b] = offset;
-      if (dedupe_activo_) {
-        dedupe_.Anotar(origen.direccion, origen.bytes, uint32_t(origen.orden), offset);
+      if (active_dedupe_) {
+        dedupe_.Track(src.address, src.bytes, uint32_t(src.orden), offset);
       }
     }
-    if (cronometrar_) {
+    if (time_) {
       ns_vertices_ += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                   std::chrono::steady_clock::now() - antes_vertices)
+                                   std::chrono::steady_clock::now() - before_vertices)
                                    .count());
     }
     VkDeviceSize offset_indices = 0;
-    if (con_indices) {
-      Reservar(bytes_indices, 4, offset_indices);
-      bytes_indices_subidos_ += bytes_indices;
-      std::memcpy(subida_datos_ + offset_indices,
-                  indices_de_16 ? static_cast<const void*>(indices16_.data())
+    if (with_indices) {
+      Reserve(bytes_indices, 4, offset_indices);
+      uploaded_indices_bytes_ += bytes_indices;
+      std::memcpy(data_upload_ + offset_indices,
+                  indices16 ? static_cast<const void*>(indices16_.data())
                                 : static_cast<const void*>(indices_.data()),
                   size_t(bytes_indices));
     }
     // Only the registers each shader reads (EntradaShader::constantes_bytes). With the same generation, the
     // copy is reused if it already covers what this shader needs.
-    const uint32_t bytes_vs = std::min<uint32_t>(p.vs->constantes_bytes, kRegistrosConstantes * 4);
+    const uint32_t bytes_vs = std::min<uint32_t>(p.vs->constantes_bytes, kConstantsRegs * 4);
     if (constantes_vs_generacion_ != p.generacion_constantes_vs ||
-        constantes_vs_epoca_ != epoca_subida_ || bytes_vs > constantes_vs_bytes_) {
+        epoch_vs_constants_ != upload_epoch_ || bytes_vs > constantes_vs_bytes_) {
       // Why they are uploaded again (measurement only; each upload is another set 4 offset).
-      ++resubidas_vs_[constantes_vs_generacion_ != p.generacion_constantes_vs ? 0
-                      : constantes_vs_epoca_ != epoca_subida_                 ? 1
+      ++vs_reuploaded_[constantes_vs_generacion_ != p.generacion_constantes_vs ? 0
+                      : epoch_vs_constants_ != upload_epoch_                 ? 1
                                                                               : 2];
       // With UBOs the block goes whole (the driver may read the full range) and aligned to the device minimum
-      Reservar(usar_ubo_ ? std::max<VkDeviceSize>(bytes_vs, kUboBytesVs) : bytes_vs, usar_ubo_ ? alineacion_ubo_ : 16,
+      Reserve(use_ubo_ ? std::max<VkDeviceSize>(bytes_vs, kUboBytesVs) : bytes_vs, use_ubo_ ? ubo_alignment_ : 16,
                constantes_vs_offset_);
-      std::memcpy(subida_datos_ + constantes_vs_offset_, r + kRegConstantesVs, bytes_vs);
+      std::memcpy(data_upload_ + constantes_vs_offset_, r + kRegConstantesVs, bytes_vs);
       constantes_vs_generacion_ = p.generacion_constantes_vs;
-      constantes_vs_epoca_ = epoca_subida_;
+      epoch_vs_constants_ = upload_epoch_;
       constantes_vs_bytes_ = bytes_vs;
     }
     const uint32_t bytes_ps =
-        ps ? std::min<uint32_t>(ps->constantes_bytes, kRegistrosConstantes * 4) : 0;
+        ps ? std::min<uint32_t>(ps->constantes_bytes, kConstantsRegs * 4) : 0;
     if (ps && (constantes_ps_generacion_ != p.generacion_constantes_ps ||
-               constantes_ps_epoca_ != epoca_subida_ || bytes_ps > constantes_ps_bytes_)) {
-      ++resubidas_ps_[constantes_ps_generacion_ != p.generacion_constantes_ps ? 0
-                      : constantes_ps_epoca_ != epoca_subida_                 ? 1
+               epoch_ps_constants_ != upload_epoch_ || bytes_ps > constantes_ps_bytes_)) {
+      ++ps_reuploaded_[constantes_ps_generacion_ != p.generacion_constantes_ps ? 0
+                      : epoch_ps_constants_ != upload_epoch_                 ? 1
                                                                               : 2];
-      Reservar(usar_ubo_ ? std::max<VkDeviceSize>(bytes_ps, kUboBytesPs) : bytes_ps, usar_ubo_ ? alineacion_ubo_ : 16,
+      Reserve(use_ubo_ ? std::max<VkDeviceSize>(bytes_ps, kUboBytesPs) : bytes_ps, use_ubo_ ? ubo_alignment_ : 16,
                constantes_ps_offset_);
-      std::memcpy(subida_datos_ + constantes_ps_offset_, r + kRegConstantesPs, bytes_ps);
+      std::memcpy(data_upload_ + constantes_ps_offset_, r + kRegConstantesPs, bytes_ps);
       constantes_ps_generacion_ = p.generacion_constantes_ps;
-      constantes_ps_epoca_ = epoca_subida_;
+      epoch_ps_constants_ = upload_epoch_;
       constantes_ps_bytes_ = bytes_ps;
     }
-    CopiaComposicionTratada(ps, r, bytes_ps);  // nfsmw_tratamiento_visual (see the function)
+    TreatedCompositionCopy(ps, r, bytes_ps);  // nfsmw_tratamiento_visual (see the function)
 
-    Etapa(4, marca);
+    Stage(4, mark);
     // --- Viewport, tijera y constantes compartidas ---------------------------------------
     /*
      * The framing (viewport, ndc and scissor), cached (nfsmw_nativo_encuadre_cache).
@@ -3100,61 +3100,61 @@ class DibujosVulkanImpl final : public DibujosVulkan {
     const uint32_t vte = r[gr::XE_GPU_REG_PA_CL_VTE_CNTL];
     VkViewport viewport{};
     float ndc[4] = {1.0f, 1.0f, 0.0f, 0.0f};
-    VkRect2D tijera{};
-    uint32_t encuadre_vacio = 0;
-    const bool encuadre_en_cache = encuadre_cache_ && encuadre_valido_ &&
-                                   p.generacion_encuadre == encuadre_generacion_ && pase_serie_ == encuadre_pase_serie_;
-    bool comprobar_encuadre = false;
-    if (encuadre_en_cache) {
-      const uint64_t n = ++encuadre_aciertos_;
-      comprobar_encuadre = n <= kEncuadresAComprobar || (n & 4095) == 0;
-      ++encuadre_aciertos_informe_;
+    VkRect2D scissor{};
+    uint32_t framing_empty = 0;
+    const bool framing_in_cache = framing_cache_ && framing_valid_ &&
+                                   p.framing_generation == generation_framing_ && series_pass_ == framing_series_pass_;
+    bool check_framing = false;
+    if (framing_in_cache) {
+      const uint64_t n = ++framing_hits_;
+      check_framing = n <= kFramingsToCheck || (n & 4095) == 0;
+      ++framing_hits_report_;
     }
-    if (encuadre_en_cache && !comprobar_encuadre) {
-      viewport = encuadre_viewport_;
-      std::memcpy(ndc, encuadre_ndc_, sizeof(ndc));
-      tijera = encuadre_tijera_;
-      encuadre_vacio = encuadre_vacio_;
+    if (framing_in_cache && !check_framing) {
+      viewport = framing_viewport_;
+      std::memcpy(ndc, framing_ndc_, sizeof(ndc));
+      scissor = framing_scissor_;
+      framing_empty = framing_empty_;
     } else {
-      encuadre_vacio = CalcularEncuadre(r, vte, sin_recorte, modo_sc, viewport, ndc, tijera);
-      ++encuadre_calculos_informe_;
-      if (comprobar_encuadre) {
-        CompararEncuadre(viewport, ndc, tijera, encuadre_vacio);  // with the stored values, before overwriting them
+      framing_empty = ComputeFraming(r, vte, without_clip, sc_mode, viewport, ndc, scissor);
+      ++framing_calculations_report_;
+      if (check_framing) {
+        CompareFraming(viewport, ndc, scissor, framing_empty);  // with the stored values, before overwriting them
       }
-      encuadre_viewport_ = viewport;
-      std::memcpy(encuadre_ndc_, ndc, sizeof(ndc));
-      encuadre_tijera_ = tijera;
-      encuadre_vacio_ = encuadre_vacio;
-      encuadre_generacion_ = p.generacion_encuadre;
-      encuadre_pase_serie_ = pase_serie_;
-      encuadre_valido_ = true;
+      framing_viewport_ = viewport;
+      std::memcpy(framing_ndc_, ndc, sizeof(ndc));
+      framing_scissor_ = scissor;
+      framing_empty_ = framing_empty;
+      generation_framing_ = p.framing_generation;
+      framing_series_pass_ = series_pass_;
+      framing_valid_ = true;
     }
-    if (encuadre_vacio != 0) {
+    if (framing_empty != 0) {
       return true;  // empty viewport or scissor: as before
     }
 
-    uint32_t especializacion = entrada->especializacion;
-    if (composicion_sin_desenfoque) {  // the same value that decided the textures
-      especializacion |= kSpecSinDesenfoque;
+    uint32_t specialization = entry->specialization;
+    if (composition_without_blur) {  // the same value that decided the textures
+      specialization |= kSpecWithoutBlur;
     }
-#ifndef NFSMW_SIN_VARIANTES_RESPLANDOR
-    if (ps && ps->shader && ps->shader->huella == kHuellaBrightPass) {
-      const int modo = ResplandorCielo();
-      especializacion |= modo == 1 ? kSpecResplandorNatural : modo == 2 ? kSpecResplandorSuave : 0;
+#ifndef NFSMW_NO_GLOW_VARIANTS
+    if (ps && ps->shader && ps->shader->fingerprint == kBrightPassFingerprint) {
+      const int mode = GlowSky();
+      specialization |= mode == 1 ? kSpecGlowNatural : mode == 2 ? kSpecGlowSmooth : 0;
     }
 #endif
     const uint32_t control_color = r[gr::XE_GPU_REG_RB_COLORCONTROL];
-    float umbral_alfa = 0.0f;
-    uint32_t funcion_alfa = 7;  // always
+    float alpha_threshold = 0.0f;
+    uint32_t alpha_function = 7;  // always
     // The 8 Xenos functions (0 never, 1 <, 2 ==, 3 <=, 4 >, 5 !=, 6 >=, 7 always) with alphaTestValue
     // (nfsmw_validado_normales library). Without a PS (mode 5) there is no test.
     if (ps && ((control_color >> 3) & 0x1) && (control_color & 0x7) != 7) {
-      umbral_alfa = Flotante(r[gr::XE_GPU_REG_RB_ALPHA_REF]);
-      funcion_alfa = control_color & 0x7;
-      especializacion |= 0x2;
+      alpha_threshold = Float(r[gr::XE_GPU_REG_RB_ALPHA_REF]);
+      alpha_function = control_color & 0x7;
+      specialization |= 0x2;
       // The function goes in the pipeline, not in the constants. RB_COLORCONTROL was already part of the key,
       // so this creates no pipelines that did not already exist.
-      especializacion |= (funcion_alfa & 0x7u) << kSpecFuncionAlfaDesplazamiento;
+      specialization |= (alpha_function & 0x7u) << kSpecOffsetAlphaFunction;
     }
     // AirborneNX: 7e3 render targets are RGBA16F on the host. The PS applies the 7e3 range to the outputs
     // that go to them (salida7e3 in shader_common.h: RGB in [0, 31.875], alpha in 2 bits), or the 16-bit
@@ -3162,30 +3162,30 @@ class DibujosVulkanImpl final : public DibujosVulkan {
     if (ps && REXCVAR_GET(airborne_salida_7e3)) {
       static constexpr uint32_t kInfoColor7e3[4] = {gr::XE_GPU_REG_RB_COLOR_INFO, gr::XE_GPU_REG_RB_COLOR1_INFO,
                                                     gr::XE_GPU_REG_RB_COLOR2_INFO, gr::XE_GPU_REG_RB_COLOR3_INFO};
-      static constexpr uint32_t kSpecSalida7e3[4] = {uint32_t(1) << 5, uint32_t(1) << 6, uint32_t(1) << 7,
+      static constexpr uint32_t kSpecE3Output7[4] = {uint32_t(1) << 5, uint32_t(1) << 6, uint32_t(1) << 7,
                                                      uint32_t(1) << 10};
-      const uint32_t mascara_color = r[gr::XE_GPU_REG_RB_COLOR_MASK];
+      const uint32_t color_mask = r[gr::XE_GPU_REG_RB_COLOR_MASK];
       for (uint32_t i = 0; i < 4; ++i) {
-        const uint32_t formato = (r[kInfoColor7e3[i]] >> 16) & 0xF;
+        const uint32_t format_id = (r[kInfoColor7e3[i]] >> 16) & 0xF;
         // Only the real 7e3 format: k_2_10_10_10_FLOAT_AS_16_16_16_16 keeps 16 bits per channel in EDRAM (the
         // emulation shows UE3's scene depth, ~8500, surviving in its alpha).
-        if (((mascara_color >> (i * 4)) & 0xF) &&
-            formato == uint32_t(xenos::ColorRenderTargetFormat::k_2_10_10_10_FLOAT)) {
-          especializacion |= kSpecSalida7e3[i];
+        if (((color_mask >> (i * 4)) & 0xF) &&
+            format_id == uint32_t(xenos::ColorRenderTargetFormat::k_2_10_10_10_FLOAT)) {
+          specialization |= kSpecE3Output7[i];
         }
       }
     }
-    compartidas[64] = (r[kRegBooleanos] & 0xFFFF) | ((r[kRegBooleanos + 4] & 0xFFFF) << 16);
-    compartidas[65] = 0;  // g_SwappedTexcoords
+    shared[64] = (r[kRegBools] & 0xFFFF) | ((r[kRegBools + 4] & 0xFFFF) << 16);
+    shared[65] = 0;  // g_SwappedTexcoords
     if (!(r[gr::XE_GPU_REG_PA_SU_VTX_CNTL] & 0x1)) {  // PixelCenter::kD3DZero
       const float medio[2] = {1.0f / viewport.width, -1.0f / std::abs(viewport.height)};
-      std::memcpy(&compartidas[66], medio, sizeof(medio));
+      std::memcpy(&shared[66], medio, sizeof(medio));
     }
-    std::memcpy(&compartidas[68], &umbral_alfa, sizeof(umbral_alfa));
-    compartidas[69] = funcion_alfa;  // g_AlphaFunction
-    std::memcpy(&compartidas[70], ndc, sizeof(ndc));
-    std::copy(entrada->remapeos.begin(), entrada->remapeos.end(), compartidas + 74);
-    VkDeviceSize offset_compartidas;
+    std::memcpy(&shared[68], &alpha_threshold, sizeof(alpha_threshold));
+    shared[69] = alpha_function;  // g_AlphaFunction
+    std::memcpy(&shared[70], ndc, sizeof(ndc));
+    std::copy(entry->remaps.begin(), entry->remaps.end(), shared + 74);
+    VkDeviceSize shared_offset;
     /*
      * How many draws really change the shared constants.
      *
@@ -3197,56 +3197,56 @@ class DibujosVulkanImpl final : public DibujosVulkan {
      * waste; if almost all do, the double memcpy is. They are two different fixes, and counting costs one
      * increment.
      */
-    ++compartidas_miradas_;
-    const auto t_compartidas =
-        cronometrar_ ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
-    if (compartidas_epoca_ == epoca_subida_ &&
-        std::memcmp(compartidas, compartidas_previas_, sizeof(compartidas)) == 0) {
-      offset_compartidas = compartidas_offset_;  // the same as the previous draw
+    ++peeked_shared_;
+    const auto t_shared =
+        time_ ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    if (epoch_shared_ == upload_epoch_ &&
+        std::memcmp(shared, shared_previous_, sizeof(shared)) == 0) {
+      shared_offset = offset_shared_;  // the same as the previous draw
     } else {
-      ++compartidas_cambiadas_;
-      if (compartidas_aparte_ && usar_ubo_) {
+      ++changed_shared_;
+      if (separately_shared_ && use_ubo_) {
         // To the separate CPU-cached buffer; binding 2 of set 4 points to it.
-        offset_compartidas = (compartidas_usado_ + alineacion_ubo_ - 1) & ~(alineacion_ubo_ - 1);
-        compartidas_usado_ = offset_compartidas + kUboBytesCompartidas;
-        std::memcpy(compartidas_datos_ + offset_compartidas, compartidas, sizeof(compartidas));
+        shared_offset = (used_shared_ + ubo_alignment_ - 1) & ~(ubo_alignment_ - 1);
+        used_shared_ = shared_offset + kSharedUboBytes;
+        std::memcpy(data_shared_ + shared_offset, shared, sizeof(shared));
       } else {
-        Reservar(usar_ubo_ ? kUboBytesCompartidas : kPalabrasCompartidas * 4, usar_ubo_ ? alineacion_ubo_ : 16,
-                 offset_compartidas);
-        std::memcpy(subida_datos_ + offset_compartidas, compartidas, sizeof(compartidas));
+        Reserve(use_ubo_ ? kSharedUboBytes : kSharedWords * 4, use_ubo_ ? ubo_alignment_ : 16,
+                 shared_offset);
+        std::memcpy(data_upload_ + shared_offset, shared, sizeof(shared));
       }
-      std::memcpy(compartidas_previas_, compartidas, sizeof(compartidas));
-      compartidas_offset_ = offset_compartidas;
-      compartidas_epoca_ = epoca_subida_;
+      std::memcpy(shared_previous_, shared, sizeof(shared));
+      offset_shared_ = shared_offset;
+      epoch_shared_ = upload_epoch_;
     }
-    if (cronometrar_) {
+    if (time_) {
       sub_ns_[12] += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                  std::chrono::steady_clock::now() - t_compartidas)
+                                  std::chrono::steady_clock::now() - t_shared)
                                   .count());
       ++sub_n_[12];
     }
 
     // --- Pipeline ---------------------------------------------------------------------------
-    ClavePipeline clave;
-    clave.vs = p.vs->numero + 1;
-    clave.ps = ps ? ps->numero + 1 : 0;  // 0: mode 5, no fragment stage
-    clave.entrada = entrada->huella;
-    clave.topologia = uint32_t(topologia);
-    if (usar_ubo_) {
-      especializacion |= kSpecConstantesUbo;  // the shaders read from set 4
+    PipelineKey key;
+    key.vs = p.vs->number + 1;
+    key.ps = ps ? ps->number + 1 : 0;  // 0: mode 5, no fragment stage
+    key.entry = entry->fingerprint;
+    key.topo = uint32_t(topo);
+    if (use_ubo_) {
+      specialization |= kSpecConstantesUbo;  // the shaders read from set 4
     }
-    if (inv_tamano_tex_) {
-      especializacion |= kSpecInvTamanoTex;
+    if (tex_size_inv_) {
+      specialization |= kSpecTexSizeInv;
     }
-    if (pcf_barato_) {
-      especializacion |= kSpecPcfBarato;
+    if (cheap_pcf_) {
+      specialization |= kSpecCheapPcf;
     }
-    if (solo_alfa && ps) {
+    if (only_alpha && ps) {
       // If vegetation is excluded from the shadow map, this whole draw is unnecessary.
-      if (sin_vegetacion_) {
+      if (without_vegetation_) {
         return true;
       }
-      especializacion |= kSpecSoloAlfa;
+      specialization |= kSpecOnlyAlpha;
     }
     /*
      * Test depth before shading where it costs nothing.
@@ -3261,33 +3261,33 @@ class DibujosVulkanImpl final : public DibujosVulkan {
      * test, and the "NO se pueden porque escriben profundidad" line measures exactly what a depth pre-pass
      * would have to fix.
      */
-    if (ps && claves[4] && mascaras) {
-      const bool prueba_z = ((control_profundidad >> 1) & 0x1) != 0;
-      const bool escribe_z = prueba_z && ((control_profundidad >> 2) & 0x1) != 0;
-      const bool estencil = (control_profundidad & 0x1) != 0;
-      const bool ps_escribe_z = (ps->salidas & 0x10) != 0;
-      const bool tardio = (especializacion & 0x2) || ps->descarta || ps_escribe_z;
-      if (!prueba_z) {
+    if (ps && keys[4] && masks) {
+      const bool test_z = ((depth_control >> 1) & 0x1) != 0;
+      const bool write_z = test_z && ((depth_control >> 2) & 0x1) != 0;
+      const bool stencil_state = (depth_control & 0x1) != 0;
+      const bool write_z_ps = (ps->outputs & 0x10) != 0;
+      const bool late_one = (specialization & 0x2) || ps->discards || write_z_ps;
+      if (!test_z) {
         // Without a depth test there is nothing to move earlier.
-      } else if (!tardio) {
-        ++cuentas_z_[kZYaTemprano];
-      } else if (escribe_z || ps_escribe_z) {
-        ++cuentas_z_[kZEscribeZ];
-      } else if (estencil) {
-        ++cuentas_z_[kZEstencil];
-      } else if (oclusion_abierta_) {
-        ++cuentas_z_[kZOclusion];  // the game reads those samples: leave it alone
-      } else if (ps->shader && ps->shader->huella != kHuellaBrightPass &&
-                 ps->shader->huella != kHuellaComposicion) {
-        ++cuentas_z_[kZPuesta];
-        if (z_temprana_) {
-          especializacion |= kSpecZTemprana;
+      } else if (!late_one) {
+        ++counts_z_[kZEarlyAlready];
+      } else if (write_z || write_z_ps) {
+        ++counts_z_[kZWriteZ];
+      } else if (stencil_state) {
+        ++counts_z_[kZStencil];
+      } else if (open_occlusion_) {
+        ++counts_z_[kZOclusion];  // the game reads those samples: leave it alone
+      } else if (ps->shader && ps->shader->fingerprint != kBrightPassFingerprint &&
+                 ps->shader->fingerprint != kCompositionFingerprint) {
+        ++counts_z_[kZSet];
+        if (z_early_) {
+          specialization |= kSpecZEarly;
         }
       }
     }
     // nfsmw_nativo_sombra_minimo. The shadow map pair bit (see above, textures).
-    if (sombra_minimo_dibujo) {
-      especializacion |= kSpecSombraMinimo;
+    if (shadow_min_draw) {
+      specialization |= kSpecShadowMin;
     }
     /*
      * nfsmw_nativo_sombra_minimo. In the car pass of the shadow map, C2 needs to know whether this draw
@@ -3295,49 +3295,49 @@ class DibujosVulkanImpl final : public DibujosVulkan {
      * occlusion query and, if it writes Z, a NEVER, LESS or LEQUAL test. The game's register
      * (RB_DEPTHCONTROL) is checked, not the pipeline key. EmpezarPase checks that the pass is depth-only.
      */
-    if (pase_coches_sombra_) {
-      const uint32_t control_z_coches = claves[4] ? control_profundidad : 0;
-      const bool escribe_z_coches = ((control_z_coches >> 1) & 0x1) && ((control_z_coches >> 2) & 0x1);
-      const uint32_t funcion_z_coches = (control_z_coches >> 4) & 0x7;
-      contexto_->DibujoDeCochesSombra(!(control_z_coches & 0x1) && !oclusion_abierta_ &&
-                                          (!escribe_z_coches || funcion_z_coches == 0 || funcion_z_coches == 1 ||
-                                           funcion_z_coches == 3),
-                                      control_z_coches);
+    if (shadow_cars_pass_) {
+      const uint32_t cars_control_z = keys[4] ? depth_control : 0;
+      const bool cars_write_z = ((cars_control_z >> 1) & 0x1) && ((cars_control_z >> 2) & 0x1);
+      const uint32_t cars_function_z = (cars_control_z >> 4) & 0x7;
+      contexto_->CarShadowDraw(!(cars_control_z & 0x1) && !open_occlusion_ &&
+                                          (!cars_write_z || cars_function_z == 0 || cars_function_z == 1 ||
+                                           cars_function_z == 3),
+                                      cars_control_z);
     }
-    clave.especializacion = especializacion;
-    std::copy(std::begin(pase_formatos_), std::end(pase_formatos_), std::begin(clave.formatos));
-    static constexpr uint32_t kMezcla[4] = {
+    key.specialization = specialization;
+    std::copy(std::begin(formats_pass_), std::end(formats_pass_), std::begin(key.formats));
+    static constexpr uint32_t kBlend[4] = {
         gr::XE_GPU_REG_RB_BLENDCONTROL0, gr::XE_GPU_REG_RB_BLENDCONTROL1,
         gr::XE_GPU_REG_RB_BLENDCONTROL2, gr::XE_GPU_REG_RB_BLENDCONTROL3};
     for (uint32_t i = 0; i < 4; ++i) {
-      if (claves[i]) {
-        clave.mezcla[i] = r[kMezcla[i]] & 0x1FFF1FFF;
+      if (keys[i]) {
+        key.blend[i] = r[kBlend[i]] & 0x1FFF1FFF;
       }
     }
-    clave.mascaras = mascaras;
-    clave.profundidad = claves[4] ? control_profundidad : 0;
-    if (clave.profundidad && oclusion_abierta_ && pitch >= 640 && !mascaras &&
+    key.masks = masks;
+    key.depth_value = keys[4] ? depth_control : 0;
+    if (key.depth_value && open_occlusion_ && pitch >= 640 && !masks &&
         REXCVAR_GET(nfsmw_nativo_prueba_oclusion_siempre)) {
-      clave.profundidad |= 0x7 << 4;  // test: Z function always
+      key.depth_value |= 0x7 << 4;  // test: Z function always
     }
-    clave.rasterizado = (modo_sc & 0x7) | (reinicio ? 0x8 : 0) | (con_sesgo ? 0x10 : 0);
+    key.rasterizado = (sc_mode & 0x7) | (restart_flag ? 0x8 : 0) | (with_bias ? 0x10 : 0);
     VkPipeline pipeline = VK_NULL_HANDLE;
     // Looked up with ClaveDeBusqueda (phase 0a: canonical form; phases 1 and 2: without the state set through
     // vkCmdSet*). clave stays raw: the deferred sky (opaco_en_todos), the counter and the dynamic state read
     // it.
-    NFSMW_SUB(11, pipeline = PipelineDe(ClaveDeBusqueda(clave), *entrada, p));
+    NFSMW_SUB(11, pipeline = PipelineDe(SearchKey(key), *entry, p));
     if (pipeline == VK_NULL_HANDLE) {
       return false;
     }
 #if REX_PLATFORM_SWITCH
     // The pipeline about to be bound, prefetched into the cache several us before its vkCmdBindPipeline
     // (Mesa patch p06; PRFM only: it reads and writes nothing and cannot fail).
-    if (nvk_precarga_app_ && pipeline != pipeline_enlazado_ && vk_switch_precargar_pipeline) {
+    if (nvk_app_preload_ && pipeline != bound_pipeline_ && vk_switch_precargar_pipeline) {
       vk_switch_precargar_pipeline(pipeline);
     }
 #endif
 
-    Etapa(5, marca);
+    Stage(5, mark);
     /*
      * The three dynamic state values that used to be computed inside the recording block are computed here,
      * without recording anything. They are pure computations on the draw's registers; they are needed
@@ -3345,35 +3345,35 @@ class DibujosVulkanImpl final : public DibujosVulkan {
      */
     // Scissor test. All the state and the draw are sent as usual; the only change is that there are no
     // pixels to shade. It breaks the image: only for measuring the per-draw floor.
-    VkRect2D tijera_final = tijera;
-    if (const uint32_t categoria_tijera = tijera_prueba_; categoria_tijera != 0) {
-      const uint32_t categoria = CategoriaDeDestino(pitch, claves);
-      static constexpr uint32_t kCategoriaDe[5] = {0, kGpuSombras, kGpuEscena, kGpu320,
-                                                   kGpuEscenaSinProfundidad};
-      if (categoria_tijera <= 4 && categoria == kCategoriaDe[categoria_tijera]) {
-        tijera_final.extent = {1, 1};
+    VkRect2D final_scissor = scissor;
+    if (const uint32_t scissor_category = test_scissor_; scissor_category != 0) {
+      const uint32_t category = TargetCategory(pitch, keys);
+      static constexpr uint32_t kCategoryOf[5] = {0, kGpuShadows, kGpuScene, kGpu320,
+                                                   kGpuSceneWithoutDepth};
+      if (scissor_category <= 4 && category == kCategoryOf[scissor_category]) {
+        final_scissor.extent = {1, 1};
       }
     }
     /*
      * Record how far down the game draws in this render target. It only grows, so the pass is never opened
      * smaller than what has already been seen drawn.
      */
-    if (area_util_) {
-      const uint32_t hasta = uint32_t(std::max(0, tijera.offset.y + int32_t(tijera.extent.height)));
+    if (usable_area_) {
+      const uint32_t hasta = uint32_t(std::max(0, scissor.offset.y + int32_t(scissor.extent.height)));
       const uint32_t redondeado = (hasta + 63u) & ~63u;
-      uint32_t& apuntado = AltoUtilDe(pitch);  // without a map lookup on every draw
-      if (redondeado > apuntado) {
-        apuntado = redondeado;
+      uint32_t& pointed_at = UsableHeightOf(pitch);  // without a map lookup on every draw
+      if (redondeado > pointed_at) {
+        pointed_at = redondeado;
       }
     }
-    const float mezcla_constante[4] = {Flotante(r[gr::XE_GPU_REG_RB_BLEND_RED]),
-                                       Flotante(r[gr::XE_GPU_REG_RB_BLEND_GREEN]),
-                                       Flotante(r[gr::XE_GPU_REG_RB_BLEND_BLUE]),
-                                       Flotante(r[gr::XE_GPU_REG_RB_BLEND_ALPHA])};
-    const uint32_t stencil_frente = r[gr::XE_GPU_REG_RB_STENCILREFMASK];
-    const uint32_t stencil_dorso = ((control_profundidad >> 7) & 0x1)
+    const float constant_blend[4] = {Float(r[gr::XE_GPU_REG_RB_BLEND_RED]),
+                                       Float(r[gr::XE_GPU_REG_RB_BLEND_GREEN]),
+                                       Float(r[gr::XE_GPU_REG_RB_BLEND_BLUE]),
+                                       Float(r[gr::XE_GPU_REG_RB_BLEND_ALPHA])};
+    const uint32_t front_stencil = r[gr::XE_GPU_REG_RB_STENCILREFMASK];
+    const uint32_t back_stencil = ((depth_control >> 7) & 0x1)
                                        ? r[gr::XE_GPU_REG_RB_STENCILREFMASK_BF]
-                                       : stencil_frente;
+                                       : front_stencil;
     /*
      * The sky, deferred until after the opaque draws (nfsmw_nativo_cielo_aplazado).
      *
@@ -3398,35 +3398,35 @@ class DibujosVulkanImpl final : public DibujosVulkan {
      * would change the count (the same guard the early Z uses).
      */
     // A draw with no color to write does not read the target: it does not count as transparent.
-    bool opaco_en_todos = true;
-    for (uint32_t i = 0; i < 4 && opaco_en_todos; ++i) {
-      const uint32_t mascara_i = (mascaras >> (i * 4)) & 0xF;
-      if (!mascara_i) {
+    bool opaque_in_all = true;
+    for (uint32_t i = 0; i < 4 && opaque_in_all; ++i) {
+      const uint32_t mask_i = (masks >> (i * 4)) & 0xF;
+      if (!mask_i) {
         continue;
       }
-      const uint32_t m = clave.mezcla[i];
-      const bool color_directo = (m & 0x1F) == 1 && ((m >> 8) & 0x1F) == 0 && ((m >> 5) & 0x7) == 0;
-      const bool alfa_directo =
+      const uint32_t m = key.blend[i];
+      const bool direct_color = (m & 0x1F) == 1 && ((m >> 8) & 0x1F) == 0 && ((m >> 5) & 0x7) == 0;
+      const bool direct_alpha =
           ((m >> 16) & 0x1F) == 1 && ((m >> 24) & 0x1F) == 0 && ((m >> 21) & 0x7) == 0;
-      const bool mezcla_encendida =
-          (((mascara_i & 0x7) != 0) && !color_directo) || (((mascara_i & 0x8) != 0) && !alfa_directo);
-      if (mezcla_encendida) {
-        opaco_en_todos = false;
+      const bool blend_enabled =
+          (((mask_i & 0x7) != 0) && !direct_color) || (((mask_i & 0x8) != 0) && !direct_alpha);
+      if (blend_enabled) {
+        opaque_in_all = false;
       }
     }
-    const bool prueba_z_dibujo = ((control_profundidad >> 1) & 0x1) != 0;
-    const bool escribe_z_dibujo = prueba_z_dibujo && ((control_profundidad >> 2) & 0x1) != 0 &&
-                                  claves[4] != 0;
-    bool es_cielo = false;
-    if (ps && ps->shader && ps->shader->huella == kHuellaCielo && mascaras) {
-      ++cielo_vistos_;
-      const bool estencil = (control_profundidad & 0x1) != 0;
+    const bool draw_test_z = ((depth_control >> 1) & 0x1) != 0;
+    const bool draw_write_z = draw_test_z && ((depth_control >> 2) & 0x1) != 0 &&
+                                  keys[4] != 0;
+    bool is_sky = false;
+    if (ps && ps->shader && ps->shader->fingerprint == kSkyFingerprint && masks) {
+      ++sky_seen_;
+      const bool stencil_state = (depth_control & 0x1) != 0;
       /*
        * Scene pass only. The same dome is also drawn in the car's cubemap and in the reflection, and there it
        * is not touched: the rear-view mirror works and is left alone, and the measured saving (4.8 of the
        * scene's 19.2 ms) is the scene's. This line is what keeps the cubemap out of it.
        */
-      const bool en_la_escena = CategoriaDeDestino(pitch, claves) == kGpuEscena;
+      const bool in_scene = TargetCategory(pitch, keys) == kGpuScene;
       /*
        * The fingerprint is not enough, and that broke an earlier version.
        *
@@ -3442,30 +3442,30 @@ class DibujosVulkanImpl final : public DibujosVulkan {
        * Both are cheap to check and both belong to the dome, not to the shader. If the counter still said
        * more than one per frame, nothing is deferred: there is a guard below.
        */
-      const uint32_t indices_dibujo =
-          uint32_t(indices_de_16 ? indices16_.size() : indices_.size());
-      const bool geometria_de_domo = indices_dibujo == kIndicesDomoCielo;
-      const bool primero_del_pase = dibujos_en_pase_ == 0;
+      const uint32_t draw_indices =
+          uint32_t(indices16 ? indices16_.size() : indices_.size());
+      const bool dome_geometry = draw_indices == kSkyDomeIndices;
+      const bool pass_first = draws_in_pass_ == 0;
       /* The full criterion, without the cvar or the guard: what is measured during the test. */
-      const bool es_el_domo = en_la_escena && opaco_en_todos && prueba_z_dibujo &&
-                              !escribe_z_dibujo && !estencil && !(ps->salidas & 0x10) &&
-                              !oclusion_abierta_ && geometria_de_domo && primero_del_pase;
-      if (es_el_domo) {
-        ++cielo_candidatos_;  // the ones matching the dome's marks: this must be 1
+      const bool is_dome = in_scene && opaque_in_all && draw_test_z &&
+                              !draw_write_z && !stencil_state && !(ps->outputs & 0x10) &&
+                              !open_occlusion_ && dome_geometry && pass_first;
+      if (is_dome) {
+        ++sky_candidates_;  // the ones matching the dome's marks: this must be 1
         /*
          * The guard counts here, whether it defers or not. Two in the same frame is exactly what broke the
          * image before, so as soon as it happens it switches off and stays off for the whole session.
          */
-        if (++cielo_guardia_en_fotograma_ > 1 && cielo_guardia_ != kCieloDescartado) {
-          cielo_guardia_ = kCieloDescartado;
+        if (++sky_guard_in_frame_ > 1 && sky_guard_ != kSkyDiscarded) {
+          sky_guard_ = kSkyDiscarded;
           REXLOG_WARN("[nativo] C6 cielo: la guardia ve {} domos en el MISMO fotograma; no se aplaza "
                       "nada en toda la sesion (es el fallo de la 137). La imagen queda intacta",
-                      cielo_guardia_en_fotograma_);
+                      sky_guard_in_frame_);
         }
       }
-      es_cielo = cielo_aplazado_ && es_el_domo && cielo_guardia_ == kCieloAplazando;
-      if (!es_cielo && cielo_aplazado_) {
-        ++cielo_no_aplazables_;  // only with the setting on: measures criterion failures, not the cvar
+      is_sky = sky_deferred_ && is_dome && sky_guard_ == kSkyDeferring;
+      if (!is_sky && sky_deferred_) {
+        ++sky_no_deferrable_;  // only with the setting on: measures criterion failures, not the cvar
       }
     }
     /*
@@ -3484,96 +3484,96 @@ class DibujosVulkanImpl final : public DibujosVulkan {
      * is the first transparent draw, because what follows the sky is the opaque world; the counter separates
      * the two reasons so this can be checked in the log.
      */
-    if (cielo_pendiente_) {
-      if (es_cielo) {
-        ++cielo_dos_en_pase_;  // another sky in the same pass: emit the earlier one now, keeping the order
-        EmitirCieloAplazado(cmd, kCieloPorOtroCielo);
-      } else if (!(opaco_en_todos && escribe_z_dibujo)) {
-        EmitirCieloAplazado(cmd, opaco_en_todos ? kCieloPorSinZ : kCieloPorMezcla);
+    if (sky_pending_) {
+      if (is_sky) {
+        ++sky_two_in_pass_;  // another sky in the same pass: emit the earlier one now, keeping the order
+        EmitDeferredSky(cmd, kSkyPerOtherSky);
+      } else if (!(opaque_in_all && draw_write_z)) {
+        EmitDeferredSky(cmd, opaque_in_all ? kSkyPerWithoutZ : kSkyPerBlend);
       }
     }
     // --- Grabar ---------------------------------------------------------------------------------
-    if (es_cielo && lee_reflejo) {
-      nfsmw::reflejo_demanda::AnotarVisible(false);  // the deferred sky is not measured
+    if (is_sky && reflection_reads) {
+      nfsmw::demand_reflection::TrackVisible(false);  // the deferred sky is not measured
     }
-    if (es_cielo) {
+    if (is_sky) {
       // The arguments of the vkCmd* calls this draw would have emitted are saved; nothing is recorded. The
       // upload buffer is an allocator that only moves forward (Reservar) and is not reset until UsarRanura,
       // which always comes after AntesDeEnviar -> TerminarPase: when the sky is emitted, its offsets still
       // point to the same data.
-      CieloAplazado& c = cielo_;
+      DeferredSky& c = sky_;
       c.pipeline = pipeline;
-      c.bufer = subida_;
-      c.usa_ubo = usar_ubo_;
-      c.push[0] = subida_direccion_ + constantes_vs_offset_;
-      c.push[1] = subida_direccion_ + constantes_ps_offset_;
-      c.push[2] = subida_direccion_ + offset_compartidas;
-      c.offsets_ubo = usar_ubo_ ? std::array<uint32_t, 3>{uint32_t(constantes_vs_offset_),
+      c.buf = upload_;
+      c.usa_ubo = use_ubo_;
+      c.push[0] = address_upload_ + constantes_vs_offset_;
+      c.push[1] = address_upload_ + constantes_ps_offset_;
+      c.push[2] = address_upload_ + shared_offset;
+      c.offsets_ubo = use_ubo_ ? std::array<uint32_t, 3>{uint32_t(constantes_vs_offset_),
                                                           uint32_t(constantes_ps_offset_),
-                                                          uint32_t(offset_compartidas)}
+                                                          uint32_t(shared_offset)}
                                 : std::array<uint32_t, 3>{0, 0, 0};
-      c.ranura_ubo = ranura_actual_;
+      c.ranura_ubo = current_slot_;
       c.viewport = viewport;
-      c.tijera = tijera_final;
-      std::memcpy(c.mezcla, mezcla_constante, sizeof(c.mezcla));
-      std::memcpy(c.sesgo, sesgo, sizeof(c.sesgo));
-      c.con_estencil = claves[4] != 0;
-      c.stencil[0] = stencil_frente;
-      c.stencil[1] = stencil_dorso;
-      c.n_enlaces = uint32_t(entrada->enlaces.size());
+      c.scissor = final_scissor;
+      std::memcpy(c.blend, constant_blend, sizeof(c.blend));
+      std::memcpy(c.bias, bias, sizeof(c.bias));
+      c.with_stencil = keys[4] != 0;
+      c.stencil[0] = front_stencil;
+      c.stencil[1] = back_stencil;
+      c.n_bindings = uint32_t(entry->bindings.size());
       c.offsets_vertices = offsets_vertices;
-      c.con_indices = con_indices;
-      c.indices_de_16 = indices_de_16;
-      c.indices = uint32_t(indices_de_16 ? indices16_.size() : indices_.size());
-      c.primer_indice = uint32_t(offset_indices / (indices_de_16 ? 2 : 4));
+      c.with_indices = with_indices;
+      c.indices16 = indices16;
+      c.indices = uint32_t(indices16 ? indices16_.size() : indices_.size());
+      c.first_index = uint32_t(offset_indices / (indices16 ? 2 : 4));
       c.vmin = vmin;
-      c.cuenta = cuenta;
-      c.ps_mas_uno = ps ? ps->numero + 1 : 0;
-      c.categoria = CategoriaDeDestino(pitch, claves);
-      c.dibujos_al_aplazar = dibujos_en_pase_;
-      c.eds_modo = eds_modo_;  // phases 1 and 2: its pipeline lacks this state, so save it all
-      if (eds_modo_) {
-        EstadoEdsDe(clave, c.eds, eds_modo_);
+      c.num = num;
+      c.ps_mas_uno = ps ? ps->number + 1 : 0;
+      c.category = TargetCategory(pitch, keys);
+      c.draws_on_defer = draws_in_pass_;
+      c.eds_mode = eds_mode_;  // phases 1 and 2: its pipeline lacks this state, so save it all
+      if (eds_mode_) {
+        EdsStateFor(key, c.eds, eds_mode_);
       }
-      cielo_pendiente_ = true;
-      ++cielo_aplazados_;
+      sky_pending_ = true;
+      ++sky_deferred_count_;
       // Counted as if it had been recorded: it will be recorded before the pass closes.
-      ++dibujos_por_categoria_[c.categoria];
-      triangulos_por_categoria_[c.categoria] += (con_indices ? c.indices : cuenta) / 3;
-      Etapa(6, marca);
-      ++dibujados_;
+      ++draws_per_category_[c.category];
+      triangles_per_category_[c.category] += (with_indices ? c.indices : num) / 3;
+      Stage(6, mark);
+      ++drawn_;
       // dibujos_en_pase_ is not incremented here: this draw is not recorded yet. It is incremented in
       // EmitirCieloAplazado, and the difference with dibujos_al_aplazar gives the draws that went ahead of
       // it, which is exactly the geometry that now covers it.
-      dibujados_cronometrados_ += cronometrar_ ? 1 : 0;
+      timed_drawn_ += time_ ? 1 : 0;
       return true;
     }
-    if (pipeline != pipeline_enlazado_) {
-      if (contar_cambios_pipeline_) {  // Measurement only (nfsmw_nativo_contar_cambios_pipeline)
-        ContarCambioPipeline(clave, pipeline_enlazado_ == VK_NULL_HANDLE);
+    if (pipeline != bound_pipeline_) {
+      if (count_pipeline_changes_) {  // Measurement only (nfsmw_nativo_contar_cambios_pipeline)
+        CountPipelineChange(key, bound_pipeline_ == VK_NULL_HANDLE);
       }
       NFSMW_SUB(0, dfn_.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline));
-      pipeline_enlazado_ = pipeline;
+      bound_pipeline_ = pipeline;
     }
     // Phases 1 and 2. The state that no longer goes in the pipeline, before the draw. If the guard sees a
     // difference, dynamic state switches off and this same draw is bound with its usual pipeline.
-    if (eds_modo_ && !FijarEstadoDinamico(cmd, clave)) {
-      NFSMW_SUB(11, pipeline = PipelineDe(ClaveDeBusqueda(clave), *entrada, p));
+    if (eds_mode_ && !FixDynamicState(cmd, key)) {
+      NFSMW_SUB(11, pipeline = PipelineDe(SearchKey(key), *entry, p));
       if (pipeline == VK_NULL_HANDLE) {
         return false;
       }
       NFSMW_SUB(0, dfn_.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline));
-      pipeline_enlazado_ = pipeline;
-      clave_enlazada_valida_ = false;  // the counter does not classify this bind
+      bound_pipeline_ = pipeline;
+      valid_bound_key_ = false;  // the counter does not classify this bind
     }
-    if (!sets_enlazados_) {
+    if (!bound_sets_) {
       NFSMW_SUB(1, dfn_.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_pipeline_, 0, 4,
                                                 sets_.data(), 0, nullptr));
-      sets_enlazados_ = true;
+      bound_sets_ = true;
     }
     // Dynamic state and push constants repeat a lot between consecutive draws: they are only recorded if
     // they change (recording: 0.4 us per draw in a race).
-    const bool grabado = estado_grabado_;
+    const bool recorded = recorded_state_;
     /*
      * With constants through UBOs, the push constants are dead.
      *
@@ -3585,106 +3585,106 @@ class DibujosVulkanImpl final : public DibujosVulkan {
      * Turing), so each vkCmdPushConstants is a LOAD_CONSTANT_BUFFER_OFFSET plus the array, emitted on the
      * spot. The UBO is active in 100 % of the measured submissions.
      */
-    if (!usar_ubo_) {
-      const uint64_t push[3] = {subida_direccion_ + constantes_vs_offset_,
-                                subida_direccion_ + constantes_ps_offset_,
-                                subida_direccion_ + offset_compartidas};
-      if (!grabado || std::memcmp(push, push_grabado_, sizeof(push)) != 0) {
+    if (!use_ubo_) {
+      const uint64_t push[3] = {address_upload_ + constantes_vs_offset_,
+                                address_upload_ + constantes_ps_offset_,
+                                address_upload_ + shared_offset};
+      if (!recorded || std::memcmp(push, recorded_push_, sizeof(push)) != 0) {
         dfn_.vkCmdPushConstants(cmd, layout_pipeline_,
                                 VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                                 sizeof(push), push);
-        std::memcpy(push_grabado_, push, sizeof(push));
+        std::memcpy(recorded_push_, push, sizeof(push));
       }
     }
     // Set 4 (dynamic UBOs). Always bound, because the new shaders use it statically: with the real offsets
     // if nfsmw_nativo_constantes_ubo is set, and 0 otherwise. Only recorded when something changes.
     {
       const std::array<uint32_t, 3> offsets_ubo =
-          usar_ubo_ ? std::array<uint32_t, 3>{uint32_t(constantes_vs_offset_), uint32_t(constantes_ps_offset_),
-                                              uint32_t(offset_compartidas)}
+          use_ubo_ ? std::array<uint32_t, 3>{uint32_t(constantes_vs_offset_), uint32_t(constantes_ps_offset_),
+                                              uint32_t(shared_offset)}
                     : std::array<uint32_t, 3>{0, 0, 0};
-      ++set4_dibujos_;  // C6 set 4 report
-      if (!ubo_enlazado_ || ranura_ubo_enlazada_ != ranura_actual_ || offsets_ubo != offsets_ubo_enlazados_) {
+      ++set4_draws_;  // C6 set 4 report
+      if (!bound_ubo_ || bound_ubo_slot_ != current_slot_ || offsets_ubo != bound_offsets_ubo_) {
         // Which offsets change at each bind (measurement only). What NVK saves by differences depends on it:
         // every cbuf whose offset does not change is one rebind less in the Draw.
-        if (!ubo_enlazado_ || ranura_ubo_enlazada_ != ranura_actual_) {
-          ++set4_primeros_;
+        if (!bound_ubo_ || bound_ubo_slot_ != current_slot_) {
+          ++set4_first_;
         } else {
-          ++set4_cambios_[(offsets_ubo[0] != offsets_ubo_enlazados_[0] ? 1u : 0u) |
-                          (offsets_ubo[1] != offsets_ubo_enlazados_[1] ? 2u : 0u) |
-                          (offsets_ubo[2] != offsets_ubo_enlazados_[2] ? 4u : 0u)];
+          ++set4_changes_[(offsets_ubo[0] != bound_offsets_ubo_[0] ? 1u : 0u) |
+                          (offsets_ubo[1] != bound_offsets_ubo_[1] ? 2u : 0u) |
+                          (offsets_ubo[2] != bound_offsets_ubo_[2] ? 4u : 0u)];
         }
         NFSMW_SUB(2, dfn_.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_pipeline_, 4, 1,
-                                                  &sets_ubo_[ranura_actual_], 3, offsets_ubo.data()));
-        offsets_ubo_enlazados_ = offsets_ubo;
-        ranura_ubo_enlazada_ = ranura_actual_;
-        ubo_enlazado_ = true;
+                                                  &sets_ubo_[current_slot_], 3, offsets_ubo.data()));
+        bound_offsets_ubo_ = offsets_ubo;
+        bound_ubo_slot_ = current_slot_;
+        bound_ubo_ = true;
       }
     }
-    if (!grabado || std::memcmp(&viewport, &viewport_grabado_, sizeof(viewport)) != 0) {
+    if (!recorded || std::memcmp(&viewport, &recorded_viewport_, sizeof(viewport)) != 0) {
       NFSMW_SUB(3, dfn_.vkCmdSetViewport(cmd, 0, 1, &viewport));
-      viewport_grabado_ = viewport;
+      recorded_viewport_ = viewport;
     }
-    if (!grabado || std::memcmp(&tijera_final, &tijera_grabada_, sizeof(tijera_final)) != 0) {
-      NFSMW_SUB(4, dfn_.vkCmdSetScissor(cmd, 0, 1, &tijera_final));
-      tijera_grabada_ = tijera_final;
+    if (!recorded || std::memcmp(&final_scissor, &recorded_scissor_, sizeof(final_scissor)) != 0) {
+      NFSMW_SUB(4, dfn_.vkCmdSetScissor(cmd, 0, 1, &final_scissor));
+      recorded_scissor_ = final_scissor;
     }
-    if (!grabado ||
-        std::memcmp(mezcla_constante, mezcla_grabada_, sizeof(mezcla_constante)) != 0) {
-      NFSMW_SUB(5, dfn_.vkCmdSetBlendConstants(cmd, mezcla_constante));
-      std::memcpy(mezcla_grabada_, mezcla_constante, sizeof(mezcla_constante));
+    if (!recorded ||
+        std::memcmp(constant_blend, recorded_blend_, sizeof(constant_blend)) != 0) {
+      NFSMW_SUB(5, dfn_.vkCmdSetBlendConstants(cmd, constant_blend));
+      std::memcpy(recorded_blend_, constant_blend, sizeof(constant_blend));
     }
     // Also without bias: the state is dynamic in every pipeline and has to be recorded.
-    if (!grabado || std::memcmp(sesgo, sesgo_grabado_, sizeof(sesgo)) != 0) {
-      NFSMW_SUB(6, dfn_.vkCmdSetDepthBias(cmd, sesgo[0], 0.0f, sesgo[1]));
-      std::memcpy(sesgo_grabado_, sesgo, sizeof(sesgo));
+    if (!recorded || std::memcmp(bias, recorded_bias_, sizeof(bias)) != 0) {
+      NFSMW_SUB(6, dfn_.vkCmdSetDepthBias(cmd, bias[0], 0.0f, bias[1]));
+      std::memcpy(recorded_bias_, bias, sizeof(bias));
     }
-    if (!grabado) {
-      stencil_grabado_valido_ = false;
-      tipo_indices_grabado_ = VK_INDEX_TYPE_MAX_ENUM;
+    if (!recorded) {
+      valid_recorded_stencil_ = false;
+      recorded_indices_type_ = VK_INDEX_TYPE_MAX_ENUM;
     }
-    if (claves[4]) {
-      const uint32_t frente = stencil_frente;  // computed before the recording block
-      const uint32_t dorso = stencil_dorso;
-      if (!stencil_grabado_valido_ || frente != stencil_grabado_[0] ||
-          dorso != stencil_grabado_[1]) {
+    if (keys[4]) {
+      const uint32_t front_face = front_stencil;  // computed before the recording block
+      const uint32_t back_face = back_stencil;
+      if (!valid_recorded_stencil_ || front_face != recorded_stencil_[0] ||
+          back_face != recorded_stencil_[1]) {
         NFSMW_SUB(7, {
-          dfn_.vkCmdSetStencilReference(cmd, VK_STENCIL_FACE_FRONT_BIT, frente & 0xFF);
-          dfn_.vkCmdSetStencilReference(cmd, VK_STENCIL_FACE_BACK_BIT, dorso & 0xFF);
-          dfn_.vkCmdSetStencilCompareMask(cmd, VK_STENCIL_FACE_FRONT_BIT, (frente >> 8) & 0xFF);
-          dfn_.vkCmdSetStencilCompareMask(cmd, VK_STENCIL_FACE_BACK_BIT, (dorso >> 8) & 0xFF);
-          dfn_.vkCmdSetStencilWriteMask(cmd, VK_STENCIL_FACE_FRONT_BIT, (frente >> 16) & 0xFF);
-          dfn_.vkCmdSetStencilWriteMask(cmd, VK_STENCIL_FACE_BACK_BIT, (dorso >> 16) & 0xFF);
+          dfn_.vkCmdSetStencilReference(cmd, VK_STENCIL_FACE_FRONT_BIT, front_face & 0xFF);
+          dfn_.vkCmdSetStencilReference(cmd, VK_STENCIL_FACE_BACK_BIT, back_face & 0xFF);
+          dfn_.vkCmdSetStencilCompareMask(cmd, VK_STENCIL_FACE_FRONT_BIT, (front_face >> 8) & 0xFF);
+          dfn_.vkCmdSetStencilCompareMask(cmd, VK_STENCIL_FACE_BACK_BIT, (back_face >> 8) & 0xFF);
+          dfn_.vkCmdSetStencilWriteMask(cmd, VK_STENCIL_FACE_FRONT_BIT, (front_face >> 16) & 0xFF);
+          dfn_.vkCmdSetStencilWriteMask(cmd, VK_STENCIL_FACE_BACK_BIT, (back_face >> 16) & 0xFF);
         });
-        stencil_grabado_[0] = frente;
-        stencil_grabado_[1] = dorso;
-        stencil_grabado_valido_ = true;
+        recorded_stencil_[0] = front_face;
+        recorded_stencil_[1] = back_face;
+        valid_recorded_stencil_ = true;
       }
     }
-    estado_grabado_ = true;
+    recorded_state_ = true;
     /*
      * nfsmw_nativo_vertices_base_cero. With a single binding whose copy starts at a multiple of its stride,
      * the upload buffer is bound at 0 (once per command buffer, or after the deferred sky) and the draw is
      * shifted with primer_vertice. The others bind as usual.
      */
-    bool base_cero = false;
-    uint32_t primer_vertice = 0;  // offset / stride: where the copy starts, in vertices
-    if (vertices_base_cero_ && entrada->enlaces.size() == 1) {
-      const VkDeviceSize zancada = entrada->enlaces[0].zancada;
-      if (offsets_vertices[0] % zancada == 0) {
-        base_cero = ComprobarBaseCero(offsets_vertices[0], zancada, origenes[0].bytes, vmin, primer_vertice);
+    bool zero_base = false;
+    uint32_t first_vertex = 0;  // offset / stride: where the copy starts, in vertices
+    if (zero_vertices_base_ && entry->bindings.size() == 1) {
+      const VkDeviceSize stride_bytes = entry->bindings[0].stride_bytes;
+      if (offsets_vertices[0] % stride_bytes == 0) {
+        zero_base = CheckZeroBase(offsets_vertices[0], stride_bytes, sources[0].bytes, vmin, first_vertex);
       } else {
-        ++base_cero_desalineados_;
+        ++misaligned_zero_base_;
       }
-    } else if (entrada->enlaces.size() > 1) {
-      ++base_cero_varios_enlaces_;
+    } else if (entry->bindings.size() > 1) {
+      ++bindings_several_zero_base_;
     }
-    if (!entrada->enlaces.empty()) {
+    if (!entry->bindings.empty()) {
       // 16 identical pointers were filled in on every draw to bind one or two. It is filled when the upload
       // buffer changes (once per work slot), not 2,345 times per frame.
-      if (bufers_vertices_[0] != subida_) {
-        bufers_vertices_.fill(subida_);
-        enlaces_grabados_ = 0;  // the buffer changed: earlier bindings are stale
+      if (vertices_buffers_[0] != upload_) {
+        vertices_buffers_.fill(upload_);
+        recorded_bindings_ = 0;  // the buffer changed: earlier bindings are stale
       }
       /*
        * And do not bind again if it is exactly what is already bound.
@@ -3695,101 +3695,101 @@ class DibujosVulkanImpl final : public DibujosVulkan {
        * mesh give exactly the same offsets.
        */
       // On the base-zero path what gets bound is the whole buffer, from 0.
-      static constexpr VkDeviceSize kEnlaceEnCero = 0;
-      const VkDeviceSize* a_enlazar = base_cero ? &kEnlaceEnCero : offsets_vertices.data();
-      const uint32_t n_enlaces = uint32_t(entrada->enlaces.size());
-      bool igual = n_enlaces == enlaces_grabados_;
-      for (uint32_t i = 0; igual && i < n_enlaces; ++i) {
-        igual = a_enlazar[i] == offsets_grabados_[i];
+      static constexpr VkDeviceSize kBindingInZero = 0;
+      const VkDeviceSize* to_bind = zero_base ? &kBindingInZero : offsets_vertices.data();
+      const uint32_t n_bindings = uint32_t(entry->bindings.size());
+      bool is_equal = n_bindings == recorded_bindings_;
+      for (uint32_t i = 0; is_equal && i < n_bindings; ++i) {
+        is_equal = to_bind[i] == recorded_offsets_[i];
       }
-      if (!igual) {
-        NFSMW_SUB(8, dfn_.vkCmdBindVertexBuffers(cmd, 0, n_enlaces, bufers_vertices_.data(), a_enlazar));
-        ++base_cero_enlaces_grabados_;
-        enlaces_grabados_ = n_enlaces;
-        for (uint32_t i = 0; i < n_enlaces; ++i) {
-          offsets_grabados_[i] = a_enlazar[i];
+      if (!is_equal) {
+        NFSMW_SUB(8, dfn_.vkCmdBindVertexBuffers(cmd, 0, n_bindings, vertices_buffers_.data(), to_bind));
+        ++recorded_bindings_zero_base_;
+        recorded_bindings_ = n_bindings;
+        for (uint32_t i = 0; i < n_bindings; ++i) {
+          recorded_offsets_[i] = to_bind[i];
         }
       } else {
-        ++enlaces_ahorrados_;
+        ++saved_bindings_;
       }
-      ++base_cero_total_;
-      base_cero_dibujos_ += base_cero ? 1 : 0;
+      ++zero_base_total_;
+      draws_zero_base_ += zero_base ? 1 : 0;
     }
     // With a game occlusion query open, this draw counts toward it.
-    if (oclusion_abierta_ && consulta_oclusion_ == UINT32_MAX) {
-      NFSMW_SUB(13, consulta_oclusion_ = contexto_->EmpezarConsultaOclusion());
+    if (open_occlusion_ && occlusion_query_ == UINT32_MAX) {
+      NFSMW_SUB(13, occlusion_query_ = contexto_->StartOcclusionQuery());
     }
     // The first 12, then one every 2 s (up to 150), to follow the sun over the course of a race.
-    if (oclusion_abierta_ && pitch >= 640 && avisos_oclusion_dibujo_ < 16 &&
-        (avisos_oclusion_dibujo_ < 12 ||
-         std::chrono::steady_clock::now() - ultimo_aviso_oclusion_dibujo_ >= std::chrono::seconds(2))) {
-      ++avisos_oclusion_dibujo_;
-      ultimo_aviso_oclusion_dibujo_ = std::chrono::steady_clock::now();
+    if (open_occlusion_ && pitch >= 640 && draw_occlusion_warnings_ < 16 &&
+        (draw_occlusion_warnings_ < 12 ||
+         std::chrono::steady_clock::now() - last_draw_occlusion_warning_ >= std::chrono::seconds(2))) {
+      ++draw_occlusion_warnings_;
+      last_draw_occlusion_warning_ = std::chrono::steady_clock::now();
       REXLOG_INFO("[nativo] C2 oclusion dibujo {}: consulta del host {}: VS n{} PS n{} tipo {} cuenta {} pitch {} "
                   "mascaras {:08X} profundidad {:08X} (escribe {}, prueba {}, funcion z {}) viewport {:.1f},{:.1f} "
                   "{:.1f}x{:.1f} z {:.3f}-{:.3f} tijera {},{} {}x{} con indices {}",
-                  avisos_oclusion_dibujo_, consulta_oclusion_ == UINT32_MAX ? -1 : int64_t(consulta_oclusion_),
-                  p.vs->numero, ps ? int(ps->numero) : -1, tipo, cuenta, pitch, mascaras, control_profundidad,
-                  (control_profundidad >> 2) & 0x1, (control_profundidad >> 1) & 0x1, (control_profundidad >> 4) & 0x7,
+                  draw_occlusion_warnings_, occlusion_query_ == UINT32_MAX ? -1 : int64_t(occlusion_query_),
+                  p.vs->number, ps ? int(ps->number) : -1, type, num, pitch, masks, depth_control,
+                  (depth_control >> 2) & 0x1, (depth_control >> 1) & 0x1, (depth_control >> 4) & 0x7,
                   viewport.x, viewport.y, viewport.width, viewport.height, viewport.minDepth, viewport.maxDepth,
-                  tijera.offset.x, tijera.offset.y, tijera.extent.width, tijera.extent.height, con_indices);
+                  scissor.offset.x, scissor.offset.y, scissor.extent.width, scissor.extent.height, with_indices);
       // Diagnostic: positions of the first vertices and VS constants c0-c6, to compute the sun's z against
       // the scene depth.
-      std::string posiciones;
-      for (const AtributoVertices& a : entrada->atributos) {
-        if (a.ubicacion != 0) {
+      std::string positions;
+      for (const VertexAttribute& a : entry->attributes) {
+        if (a.loc_index != 0) {
           continue;
         }
-        const Origen& origen = origenes[a.enlace];
-        const uint32_t zancada = entrada->enlaces[a.enlace].zancada;
-        for (uint32_t v = 0; v < std::min<uint32_t>(cuenta, 4); ++v) {
-          const uint64_t desde = uint64_t(v) * zancada + a.offset;
-          if (desde + 16 > origen.bytes) {
+        const VertexSource& src = sources[a.bind_index];
+        const uint32_t stride_bytes = entry->bindings[a.bind_index].stride_bytes;
+        for (uint32_t v = 0; v < std::min<uint32_t>(num, 4); ++v) {
+          const uint64_t from = uint64_t(v) * stride_bytes + a.offset;
+          if (from + 16 > src.bytes) {
             break;
           }
-          posiciones += " (";
+          positions += " (";
           for (uint32_t k = 0; k < 4; ++k) {
-            uint32_t palabra;
-            std::memcpy(&palabra, origen.datos + desde + k * 4, 4);
-            posiciones += fmt::format("{}{:.7g}", k ? "," : "", Flotante(xenos::GpuSwap(palabra, origen.orden)));
+            uint32_t word_value;
+            std::memcpy(&word_value, src.payload + from + k * 4, 4);
+            positions += fmt::format("{}{:.7g}", k ? "," : "", Float(xenos::GpuSwap(word_value, src.orden)));
           }
-          posiciones += ")";
+          positions += ")";
         }
-        posiciones += fmt::format(" formato {} zancada {}", int(a.formato), zancada);
+        positions += fmt::format(" formato {} zancada {}", int(a.format_id), stride_bytes);
         break;
       }
       std::string constantes;
       for (uint32_t k = 0; k < 7; ++k) {
         constantes += fmt::format(" c{}=(", k);
         for (uint32_t c = 0; c < 4; ++c) {
-          constantes += fmt::format("{}{:.7g}", c ? "," : "", Flotante(r[kRegConstantesVs + k * 4 + c]));
+          constantes += fmt::format("{}{:.7g}", c ? "," : "", Float(r[kRegConstantesVs + k * 4 + c]));
         }
         constantes += ")";
       }
       REXLOG_INFO("[nativo] C2 oclusion dibujo {} (geometria): VTE {:08X} CLIP {:08X} sc {:08X} RB_DEPTH_INFO {:08X} "
                   "pase {}x{} ndc ({:.5g},{:.5g},{:.5g},{:.5g}) funcion z del pipeline {} vmin {}; posiciones{}; "
                   "constantes VS{}",
-                  avisos_oclusion_dibujo_, vte, r[gr::XE_GPU_REG_PA_CL_CLIP_CNTL], modo_sc,
-                  r[gr::XE_GPU_REG_RB_DEPTH_INFO], pase_ancho_, pase_alto_, ndc[0], ndc[1], ndc[2], ndc[3],
-                  (clave.profundidad >> 4) & 0x7, vmin, posiciones, constantes);
+                  draw_occlusion_warnings_, vte, r[gr::XE_GPU_REG_PA_CL_CLIP_CNTL], sc_mode,
+                  r[gr::XE_GPU_REG_RB_DEPTH_INFO], pass_width_, pass_height_, ndc[0], ndc[1], ndc[2], ndc[3],
+                  (key.depth_value >> 4) & 0x7, vmin, positions, constantes);
     }
     // Draws and triangles per render target type (same classification as the GPU time).
     {
-      const uint32_t categoria = CategoriaDeDestino(pitch, claves);
-      const uint32_t vertices_dibujo = con_indices ? uint32_t(indices_de_16 ? indices16_.size() : indices_.size())
-                                                   : cuenta;
-      ++dibujos_por_categoria_[categoria];
-      triangulos_por_categoria_[categoria] += vertices_dibujo / 3;
+      const uint32_t category = TargetCategory(pitch, keys);
+      const uint32_t draw_vertices = with_indices ? uint32_t(indices16 ? indices16_.size() : indices_.size())
+                                                   : num;
+      ++draws_per_category_[category];
+      triangles_per_category_[category] += draw_vertices / 3;
     }
     // In the diagnostic frame, one query per draw with its pixel shader.
     // The diagnostic window is decided by the context, at the Swap. With the diagnostic off (the normal
     // case) this does not even reach the call.
-    const uint32_t consulta_dibujo =
-        !diag_estadisticas_dibujo_
+    const uint32_t draw_query =
+        !diag_draw_stats_
             ? UINT32_MAX
-            : contexto_->EmpezarEstadisticasDibujo(
-                  ps ? ps->numero + 1 : 0,
-                  CategoriaDeDestino(pitch, claves));
+            : contexto_->StartDrawStats(
+                  ps ? ps->number + 1 : 0,
+                  TargetCategory(pitch, keys));
     /*
      * nfsmw_reflejo_visibilidad. An occlusion query around this draw alone, if it samples the reflection:
      * 0 samples = it wrote nothing to any target. Two of the same type cannot be open at once, so while a
@@ -3797,54 +3797,54 @@ class DibujosVulkanImpl final : public DibujosVulkan {
      * composite, which paints the whole screen, is measured the same way: it must produce samples (the
      * guard, in nfsmw_recortes_carrera.cpp).
      */
-    uint32_t consulta_visibilidad = UINT32_MAX;
-    if (lee_reflejo) {
-      if (!oclusion_abierta_ && consulta_oclusion_ == UINT32_MAX) {
-        consulta_visibilidad = contexto_->EmpezarConsultaVisibilidad(false);
+    uint32_t visibility_query = UINT32_MAX;
+    if (reflection_reads) {
+      if (!open_occlusion_ && occlusion_query_ == UINT32_MAX) {
+        visibility_query = contexto_->StartVisibilityQuery(false);
       }
-      if (consulta_visibilidad == UINT32_MAX) {
-        nfsmw::reflejo_demanda::AnotarVisible(false);
+      if (visibility_query == UINT32_MAX) {
+        nfsmw::demand_reflection::TrackVisible(false);
       }
-    } else if (testigo_pendiente_ && ps && ps->shader && ps->shader->huella == kHuellaComposicion &&
-               !oclusion_abierta_ && consulta_oclusion_ == UINT32_MAX) {
-      consulta_visibilidad = contexto_->EmpezarConsultaVisibilidad(true);
-      if (consulta_visibilidad != UINT32_MAX) {
-        testigo_pendiente_ = false;
+    } else if (pending_sentinel_ && ps && ps->shader && ps->shader->fingerprint == kCompositionFingerprint &&
+               !open_occlusion_ && occlusion_query_ == UINT32_MAX) {
+      visibility_query = contexto_->StartVisibilityQuery(true);
+      if (visibility_query != UINT32_MAX) {
+        pending_sentinel_ = false;
         // While the first 8 are checked, one every 2 frames: the guard finishes in ~0.5 s of racing.
-        testigo_siguiente_ =
-            fotograma_ + (nfsmw::reflejo_demanda::VisibilidadComprobada() ? kTestigoCada : uint64_t(2));
+        next_sentinel_ =
+            frame_ + (nfsmw::demand_reflection::CheckedVisibility() ? kSentinelEvery : uint64_t(2));
       }
     }
-    if (con_indices) {
+    if (with_indices) {
       // The upload buffer is bound once per index type and each draw uses firstIndex.
-      const VkIndexType tipo_indices = indices_de_16 ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32;
-      if (tipo_indices != tipo_indices_grabado_) {
-        NFSMW_SUB(9, dfn_.vkCmdBindIndexBuffer(cmd, subida_, 0, tipo_indices));
-        tipo_indices_grabado_ = tipo_indices;
+      const VkIndexType indices_type = indices16 ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32;
+      if (indices_type != recorded_indices_type_) {
+        NFSMW_SUB(9, dfn_.vkCmdBindIndexBuffer(cmd, upload_, 0, indices_type));
+        recorded_indices_type_ = indices_type;
       }
       // On the base-zero path, vertexOffset also carries where the copy starts (in vertices).
-      const int32_t desplazamiento_vertices =
-          base_cero ? int32_t(int64_t(primer_vertice) - int64_t(vmin)) : -int32_t(vmin);
-      NFSMW_SUB(10, dfn_.vkCmdDrawIndexed(cmd, uint32_t(indices_de_16 ? indices16_.size() : indices_.size()),
-                                          1, uint32_t(offset_indices / (indices_de_16 ? 2 : 4)),
-                                          desplazamiento_vertices, 0));
+      const int32_t vertices_offset =
+          zero_base ? int32_t(int64_t(first_vertex) - int64_t(vmin)) : -int32_t(vmin);
+      NFSMW_SUB(10, dfn_.vkCmdDrawIndexed(cmd, uint32_t(indices16 ? indices16_.size() : indices_.size()),
+                                          1, uint32_t(offset_indices / (indices16 ? 2 : 4)),
+                                          vertices_offset, 0));
     } else {
-      NFSMW_SUB(10, dfn_.vkCmdDraw(cmd, cuenta, 1, base_cero ? primer_vertice : 0, 0));  // firstVertex
+      NFSMW_SUB(10, dfn_.vkCmdDraw(cmd, num, 1, zero_base ? first_vertex : 0, 0));  // firstVertex
     }
-    if (consulta_visibilidad != UINT32_MAX) {
-      contexto_->TerminarConsultaVisibilidad(consulta_visibilidad);
+    if (visibility_query != UINT32_MAX) {
+      contexto_->FinishVisibilityQuery(visibility_query);
     }
-    if (consulta_dibujo != UINT32_MAX) {
-      contexto_->TerminarEstadisticasDibujo(consulta_dibujo);
+    if (draw_query != UINT32_MAX) {
+      contexto_->FinishDrawStats(draw_query);
     }
-    Etapa(6, marca);
-    if (cronometrar_) {
-      ++sub_muestras_;
-      InformeSubetapas();
+    Stage(6, mark);
+    if (time_) {
+      ++sub_samples_;
+      SubstagesReport();
     }
-    ++dibujados_;
-    ++dibujos_en_pase_;  // to know at which position of the pass the sky ends up emitted
-    dibujados_cronometrados_ += cronometrar_ ? 1 : 0;
+    ++drawn_;
+    ++draws_in_pass_;  // to know at which position of the pass the sky ends up emitted
+    timed_drawn_ += time_ ? 1 : 0;
     return true;
   }
 
@@ -3859,27 +3859,27 @@ class DibujosVulkanImpl final : public DibujosVulkan {
    * The upload buffer offsets are still valid because Reservar only moves forward and the buffer is not
    * reset until UsarRanura, which always comes after AntesDeEnviar -> TerminarPase.
    */
-  void EmitirCieloAplazado(VkCommandBuffer cmd, uint32_t motivo) {
-    if (!cielo_pendiente_ || cmd == VK_NULL_HANDLE) {
+  void EmitDeferredSky(VkCommandBuffer cmd, uint32_t reason) {
+    if (!sky_pending_ || cmd == VK_NULL_HANDLE) {
       return;
     }
-    cielo_pendiente_ = false;
-    const CieloAplazado& c = cielo_;
-    ++cielo_emitidos_[motivo < kCieloMotivos ? motivo : kCieloMotivos - 1];
-    const uint64_t posicion = dibujos_en_pase_ - c.dibujos_al_aplazar;
-    cielo_posicion_suma_ += posicion;
-    cielo_posicion_max_ = std::max(cielo_posicion_max_, posicion);
+    sky_pending_ = false;
+    const DeferredSky& c = sky_;
+    ++sky_emitted_[reason < kSkyReasons ? reason : kSkyReasons - 1];
+    const uint64_t position = draws_in_pass_ - c.draws_on_defer;
+    sky_sum_position_ += position;
+    sky_position_max_ = std::max(sky_position_max_, position);
     dfn_.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, c.pipeline);
-    pipeline_enlazado_ = c.pipeline;
-    if (c.eds_modo) {  // phases 1 and 2: all the state its pipeline lacks
-      EmitirEstadoDinamico(cmd, c.eds, true, c.eds_modo);
+    bound_pipeline_ = c.pipeline;
+    if (c.eds_mode) {  // phases 1 and 2: all the state its pipeline lacks
+      EmitDynamicState(cmd, c.eds, true, c.eds_mode);
     }
-    eds_valido_ = false;  // the next draw sets all of its own again
-    clave_enlazada_valida_ = false;  // The sky does not keep its key (ContarCambioPipeline)
-    if (!sets_enlazados_) {
+    eds_valid_ = false;  // the next draw sets all of its own again
+    valid_bound_key_ = false;  // The sky does not keep its key (ContarCambioPipeline)
+    if (!bound_sets_) {
       dfn_.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_pipeline_, 0, 4,
                                    sets_.data(), 0, nullptr);
-      sets_enlazados_ = true;
+      bound_sets_ = true;
     }
     if (!c.usa_ubo) {
       dfn_.vkCmdPushConstants(cmd, layout_pipeline_,
@@ -3889,10 +3889,10 @@ class DibujosVulkanImpl final : public DibujosVulkan {
     dfn_.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_pipeline_, 4, 1,
                                  &sets_ubo_[c.ranura_ubo], 3, c.offsets_ubo.data());
     dfn_.vkCmdSetViewport(cmd, 0, 1, &c.viewport);
-    dfn_.vkCmdSetScissor(cmd, 0, 1, &c.tijera);
-    dfn_.vkCmdSetBlendConstants(cmd, c.mezcla);
-    dfn_.vkCmdSetDepthBias(cmd, c.sesgo[0], 0.0f, c.sesgo[1]);
-    if (c.con_estencil) {
+    dfn_.vkCmdSetScissor(cmd, 0, 1, &c.scissor);
+    dfn_.vkCmdSetBlendConstants(cmd, c.blend);
+    dfn_.vkCmdSetDepthBias(cmd, c.bias[0], 0.0f, c.bias[1]);
+    if (c.with_stencil) {
       dfn_.vkCmdSetStencilReference(cmd, VK_STENCIL_FACE_FRONT_BIT, c.stencil[0] & 0xFF);
       dfn_.vkCmdSetStencilReference(cmd, VK_STENCIL_FACE_BACK_BIT, c.stencil[1] & 0xFF);
       dfn_.vkCmdSetStencilCompareMask(cmd, VK_STENCIL_FACE_FRONT_BIT, (c.stencil[0] >> 8) & 0xFF);
@@ -3900,32 +3900,32 @@ class DibujosVulkanImpl final : public DibujosVulkan {
       dfn_.vkCmdSetStencilWriteMask(cmd, VK_STENCIL_FACE_FRONT_BIT, (c.stencil[0] >> 16) & 0xFF);
       dfn_.vkCmdSetStencilWriteMask(cmd, VK_STENCIL_FACE_BACK_BIT, (c.stencil[1] >> 16) & 0xFF);
     }
-    if (c.n_enlaces) {
-      std::array<VkBuffer, 16> bufers{};
-      bufers.fill(c.bufer);
-      dfn_.vkCmdBindVertexBuffers(cmd, 0, c.n_enlaces, bufers.data(), c.offsets_vertices.data());
+    if (c.n_bindings) {
+      std::array<VkBuffer, 16> buffers{};
+      buffers.fill(c.buf);
+      dfn_.vkCmdBindVertexBuffers(cmd, 0, c.n_bindings, buffers.data(), c.offsets_vertices.data());
     }
-    const uint32_t consulta = !diag_estadisticas_dibujo_
+    const uint32_t query = !diag_draw_stats_
                                   ? UINT32_MAX
-                                  : contexto_->EmpezarEstadisticasDibujo(c.ps_mas_uno, c.categoria);
-    if (c.con_indices) {
-      const VkIndexType tipo = c.indices_de_16 ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32;
-      dfn_.vkCmdBindIndexBuffer(cmd, c.bufer, 0, tipo);
-      dfn_.vkCmdDrawIndexed(cmd, c.indices, 1, c.primer_indice, -int32_t(c.vmin), 0);
+                                  : contexto_->StartDrawStats(c.ps_mas_uno, c.category);
+    if (c.with_indices) {
+      const VkIndexType type = c.indices16 ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32;
+      dfn_.vkCmdBindIndexBuffer(cmd, c.buf, 0, type);
+      dfn_.vkCmdDrawIndexed(cmd, c.indices, 1, c.first_index, -int32_t(c.vmin), 0);
     } else {
-      dfn_.vkCmdDraw(cmd, c.cuenta, 1, 0, 0);
+      dfn_.vkCmdDraw(cmd, c.num, 1, 0, 0);
     }
-    if (consulta != UINT32_MAX) {
-      contexto_->TerminarEstadisticasDibujo(consulta);
+    if (query != UINT32_MAX) {
+      contexto_->FinishDrawStats(query);
     }
-    ++dibujos_en_pase_;
+    ++draws_in_pass_;
     // Nothing tracked is valid any more: the dynamic state, the bindings and the index type are the sky's.
     // estado_grabado_ = false makes the next draw also re-record stencil and indices.
-    estado_grabado_ = false;
-    ubo_enlazado_ = false;
-    enlaces_grabados_ = 0;
-    stencil_grabado_valido_ = false;
-    tipo_indices_grabado_ = VK_INDEX_TYPE_MAX_ENUM;
+    recorded_state_ = false;
+    bound_ubo_ = false;
+    recorded_bindings_ = 0;
+    valid_recorded_stencil_ = false;
+    recorded_indices_type_ = VK_INDEX_TYPE_MAX_ENUM;
   }
 
   // Adds the time since the mark to the stage and moves the mark to now.
@@ -3935,43 +3935,43 @@ class DibujosVulkanImpl final : public DibujosVulkan {
    * draws (1 in 64). "C6 subetapas" line every 10 s: us per draw, us per call and calls per timed draw.
    */
   // Its lines, like those of the other ring reports, go to the report thread (NFSMW_INFORME_ANILLO).
-  void InformeSubetapas() {
-    const auto ahora = std::chrono::steady_clock::now();
-    if (ahora < sub_siguiente_) {
+  void SubstagesReport() {
+    const auto now_time = std::chrono::steady_clock::now();
+    if (now_time < sub_next_) {
       return;
     }
-    const bool primera = sub_siguiente_ == std::chrono::steady_clock::time_point{};
-    sub_siguiente_ = ahora + std::chrono::seconds(10);
-    if (primera || !sub_muestras_) {
+    const bool is_first = sub_next_ == std::chrono::steady_clock::time_point{};
+    sub_next_ = now_time + std::chrono::seconds(10);
+    if (is_first || !sub_samples_) {
       sub_ns_.fill(0);
       sub_n_.fill(0);
-      sub_muestras_ = 0;
+      sub_samples_ = 0;
       return;
     }
-    static constexpr const char* kNombres[19] = {
+    static constexpr const char* kNames[19] = {
         "BindPipeline", "sets 0-3", "set 4 (UBO)", "Viewport", "Scissor", "BlendConstants", "DepthBias",
         "Stencil (6)", "BindVertexBuffers", "BindIndexBuffer", "Draw", "PipelineDe", "compartidas",
         "oclusion", "samplers (etapa texturas)",
         // The four segments of the "indices" stage (CortarSubetapa)
         "etapa indices: destinos y descartes", "etapa indices: desplazamiento de profundidad",
         "etapa indices: indices", "etapa indices: vertices y diagnostico"};
-    std::string linea;
+    std::string line;
     double total = 0.0;
     for (size_t k = 0; k < 19; ++k) {
       if (!sub_n_[k]) {
         continue;
       }
-      const double por_dibujo = double(sub_ns_[k]) / 1e3 / double(sub_muestras_);
-      total += por_dibujo;
-      linea += fmt::format(" | {} {:.2f} us/dibujo ({:.2f} us x {:.2f} por dibujo)", kNombres[k], por_dibujo,
+      const double per_draw = double(sub_ns_[k]) / 1e3 / double(sub_samples_);
+      total += per_draw;
+      line += fmt::format(" | {} {:.2f} us/dibujo ({:.2f} us x {:.2f} por dibujo)", kNames[k], per_draw,
                            double(sub_ns_[k]) / 1e3 / double(sub_n_[k]),
-                           double(sub_n_[k]) / double(sub_muestras_));
+                           double(sub_n_[k]) / double(sub_samples_));
     }
-    NFSMW_INFORME_ANILLO("[nativo] C6 subetapas ({} dibujos cronometrados; suma {:.2f} us por dibujo){}", sub_muestras_,
-                total, linea);
+    NFSMW_RING_REPORT("[nativo] C6 subetapas ({} dibujos cronometrados; suma {:.2f} us por dibujo){}", sub_samples_,
+                total, line);
     sub_ns_.fill(0);
     sub_n_.fill(0);
-    sub_muestras_ = 0;
+    sub_samples_ = 0;
   }
 
   /*
@@ -3982,33 +3982,33 @@ class DibujosVulkanImpl final : public DibujosVulkan {
    * the buffer. On a single difference: that draw binds as usual, DIFERENCIA in the log and the path is off
    * for the session.
    */
-  bool ComprobarBaseCero(VkDeviceSize offset, VkDeviceSize zancada, uint64_t bytes, uint32_t vmin,
-                         uint32_t& primer_vertice) {
-    const VkDeviceSize primero = offset / zancada;
-    if (primero > VkDeviceSize(INT32_MAX)) {
+  bool CheckZeroBase(VkDeviceSize offset, VkDeviceSize stride_bytes, uint64_t bytes, uint32_t vmin,
+                         uint32_t& first_vertex) {
+    const VkDeviceSize first_item = offset / stride_bytes;
+    if (first_item > VkDeviceSize(INT32_MAX)) {
       return false;  // does not fit in firstVertex/vertexOffset (cannot happen with a 64 MB buffer)
     }
-    const uint64_t n = ++base_cero_comprobados_;
-    if (n <= kBaseCeroAComprobar || (n & 4095) == 0) {
-      const int64_t desplazamiento = int64_t(primero) - int64_t(vmin);  // the vertexOffset of indexed draws
-      const bool bien = primero * zancada == offset &&
-                        (desplazamiento + int64_t(vmin)) * int64_t(zancada) == int64_t(offset) &&
-                        desplazamiento >= int64_t(INT32_MIN) && desplazamiento <= int64_t(INT32_MAX) &&
-                        offset + bytes <= kTamanoSubida && offset + bytes <= subida_tamano_real_;
-      if (!bien) {
-        vertices_base_cero_apagado_ = true;
-        vertices_base_cero_ = false;
+    const uint64_t n = ++checked_zero_base_;
+    if (n <= kZeroBaseToCheck || (n & 4095) == 0) {
+      const int64_t byte_offset = int64_t(first_item) - int64_t(vmin);  // the vertexOffset of indexed draws
+      const bool ok = first_item * stride_bytes == offset &&
+                        (byte_offset + int64_t(vmin)) * int64_t(stride_bytes) == int64_t(offset) &&
+                        byte_offset >= int64_t(INT32_MIN) && byte_offset <= int64_t(INT32_MAX) &&
+                        offset + bytes <= kUploadSize && offset + bytes <= real_size_upload_;
+      if (!ok) {
+        zero_vertices_base_disabled_ = true;
+        zero_vertices_base_ = false;
         REXLOG_ERROR("[nativo] C6 vertices base cero: DIFERENCIA (offset {} zancada {} bytes {} vmin {} primero {}): "
                      "este dibujo y los demas de la sesion enlazan como siempre",
-                     offset, zancada, bytes, vmin, primero);
+                     offset, stride_bytes, bytes, vmin, first_item);
         return false;
       }
-      if (n == kBaseCeroAComprobar) {
-        NFSMW_INFORME_ANILLO("[nativo] C6 vertices base cero: {} dibujos comprobados, 0 diferencias; sigue comprobando 1 de "
+      if (n == kZeroBaseToCheck) {
+        NFSMW_RING_REPORT("[nativo] C6 vertices base cero: {} dibujos comprobados, 0 diferencias; sigue comprobando 1 de "
                     "cada 4096", n);
       }
     }
-    primer_vertice = uint32_t(primero);
+    first_vertex = uint32_t(first_item);
     return true;
   }
 
@@ -4018,36 +4018,36 @@ class DibujosVulkanImpl final : public DibujosVulkan {
    * reports it in the log as an error once: NVK has already switched it off for the rest of the session.
    */
   void ControlSet4() {
-    bool pedido = REXCVAR_GET(nfsmw_nativo_set4_diferencias);
+    bool request = REXCVAR_GET(nfsmw_nativo_set4_diferencias);
     const int32_t alternar = REXCVAR_GET(nfsmw_nativo_set4_diferencias_alternar_s);
     if (alternar > 0) {
-      const auto segundos = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() -
-                                                                             set4_inicio_alternancia_)
+      const auto secs = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() -
+                                                                             set4_toggle_start_)
                                 .count();
-      pedido = (segundos / alternar) % 2 == 1;
+      request = (secs / alternar) % 2 == 1;
     }
 #if REX_PLATFORM_SWITCH
     NvkSwitchSet4* const nvk = &nvk_switch_set4;
-    const bool con_parche = nvk != nullptr && nvk->version == 1;
+    const bool with_patch = nvk != nullptr && nvk->version == 1;
 #else
-    const bool con_parche = false;
+    const bool with_patch = false;
 #endif
-    if (pedido != set4_pedido_ || !set4_pedido_anotado_) {
-      set4_pedido_ = pedido;
-      set4_pedido_anotado_ = true;
+    if (request != set4_request_ || !set4_tracked_request_) {
+      set4_request_ = request;
+      set4_tracked_request_ = true;
       REXLOG_INFO("[nativo] C6 set 4 por diferencias (build 184): {} (fotograma {}){}",
-                  pedido ? "pedido a NVK" : "NO pedido: NVK enlaza el conjunto entero", fotograma_,
-                  con_parche ? "" : "; este NVK no tiene parche_nvk_set4 (Mesa anterior o PC): enlaza como siempre");
+                  request ? "pedido a NVK" : "NO pedido: NVK enlaza el conjunto entero", frame_,
+                  with_patch ? "" : "; este NVK no tiene parche_nvk_set4 (Mesa anterior o PC): enlaza como siempre");
     }
 #if REX_PLATFORM_SWITCH
-    if (con_parche) {
-      __atomic_store_n(&nvk->pedido, pedido ? 1 : 0, __ATOMIC_RELAXED);
-      if (!set4_diferencia_avisada_ && __atomic_load_n(&nvk->apagado, __ATOMIC_RELAXED) != 0) {
-        set4_diferencia_avisada_ = true;
+    if (with_patch) {
+      __atomic_store_n(&nvk->request, request ? 1 : 0, __ATOMIC_RELAXED);
+      if (!set4_warned_difference_ && __atomic_load_n(&nvk->disabled, __ATOMIC_RELAXED) != 0) {
+        set4_warned_difference_ = true;
         REXLOG_ERROR("[nativo] C6 set 4 por diferencias: DIFERENCIA vista por la guardia de NVK ({} cbufs mal "
                      "enlazados, cada uno arreglado en su dibujo; detalle en rex_stderr.log). Apagado para el resto "
                      "de la sesion: NVK enlaza el conjunto entero, como siempre",
-                     __atomic_load_n(&nvk->total.diferencias, __ATOMIC_RELAXED));
+                     __atomic_load_n(&nvk->total.differences, __ATOMIC_RELAXED));
       }
     }
 #endif
@@ -4059,58 +4059,58 @@ class DibujosVulkanImpl final : public DibujosVulkan {
    * seen a DIFERENCIA, reports it in the log as an error once: NVK has already switched it off for the
    * rest of the session.
    */
-  void ControlDibujoNvk() {
+  void NvkDrawControl() {
 #if REX_PLATFORM_SWITCH
-    NvkSwitchDibujo* const nvk = &nvk_switch_dibujo;
+    NvkSwitchDraw* const nvk = &nvk_draw_switch;
     if (nvk == nullptr || nvk->version != 1) {
-      nvk_precarga_app_ = false;
-      if (!nvk_dibujo_anotado_) {
-        nvk_dibujo_anotado_ = true;
+      nvk_app_preload_ = false;
+      if (!nvk_tracked_draw_) {
+        nvk_tracked_draw_ = true;
         REXLOG_INFO("[nativo] C6 NVK por dibujo (build 186): este NVK no tiene el contrato nvk_switch_dibujo (Mesa "
                     "anterior): sin medida ni mejoras");
       }
       return;
     }
-    int32_t medir = std::max<int32_t>(0, REXCVAR_GET(nfsmw_nativo_nvk_medir));
-    if (medir > 0) {
-      medir = int32_t(std::bit_floor(uint32_t(medir)));  // NVK wants a power of 2
+    int32_t do_measure = std::max<int32_t>(0, REXCVAR_GET(nfsmw_nativo_nvk_medir));
+    if (do_measure > 0) {
+      do_measure = int32_t(std::bit_floor(uint32_t(do_measure)));  // NVK wants a power of 2
     }
-    bool mejoras = true;
+    bool improvements = true;
     const int32_t alternar = REXCVAR_GET(nfsmw_nativo_nvk_alternar_s);
     if (alternar > 0) {
-      const auto segundos =
-          std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - nvk_dibujo_inicio_)
+      const auto secs =
+          std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - nvk_start_draw_)
               .count();
-      mejoras = (segundos / alternar) % 2 == 1;
+      improvements = (secs / alternar) % 2 == 1;
     }
-    const int32_t pedidos[5] = {mejoras && REXCVAR_GET(nfsmw_nativo_nvk_emision) ? 1 : 0,
-                                mejoras && REXCVAR_GET(nfsmw_nativo_nvk_cbufs) ? 1 : 0,
-                                mejoras && REXCVAR_GET(nfsmw_nativo_nvk_dinamico) ? 1 : 0,
+    const int32_t requests[5] = {improvements && REXCVAR_GET(nfsmw_nativo_nvk_emision) ? 1 : 0,
+                                improvements && REXCVAR_GET(nfsmw_nativo_nvk_cbufs) ? 1 : 0,
+                                improvements && REXCVAR_GET(nfsmw_nativo_nvk_dinamico) ? 1 : 0,
                                 0,  // the fast set 4 path (p05) is not applied
-                                mejoras && REXCVAR_GET(nfsmw_nativo_nvk_precarga) ? 1 : 0};
-    __atomic_store_n(&nvk->medir, medir, __ATOMIC_RELAXED);
-    __atomic_store_n(&nvk->medir_fallos, REXCVAR_GET(nfsmw_nativo_nvk_medir_fallos) ? 1 : 0, __ATOMIC_RELAXED);
+                                improvements && REXCVAR_GET(nfsmw_nativo_nvk_precarga) ? 1 : 0};
+    __atomic_store_n(&nvk->do_measure, do_measure, __ATOMIC_RELAXED);
+    __atomic_store_n(&nvk->measure_failures, REXCVAR_GET(nfsmw_nativo_nvk_medir_fallos) ? 1 : 0, __ATOMIC_RELAXED);
     for (size_t m = 0; m < 5; ++m) {
-      __atomic_store_n(&nvk->mejoras[m].pedido, pedidos[m], __ATOMIC_RELAXED);
+      __atomic_store_n(&nvk->improvements[m].request, requests[m], __ATOMIC_RELAXED);
     }
-    nvk_precarga_app_ = pedidos[4] != 0;
-    if (!nvk_dibujo_anotado_ || mejoras != nvk_mejoras_pedidas_) {
-      nvk_dibujo_anotado_ = true;
-      nvk_mejoras_pedidas_ = mejoras;
+    nvk_app_preload_ = requests[4] != 0;
+    if (!nvk_tracked_draw_ || improvements != nvk_requested_improvements_) {
+      nvk_tracked_draw_ = true;
+      nvk_requested_improvements_ = improvements;
       REXLOG_INFO("[nativo] C6 NVK por dibujo (build 186): mejoras {} (emision {}, cbufs {}, dinamico {}, precarga {}); "
                   "medida 1 de cada {} llamadas{}; entorno NVK_SWITCH_DIBUJO {} (fotograma {})",
-                  mejoras ? "pedidas" : "NO pedidas", pedidos[0], pedidos[1], pedidos[2], pedidos[4], medir,
+                  improvements ? "pedidas" : "NO pedidas", requests[0], requests[1], requests[2], requests[4], do_measure,
                   REXCVAR_GET(nfsmw_nativo_nvk_medir_fallos) ? " con los fallos de cache aparte" : "",
-                  __atomic_load_n(&nvk->entorno, __ATOMIC_RELAXED), fotograma_);
+                  __atomic_load_n(&nvk->environment, __ATOMIC_RELAXED), frame_);
     }
-    static constexpr const char* kNombres[5] = {"emision", "cbufs", "dinamico", "set 4 rapido", "precarga"};
+    static constexpr const char* kNames[5] = {"emision", "cbufs", "dinamico", "set 4 rapido", "precarga"};
     for (size_t m = 0; m < 5; ++m) {
-      if (!nvk_apagado_avisado_[m] && __atomic_load_n(&nvk->mejoras[m].apagado, __ATOMIC_RELAXED) != 0) {
-        nvk_apagado_avisado_[m] = true;
+      if (!nvk_warned_disabled_[m] && __atomic_load_n(&nvk->improvements[m].disabled, __ATOMIC_RELAXED) != 0) {
+        nvk_warned_disabled_[m] = true;
         REXLOG_ERROR("[nativo] C6 NVK por dibujo: DIFERENCIA vista por la guardia de «{}» ({} comprobaciones "
                      "distintas; detalle en rex_stderr.log). Apagada para el resto de la sesion: NVK lo hace como "
                      "siempre",
-                     kNombres[m], __atomic_load_n(&nvk->mejoras[m].diferencias, __ATOMIC_RELAXED));
+                     kNames[m], __atomic_load_n(&nvk->improvements[m].differences, __ATOMIC_RELAXED));
       }
     }
 #endif
@@ -4121,82 +4121,82 @@ class DibujosVulkanImpl final : public DibujosVulkan {
    * draw, how much work it carries; per pipeline bind, how many state copies changed nothing; and per
    * improvement, uses, checks and differences. Totals are from command buffers that have already finished.
    */
-  void InformeDibujoNvk() {
+  void NvkDrawReport() {
 #if REX_PLATFORM_SWITCH
-    const auto ahora = std::chrono::steady_clock::now();
-    if (ahora - nvk_informe_ < std::chrono::seconds(10)) {
+    const auto now_time = std::chrono::steady_clock::now();
+    if (now_time - nvk_report_ < std::chrono::seconds(10)) {
       return;
     }
-    const bool primera = nvk_informe_ == std::chrono::steady_clock::time_point{};
-    nvk_informe_ = ahora;
-    NvkSwitchDibujo* const nvk = &nvk_switch_dibujo;
+    const bool is_first = nvk_report_ == std::chrono::steady_clock::time_point{};
+    nvk_report_ = now_time;
+    NvkSwitchDraw* const nvk = &nvk_draw_switch;
     if (nvk == nullptr || nvk->version != 1) {
       return;
     }
-    uint64_t veces[16], ticks[16], cuentas[13], mejoras[5][4];
+    uint64_t times[16], ticks[16], counts[13], improvements[5][4];
     for (size_t i = 0; i < 16; ++i) {
-      const uint64_t v = __atomic_load_n(&nvk->partes[i].veces, __ATOMIC_RELAXED);
-      const uint64_t t = __atomic_load_n(&nvk->partes[i].ticks, __ATOMIC_RELAXED);
-      veces[i] = v - nvk_partes_previas_[i][0];
-      ticks[i] = t - nvk_partes_previas_[i][1];
-      nvk_partes_previas_[i][0] = v;
-      nvk_partes_previas_[i][1] = t;
+      const uint64_t v = __atomic_load_n(&nvk->parts[i].times, __ATOMIC_RELAXED);
+      const uint64_t t = __atomic_load_n(&nvk->parts[i].ticks, __ATOMIC_RELAXED);
+      times[i] = v - nvk_parts_previous_[i][0];
+      ticks[i] = t - nvk_parts_previous_[i][1];
+      nvk_parts_previous_[i][0] = v;
+      nvk_parts_previous_[i][1] = t;
     }
     for (size_t i = 0; i < 13; ++i) {
-      const uint64_t c = __atomic_load_n(&nvk->cuentas[i], __ATOMIC_RELAXED);
-      cuentas[i] = c - nvk_cuentas_previas_[i];
-      nvk_cuentas_previas_[i] = c;
+      const uint64_t c = __atomic_load_n(&nvk->counts[i], __ATOMIC_RELAXED);
+      counts[i] = c - nvk_counts_previous_[i];
+      nvk_counts_previous_[i] = c;
     }
     for (size_t m = 0; m < 5; ++m) {
-      const uint64_t c[4] = {__atomic_load_n(&nvk->mejoras[m].usos, __ATOMIC_RELAXED),
-                             __atomic_load_n(&nvk->mejoras[m].validadas, __ATOMIC_RELAXED),
-                             __atomic_load_n(&nvk->mejoras[m].diferencias, __ATOMIC_RELAXED),
-                             __atomic_load_n(&nvk->mejoras[m].sin_comprobar, __ATOMIC_RELAXED)};
+      const uint64_t c[4] = {__atomic_load_n(&nvk->improvements[m].uses, __ATOMIC_RELAXED),
+                             __atomic_load_n(&nvk->improvements[m].validated_items, __ATOMIC_RELAXED),
+                             __atomic_load_n(&nvk->improvements[m].differences, __ATOMIC_RELAXED),
+                             __atomic_load_n(&nvk->improvements[m].without_check, __ATOMIC_RELAXED)};
       for (size_t k = 0; k < 4; ++k) {
-        mejoras[m][k] = c[k] - nvk_mejoras_previas_[m][k];
-        nvk_mejoras_previas_[m][k] = c[k];
+        improvements[m][k] = c[k] - nvk_improvements_previous_[m][k];
+        nvk_improvements_previous_[m][k] = c[k];
       }
     }
-    if (primera) {
+    if (is_first) {
       return;
     }
-    const uint64_t tps = __atomic_load_n(&nvk->ticks_por_segundo, __ATOMIC_RELAXED);
+    const uint64_t tps = __atomic_load_n(&nvk->per_second_ticks, __ATOMIC_RELAXED);
     const double us_tick = tps ? 1e6 / double(tps) : 0.0;
-    const uint64_t dibujos = cuentas[0];  // NVK_SW_C_DIBUJOS_MEDIDOS
+    const uint64_t draws = counts[0];  // NVK_SW_C_DIBUJOS_MEDIDOS
     // us per measured call and, in brackets, us per measured draw.
-    const auto parte = [&](size_t i) {
-      return fmt::format("{:.2f} [{:.2f}]", veces[i] ? double(ticks[i]) * us_tick / double(veces[i]) : 0.0,
-                         dibujos ? double(ticks[i]) * us_tick / double(dibujos) : 0.0);
+    const auto part = [&](size_t i) {
+      return fmt::format("{:.2f} [{:.2f}]", times[i] ? double(ticks[i]) * us_tick / double(times[i]) : 0.0,
+                         draws ? double(ticks[i]) * us_tick / double(draws) : 0.0);
     };
-    const auto por_dibujo = [&](size_t i) { return dibujos ? double(cuentas[i]) / double(dibujos) : 0.0; };
-    if (dibujos) {
-      NFSMW_INFORME_ANILLO(
+    const auto per_draw = [&](size_t i) { return draws ? double(counts[i]) / double(draws) : 0.0; };
+    if (draws) {
+      NFSMW_RING_REPORT(
           "[nativo] C6 NVK por partes (build 186; us por llamada medida [us por dibujo medido]; {} dibujos medidos): "
           "dibujo entero {} | push desc {} | dinamico {} | toque shaders {} | shaders {} | cbufs {} | emitir {} | "
           "BindPipeline: shaders {} toque {} copia del estado {} | sets {} (raiz {} ensuciar {}) | tabla raiz {} | "
           "trozo nuevo {} | BindVertexBuffers {}",
-          dibujos, parte(0), parte(1), parte(2), parte(3), parte(4), parte(5), parte(6), parte(7), parte(8),
-          parte(9), parte(10), parte(11), parte(12), parte(13), parte(14), parte(15));
-      NFSMW_INFORME_ANILLO(
+          draws, part(0), part(1), part(2), part(3), part(4), part(5), part(6), part(7), part(8),
+          part(9), part(10), part(11), part(12), part(13), part(14), part(15));
+      NFSMW_RING_REPORT(
           "[nativo] C6 NVK por dibujo medido: {:.1f} dwords; {:.2f} con estado dinamico sucio ({:.1f} bits); {:.2f} con "
           "shaders sucios; {:.2f} cbufs reenlazados | pipelines: {} enlaces medidos, {:.1f} % copias que no cambiaron "
           "nada, {:.2f} bits nuevos por enlace | {} subidas a la tabla raiz ({:.1f} palabras cada una), {} trozos nuevos",
-          por_dibujo(1), por_dibujo(2), cuentas[2] ? double(cuentas[3]) / double(cuentas[2]) : 0.0, por_dibujo(4),
-          por_dibujo(5), cuentas[6], cuentas[6] ? 100.0 * double(cuentas[7]) / double(cuentas[6]) : 0.0,
-          cuentas[6] ? double(cuentas[8]) / double(cuentas[6]) : 0.0, cuentas[10],
-          cuentas[10] ? double(cuentas[11]) / double(cuentas[10]) : 0.0, cuentas[12]);
+          per_draw(1), per_draw(2), counts[2] ? double(counts[3]) / double(counts[2]) : 0.0, per_draw(4),
+          per_draw(5), counts[6], counts[6] ? 100.0 * double(counts[7]) / double(counts[6]) : 0.0,
+          counts[6] ? double(counts[8]) / double(counts[6]) : 0.0, counts[10],
+          counts[10] ? double(counts[11]) / double(counts[10]) : 0.0, counts[12]);
     }
-    static constexpr size_t kMostradas[4] = {0, 1, 2, 4};  // without the fast set 4 (p05), which is not applied
-    static constexpr const char* kNombres[5] = {"emision", "cbufs", "dinamico", "set 4 rapido", "precarga"};
+    static constexpr size_t kShown[4] = {0, 1, 2, 4};  // without the fast set 4 (p05), which is not applied
+    static constexpr const char* kNames[5] = {"emision", "cbufs", "dinamico", "set 4 rapido", "precarga"};
     std::string texto;
-    for (const size_t m : kMostradas) {
-      const char* estado = __atomic_load_n(&nvk->mejoras[m].apagado, __ATOMIC_RELAXED) != 0 ? "APAGADA por la guardia"
-                           : __atomic_load_n(&nvk->mejoras[m].pedido, __ATOMIC_RELAXED) == 0 ? "no pedida"
+    for (const size_t m : kShown) {
+      const char* state = __atomic_load_n(&nvk->improvements[m].disabled, __ATOMIC_RELAXED) != 0 ? "APAGADA por la guardia"
+                           : __atomic_load_n(&nvk->improvements[m].request, __ATOMIC_RELAXED) == 0 ? "no pedida"
                                                                                               : "encendida";
-      texto += fmt::format(" | {} ({}): {} usos, {} comprobadas iguales, {} distintas, {} sin comprobar", kNombres[m],
-                           estado, mejoras[m][0], mejoras[m][1], mejoras[m][2], mejoras[m][3]);
+      texto += fmt::format(" | {} ({}): {} usos, {} comprobadas iguales, {} distintas, {} sin comprobar", kNames[m],
+                           state, improvements[m][0], improvements[m][1], improvements[m][2], improvements[m][3]);
     }
-    NFSMW_INFORME_ANILLO("[nativo] C6 NVK mejoras (build 186, ultimos 10 s){}", texto);
+    NFSMW_RING_REPORT("[nativo] C6 NVK mejoras (build 186, ultimos 10 s){}", texto);
 #endif
   }
 
@@ -4205,89 +4205,89 @@ class DibujosVulkanImpl final : public DibujosVulkan {
    * NVK has it, what is saved: root table writes per bind (4 without it), cbufs not rebound and the state
    * of its guard.
    */
-  void InformeSet4() {
-    const auto ahora = std::chrono::steady_clock::now();
-    if (ahora - set4_informe_ < std::chrono::seconds(10)) {
+  void Set4Report() {
+    const auto now_time = std::chrono::steady_clock::now();
+    if (now_time - set4_report_ < std::chrono::seconds(10)) {
       return;
     }
-    const bool primera = set4_informe_ == std::chrono::steady_clock::time_point{};
-    set4_informe_ = ahora;
-    uint64_t enlaces = set4_primeros_;
-    for (const uint64_t n : set4_cambios_) {
-      enlaces += n;
+    const bool is_first = set4_report_ == std::chrono::steady_clock::time_point{};
+    set4_report_ = now_time;
+    uint64_t bindings = set4_first_;
+    for (const uint64_t n : set4_changes_) {
+      bindings += n;
     }
-    if (!primera && set4_dibujos_ && enlaces) {
-      const auto pct = [enlaces](uint64_t n) { return 100.0 * double(n) / double(enlaces); };
-      NFSMW_INFORME_ANILLO(
+    if (!is_first && set4_draws_ && bindings) {
+      const auto pct = [bindings](uint64_t n) { return 100.0 * double(n) / double(bindings); };
+      NFSMW_RING_REPORT(
           "[nativo] C6 set 4: {:.2f} enlaces por dibujo ({} en {} dibujos); cambia solo VS {:.1f} %, solo PS "
           "{:.1f} %, solo compartidas {:.1f} %, VS+PS {:.1f} %, VS+compartidas {:.1f} %, PS+compartidas {:.1f} %, "
           "las tres {:.1f} %, tras bufer, ranura o cielo {:.1f} % | constantes subidas otra vez: VS {} por "
           "generacion, {} por epoca y {} porque el shader lee mas; PS {}, {} y {}",
-          double(enlaces) / double(set4_dibujos_), enlaces, set4_dibujos_, pct(set4_cambios_[1]),
-          pct(set4_cambios_[2]), pct(set4_cambios_[4]), pct(set4_cambios_[3]), pct(set4_cambios_[5]),
-          pct(set4_cambios_[6]), pct(set4_cambios_[7]), pct(set4_primeros_), resubidas_vs_[0], resubidas_vs_[1],
-          resubidas_vs_[2], resubidas_ps_[0], resubidas_ps_[1], resubidas_ps_[2]);
+          double(bindings) / double(set4_draws_), bindings, set4_draws_, pct(set4_changes_[1]),
+          pct(set4_changes_[2]), pct(set4_changes_[4]), pct(set4_changes_[3]), pct(set4_changes_[5]),
+          pct(set4_changes_[6]), pct(set4_changes_[7]), pct(set4_first_), vs_reuploaded_[0], vs_reuploaded_[1],
+          vs_reuploaded_[2], ps_reuploaded_[0], ps_reuploaded_[1], ps_reuploaded_[2]);
 #if REX_PLATFORM_SWITCH
       if (NvkSwitchSet4* const nvk = &nvk_switch_set4; nvk != nullptr && nvk->version == 1) {
-        const uint64_t cuentas[9] = {__atomic_load_n(&nvk->total.enlaces_diferencia, __ATOMIC_RELAXED),
-                                     __atomic_load_n(&nvk->total.enlaces_completos, __ATOMIC_RELAXED),
-                                     __atomic_load_n(&nvk->total.escrituras_raiz, __ATOMIC_RELAXED),
-                                     __atomic_load_n(&nvk->total.dwords_raiz, __ATOMIC_RELAXED),
-                                     __atomic_load_n(&nvk->total.cbufs_sucios, __ATOMIC_RELAXED),
-                                     __atomic_load_n(&nvk->total.cbufs_ahorrados, __ATOMIC_RELAXED),
-                                     __atomic_load_n(&nvk->total.dibujos, __ATOMIC_RELAXED),
-                                     __atomic_load_n(&nvk->total.comprobaciones, __ATOMIC_RELAXED),
-                                     __atomic_load_n(&nvk->total.diferencias, __ATOMIC_RELAXED)};
+        const uint64_t counts[9] = {__atomic_load_n(&nvk->total.difference_bindings, __ATOMIC_RELAXED),
+                                     __atomic_load_n(&nvk->total.complete_bindings, __ATOMIC_RELAXED),
+                                     __atomic_load_n(&nvk->total.root_writes, __ATOMIC_RELAXED),
+                                     __atomic_load_n(&nvk->total.root_dwords, __ATOMIC_RELAXED),
+                                     __atomic_load_n(&nvk->total.dirty_cbufs, __ATOMIC_RELAXED),
+                                     __atomic_load_n(&nvk->total.saved_cbufs, __ATOMIC_RELAXED),
+                                     __atomic_load_n(&nvk->total.draws, __ATOMIC_RELAXED),
+                                     __atomic_load_n(&nvk->total.checks, __ATOMIC_RELAXED),
+                                     __atomic_load_n(&nvk->total.differences, __ATOMIC_RELAXED)};
         uint64_t d[9];
         for (size_t i = 0; i < 9; ++i) {
-          d[i] = cuentas[i] - set4_nvk_previo_[i];
-          set4_nvk_previo_[i] = cuentas[i];
+          d[i] = counts[i] - set4_nvk_previous_[i];
+          set4_nvk_previous_[i] = counts[i];
         }
-        const char* const estado = __atomic_load_n(&nvk->apagado, __ATOMIC_RELAXED) != 0 ? "APAGADO por la guardia"
-                                   : __atomic_load_n(&nvk->entorno, __ATOMIC_RELAXED) == 0
+        const char* const state = __atomic_load_n(&nvk->disabled, __ATOMIC_RELAXED) != 0 ? "APAGADO por la guardia"
+                                   : __atomic_load_n(&nvk->environment, __ATOMIC_RELAXED) == 0
                                        ? "apagado por NVK_SWITCH_DYN_UBO_DELTA"
-                                   : !set4_pedido_ ? "apagado por el cvar"
+                                   : !set4_request_ ? "apagado por el cvar"
                                                    : "encendido";
-        NFSMW_INFORME_ANILLO(
+        NFSMW_RING_REPORT(
             "[nativo] C6 set 4 por diferencias (NVK, {}): {} enlaces por diferencias y {} enteros; {:.2f} escrituras "
             "a la tabla raiz por enlace (antes 4) con {:.2f} palabras; cbufs ensuciados {} y sin ensuciar {} ({:.1f} % "
             "menos); guardia: {} cbufs comprobados ({} dibujos por el camino nuevo), {} diferencias",
-            estado, d[0], d[1], d[0] ? double(d[2]) / double(d[0]) : 0.0, d[0] ? double(d[3]) / double(d[0]) : 0.0,
+            state, d[0], d[1], d[0] ? double(d[2]) / double(d[0]) : 0.0, d[0] ? double(d[3]) / double(d[0]) : 0.0,
             d[4], d[5], d[4] + d[5] ? 100.0 * double(d[5]) / double(d[4] + d[5]) : 0.0, d[7], d[6], d[8]);
       }
 #endif
     }
-    set4_cambios_.fill(0);
-    set4_primeros_ = 0;
-    set4_dibujos_ = 0;
-    resubidas_vs_.fill(0);
-    resubidas_ps_.fill(0);
+    set4_changes_.fill(0);
+    set4_first_ = 0;
+    set4_draws_ = 0;
+    vs_reuploaded_.fill(0);
+    ps_reuploaded_.fill(0);
   }
 
   // Every 10 s, how many draws go without binding their own offset (base zero).
-  void InformeBaseCero() {
-    const auto ahora = std::chrono::steady_clock::now();
-    if (ahora - base_cero_informe_ < std::chrono::seconds(10)) {
+  void ZeroBaseReport() {
+    const auto now_time = std::chrono::steady_clock::now();
+    if (now_time - zero_base_report_ < std::chrono::seconds(10)) {
       return;
     }
-    const bool primera = base_cero_informe_ == std::chrono::steady_clock::time_point{};
-    base_cero_informe_ = ahora;
-    if (!primera && base_cero_total_) {
-      NFSMW_INFORME_ANILLO("[nativo] C6 vertices base cero ({}): {} de {} dibujos con vertices sin enlazar su propio "
+    const bool is_first = zero_base_report_ == std::chrono::steady_clock::time_point{};
+    zero_base_report_ = now_time;
+    if (!is_first && zero_base_total_) {
+      NFSMW_RING_REPORT("[nativo] C6 vertices base cero ({}): {} de {} dibujos con vertices sin enlazar su propio "
                   "desplazamiento ({:.1f} %); {} con varios enlaces y {} con la copia del dedupe fuera de un "
                   "multiplo de la zancada; {:.2f} vkCmdBindVertexBuffers por dibujo",
-                  vertices_base_cero_apagado_ ? "APAGADO por la guardia"
-                  : vertices_base_cero_       ? "encendido"
+                  zero_vertices_base_disabled_ ? "APAGADO por la guardia"
+                  : zero_vertices_base_       ? "encendido"
                                               : "apagado",
-                  base_cero_dibujos_, base_cero_total_, 100.0 * double(base_cero_dibujos_) / double(base_cero_total_),
-                  base_cero_varios_enlaces_, base_cero_desalineados_,
-                  double(base_cero_enlaces_grabados_) / double(base_cero_total_));
+                  draws_zero_base_, zero_base_total_, 100.0 * double(draws_zero_base_) / double(zero_base_total_),
+                  bindings_several_zero_base_, misaligned_zero_base_,
+                  double(recorded_bindings_zero_base_) / double(zero_base_total_));
     }
-    base_cero_dibujos_ = 0;
-    base_cero_total_ = 0;
-    base_cero_varios_enlaces_ = 0;
-    base_cero_desalineados_ = 0;
-    base_cero_enlaces_grabados_ = 0;
+    draws_zero_base_ = 0;
+    zero_base_total_ = 0;
+    bindings_several_zero_base_ = 0;
+    misaligned_zero_base_ = 0;
+    recorded_bindings_zero_base_ = 0;
   }
 
   /*
@@ -4297,60 +4297,60 @@ class DibujosVulkanImpl final : public DibujosVulkan {
    * multiplications GCC could fuse with an add or subtract (ancho * 0.5 and alto * 0.5) are exact, so
    * fused or not they give the same bits.
    */
-  uint32_t CalcularEncuadre(const uint32_t* r, uint32_t vte, bool sin_recorte, uint32_t modo_sc, VkViewport& viewport,
-                            float ndc[4], VkRect2D& tijera) {
-    float escala_x = (vte & 0x1) ? Flotante(r[gr::XE_GPU_REG_PA_CL_VPORT_XSCALE]) : 1.0f;
-    float centro_x = (vte & 0x2) ? Flotante(r[gr::XE_GPU_REG_PA_CL_VPORT_XOFFSET]) : 0.0f;
-    float escala_y = (vte & 0x4) ? Flotante(r[gr::XE_GPU_REG_PA_CL_VPORT_YSCALE]) : 1.0f;
-    float centro_y = (vte & 0x8) ? Flotante(r[gr::XE_GPU_REG_PA_CL_VPORT_YOFFSET]) : 0.0f;
-    const float escala_z = (vte & 0x10) ? Flotante(r[gr::XE_GPU_REG_PA_CL_VPORT_ZSCALE]) : 1.0f;
-    const float centro_z = (vte & 0x20) ? Flotante(r[gr::XE_GPU_REG_PA_CL_VPORT_ZOFFSET]) : 0.0f;
-    const uint32_t ventana = r[gr::XE_GPU_REG_PA_SC_WINDOW_OFFSET];
-    const int32_t ventana_x = int32_t((ventana & 0x7FFF) << 17) >> 17;
-    const int32_t ventana_y = int32_t(((ventana >> 16) & 0x7FFF) << 17) >> 17;
-    if ((modo_sc >> 16) & 0x1) {
-      centro_x += float(ventana_x);
-      centro_y += float(ventana_y);
+  uint32_t ComputeFraming(const uint32_t* r, uint32_t vte, bool without_clip, uint32_t sc_mode, VkViewport& viewport,
+                            float ndc[4], VkRect2D& scissor) {
+    float scale_x = (vte & 0x1) ? Float(r[gr::XE_GPU_REG_PA_CL_VPORT_XSCALE]) : 1.0f;
+    float center_x = (vte & 0x2) ? Float(r[gr::XE_GPU_REG_PA_CL_VPORT_XOFFSET]) : 0.0f;
+    float scale_y = (vte & 0x4) ? Float(r[gr::XE_GPU_REG_PA_CL_VPORT_YSCALE]) : 1.0f;
+    float center_y = (vte & 0x8) ? Float(r[gr::XE_GPU_REG_PA_CL_VPORT_YOFFSET]) : 0.0f;
+    const float scale_z = (vte & 0x10) ? Float(r[gr::XE_GPU_REG_PA_CL_VPORT_ZSCALE]) : 1.0f;
+    const float center_z = (vte & 0x20) ? Float(r[gr::XE_GPU_REG_PA_CL_VPORT_ZOFFSET]) : 0.0f;
+    const uint32_t window = r[gr::XE_GPU_REG_PA_SC_WINDOW_OFFSET];
+    const int32_t window_x = int32_t((window & 0x7FFF) << 17) >> 17;
+    const int32_t window_y = int32_t(((window >> 16) & 0x7FFF) << 17) >> 17;
+    if ((sc_mode >> 16) & 0x1) {
+      center_x += float(window_x);
+      center_y += float(window_y);
     }
     // With the shadow map drawn smaller (nfsmw_nativo_sombras_escala), the guest still speaks in
     // 1600-pixel units. The viewport and the scissor are multiplied by the pass scale, and with that the
     // geometry lands where it should; the rest (ndc, half pixel) already comes from the pass size.
-    if (pase_escala_ != 1.0f) {
-      escala_x *= pase_escala_;
-      centro_x *= pase_escala_;
-      escala_y *= pase_escala_;
-      centro_y *= pase_escala_;
+    if (scale_pass_ != 1.0f) {
+      scale_x *= scale_pass_;
+      center_x *= scale_pass_;
+      scale_y *= scale_pass_;
+      center_y *= scale_pass_;
     }
     viewport = VkViewport{};
-    viewport.x = centro_x - std::abs(escala_x);
-    viewport.width = 2.0f * std::abs(escala_x);
+    viewport.x = center_x - std::abs(scale_x);
+    viewport.width = 2.0f * std::abs(scale_x);
     // A negative YSCALE (the D3D norm) gives a positive height; a positive one, an inverted height.
-    viewport.y = centro_y + escala_y;
-    viewport.height = -2.0f * escala_y;
+    viewport.y = center_y + scale_y;
+    viewport.height = -2.0f * scale_y;
     if (!((r[gr::XE_GPU_REG_PA_CL_CLIP_CNTL] >> 19) & 0x1)) {
-      Avisar(14, "espacio de recorte OpenGL (dx_clip_space_def = 0): Z sin ajustar");
+      Warn(14, "espacio de recorte OpenGL (dx_clip_space_def = 0): Z sin ajustar");
     }
-    viewport.minDepth = std::clamp(centro_z, 0.0f, 1.0f);
-    viewport.maxDepth = std::clamp(centro_z + escala_z, 0.0f, 1.0f);
+    viewport.minDepth = std::clamp(center_z, 0.0f, 1.0f);
+    viewport.maxDepth = std::clamp(center_z + scale_z, 0.0f, 1.0f);
     // g_NdcScale (x, y) and g_NdcOffset (x, y): identity when clipping is on.
     ndc[0] = 1.0f;
     ndc[1] = 1.0f;
     ndc[2] = 0.0f;
     ndc[3] = 0.0f;
-    if (sin_recorte) {
-      const float ancho = float(pase_ancho_);
-      const float alto = float(pase_alto_);
-      ndc[0] = escala_x * 2.0f / ancho;
-      ndc[2] = (centro_x - ancho * 0.5f) * 2.0f / ancho;
+    if (without_clip) {
+      const float width_px = float(pass_width_);
+      const float height_px = float(pass_height_);
+      ndc[0] = scale_x * 2.0f / width_px;
+      ndc[2] = (center_x - width_px * 0.5f) * 2.0f / width_px;
       // DXC flips Y at the end of the VS (-fvk-invert-y): the D3D Y goes here.
-      ndc[1] = -escala_y * 2.0f / alto;
-      ndc[3] = -(centro_y - alto * 0.5f) * 2.0f / alto;
+      ndc[1] = -scale_y * 2.0f / height_px;
+      ndc[3] = -(center_y - height_px * 0.5f) * 2.0f / height_px;
       viewport.x = 0.0f;
       viewport.y = 0.0f;
-      viewport.width = ancho;
-      viewport.height = alto;
+      viewport.width = width_px;
+      viewport.height = height_px;
     }
-    tijera = VkRect2D{};
+    scissor = VkRect2D{};
     if (viewport.width < 1.0f || std::abs(viewport.height) < 1.0f) {
       return 1;
     }
@@ -4359,49 +4359,49 @@ class DibujosVulkanImpl final : public DibujosVulkan {
     int32_t x0 = int32_t(tl & 0x3FFF), y0 = int32_t((tl >> 16) & 0x3FFF);
     int32_t x1 = int32_t(br & 0x3FFF), y1 = int32_t((br >> 16) & 0x3FFF);
     if (!((tl >> 31) & 0x1)) {
-      x0 += ventana_x;
-      y0 += ventana_y;
-      x1 += ventana_x;
-      y1 += ventana_y;
+      x0 += window_x;
+      y0 += window_y;
+      x1 += window_x;
+      y1 += window_y;
     }
-    if (pase_escala_ != 1.0f) {  // also in guest pixels
-      x0 = int32_t(std::floor(float(x0) * pase_escala_));
-      y0 = int32_t(std::floor(float(y0) * pase_escala_));
-      x1 = int32_t(std::ceil(float(x1) * pase_escala_));
-      y1 = int32_t(std::ceil(float(y1) * pase_escala_));
+    if (scale_pass_ != 1.0f) {  // also in guest pixels
+      x0 = int32_t(std::floor(float(x0) * scale_pass_));
+      y0 = int32_t(std::floor(float(y0) * scale_pass_));
+      x1 = int32_t(std::ceil(float(x1) * scale_pass_));
+      y1 = int32_t(std::ceil(float(y1) * scale_pass_));
     }
-    x0 = std::clamp(x0, 0, int32_t(pase_ancho_));
-    x1 = std::clamp(x1, 0, int32_t(pase_ancho_));
-    y0 = std::clamp(y0, 0, int32_t(pase_alto_));
-    y1 = std::clamp(y1, 0, int32_t(pase_alto_));
+    x0 = std::clamp(x0, 0, int32_t(pass_width_));
+    x1 = std::clamp(x1, 0, int32_t(pass_width_));
+    y0 = std::clamp(y0, 0, int32_t(pass_height_));
+    y1 = std::clamp(y1, 0, int32_t(pass_height_));
     if (x1 <= x0 || y1 <= y0) {
       return 2;
     }
-    tijera = VkRect2D{{x0, y0}, {uint32_t(x1 - x0), uint32_t(y1 - y0)}};
+    scissor = VkRect2D{{x0, y0}, {uint32_t(x1 - x0), uint32_t(y1 - y0)}};
     return 0;
   }
 
   // The C1 guard. The current computation against the saved one, byte by byte.
-  void CompararEncuadre(const VkViewport& viewport, const float ndc[4], const VkRect2D& tijera, uint32_t vacio) {
-    ++encuadre_comprobados_;
-    const bool igual = vacio == encuadre_vacio_ &&
-                       std::memcmp(&viewport, &encuadre_viewport_, sizeof(viewport)) == 0 &&
-                       std::memcmp(ndc, encuadre_ndc_, sizeof(encuadre_ndc_)) == 0 &&
-                       std::memcmp(&tijera, &encuadre_tijera_, sizeof(tijera)) == 0;
-    if (!igual) {
-      encuadre_cache_apagada_ = true;
-      encuadre_cache_ = false;
+  void CompareFraming(const VkViewport& viewport, const float ndc[4], const VkRect2D& scissor, uint32_t is_empty) {
+    ++framing_checked_;
+    const bool is_equal = is_empty == framing_empty_ &&
+                       std::memcmp(&viewport, &framing_viewport_, sizeof(viewport)) == 0 &&
+                       std::memcmp(ndc, framing_ndc_, sizeof(framing_ndc_)) == 0 &&
+                       std::memcmp(&scissor, &framing_scissor_, sizeof(scissor)) == 0;
+    if (!is_equal) {
+      framing_cache_disabled_ = true;
+      framing_cache_ = false;
       REXLOG_ERROR("[nativo] C6 encuadre en cache: DIFERENCIA en la comprobacion {} (vacio {} / {}; viewport {},{} "
                    "{}x{} / {},{} {}x{}; tijera {},{} {}x{} / {},{} {}x{}). Apagada para el resto de la sesion: este "
                    "dibujo usa el recalculado",
-                   encuadre_comprobados_, vacio, encuadre_vacio_, viewport.x, viewport.y, viewport.width,
-                   viewport.height, encuadre_viewport_.x, encuadre_viewport_.y, encuadre_viewport_.width,
-                   encuadre_viewport_.height, tijera.offset.x, tijera.offset.y, tijera.extent.width,
-                   tijera.extent.height, encuadre_tijera_.offset.x, encuadre_tijera_.offset.y,
-                   encuadre_tijera_.extent.width, encuadre_tijera_.extent.height);
-    } else if (encuadre_comprobados_ == kEncuadresAComprobar) {
-      NFSMW_INFORME_ANILLO("[nativo] C6 encuadre en cache: {} aciertos comprobados contra el calculo, 0 diferencias; sigue "
-                  "comprobando 1 de cada 4096", encuadre_comprobados_);
+                   framing_checked_, is_empty, framing_empty_, viewport.x, viewport.y, viewport.width,
+                   viewport.height, framing_viewport_.x, framing_viewport_.y, framing_viewport_.width,
+                   framing_viewport_.height, scissor.offset.x, scissor.offset.y, scissor.extent.width,
+                   scissor.extent.height, framing_scissor_.offset.x, framing_scissor_.offset.y,
+                   framing_scissor_.extent.width, framing_scissor_.extent.height);
+    } else if (framing_checked_ == kFramingsToCheck) {
+      NFSMW_RING_REPORT("[nativo] C6 encuadre en cache: {} aciertos comprobados contra el calculo, 0 diferencias; sigue "
+                  "comprobando 1 de cada 4096", framing_checked_);
     }
   }
 
@@ -4411,100 +4411,100 @@ class DibujosVulkanImpl final : public DibujosVulkan {
    * invalidated by insertion (only by erasure, and alto_util_ never erases). Guard: the first
    * kAltoUtilAComprobar reuses, then 1 in 4,096, also look it up in the map and must get the same element.
    */
-  uint32_t& AltoUtilDe(uint32_t pitch) {
-    if (!alto_util_memo_activo_) {
-      return alto_util_[pitch];
+  uint32_t& UsableHeightOf(uint32_t pitch) {
+    if (!active_memo_usable_height_) {
+      return usable_height_[pitch];
     }
-    if (alto_util_memo_ == nullptr || pitch != alto_util_memo_pitch_) {
-      alto_util_memo_ = &alto_util_[pitch];
-      alto_util_memo_pitch_ = pitch;
-      return *alto_util_memo_;
+    if (memo_usable_height_ == nullptr || pitch != memo_pitch_usable_height_) {
+      memo_usable_height_ = &usable_height_[pitch];
+      memo_pitch_usable_height_ = pitch;
+      return *memo_usable_height_;
     }
-    const uint64_t n = ++alto_util_memo_aciertos_;
-    if (n <= kAltoUtilAComprobar || (n & 4095) == 0) {
-      uint32_t* const del_mapa = &alto_util_[pitch];
-      if (del_mapa != alto_util_memo_) {
-        alto_util_memo_apagado_ = true;
-        alto_util_memo_activo_ = false;
-        alto_util_memo_ = nullptr;
+    const uint64_t n = ++hits_memo_usable_height_;
+    if (n <= kUsableHeightToCheck || (n & 4095) == 0) {
+      uint32_t* const from_map_table = &usable_height_[pitch];
+      if (from_map_table != memo_usable_height_) {
+        memo_usable_height_disabled_ = true;
+        active_memo_usable_height_ = false;
+        memo_usable_height_ = nullptr;
         REXLOG_ERROR("[nativo] C6 alto util recordado: DIFERENCIA (pitch {}, comprobacion {}): no es el elemento "
                      "del mapa. Apagado para el resto de la sesion", pitch, n);
-        return *del_mapa;
+        return *from_map_table;
       }
-      if (n == kAltoUtilAComprobar) {
-        NFSMW_INFORME_ANILLO("[nativo] C6 alto util recordado: {} comprobaciones contra el mapa, 0 diferencias; sigue "
+      if (n == kUsableHeightToCheck) {
+        NFSMW_RING_REPORT("[nativo] C6 alto util recordado: {} comprobaciones contra el mapa, 0 diferencias; sigue "
                     "comprobando 1 de cada 4096", n);
       }
     }
-    return *alto_util_memo_;
+    return *memo_usable_height_;
   }
 
   /*
    * The C3 guard. With the same render target bytes, the XXH3 must be pase_clave_. Returns the computed
    * one, which is the one that decides for this draw.
    */
-  uint64_t ComprobarClavePase(const uint64_t claves[5], uint64_t n) {
-    const uint64_t calculada = XXH3_64bits(claves, sizeof(uint64_t) * 5);
-    if (calculada != pase_clave_) {
-      clave_pase_rapida_apagada_ = true;
-      clave_pase_rapida_ = false;
+  uint64_t CheckPassKey(const uint64_t keys[5], uint64_t n) {
+    const uint64_t computed = XXH3_64bits(keys, sizeof(uint64_t) * 5);
+    if (computed != key_pass_) {
+      fast_pass_key_disabled_ = true;
+      fast_pass_key_ = false;
       REXLOG_ERROR("[nativo] C6 clave del pase: DIFERENCIA (comprobacion {}: {:016X} calculada, {:016X} guardada). "
-                   "Apagada para el resto de la sesion", n, calculada, pase_clave_);
-    } else if (n == kClavesPaseAComprobar) {
-      NFSMW_INFORME_ANILLO("[nativo] C6 clave del pase: {} reutilizadas comprobadas con XXH3, 0 diferencias; sigue "
+                   "Apagada para el resto de la sesion", n, computed, key_pass_);
+    } else if (n == kPassKeysToCheck) {
+      NFSMW_RING_REPORT("[nativo] C6 clave del pase: {} reutilizadas comprobadas con XXH3, 0 diferencias; sigue "
                   "comprobando 1 de cada 4096", n);
     }
-    return calculada;
+    return computed;
   }
 
   // Every 10 s, how much the small per-draw savings save.
-  void InformeMinucias() {
-    const auto ahora = std::chrono::steady_clock::now();
-    if (ahora - minucias_informe_ < std::chrono::seconds(10)) {
+  void DetailsReport() {
+    const auto now_time = std::chrono::steady_clock::now();
+    if (now_time - details_report_ < std::chrono::seconds(10)) {
       return;
     }
-    const bool primera = minucias_informe_ == std::chrono::steady_clock::time_point{};
-    minucias_informe_ = ahora;
-    const uint64_t encuadres = encuadre_aciertos_informe_ + encuadre_calculos_informe_;
-    if (!primera && encuadres) {
-      NFSMW_INFORME_ANILLO("[nativo] C6 minucias (build 179): encuadre de la cache en {} de {} dibujos ({:.1f} %; {}{}); "
+    const bool is_first = details_report_ == std::chrono::steady_clock::time_point{};
+    details_report_ = now_time;
+    const uint64_t framings = framing_hits_report_ + framing_calculations_report_;
+    if (!is_first && framings) {
+      NFSMW_RING_REPORT("[nativo] C6 minucias (build 179): encuadre de la cache en {} de {} dibujos ({:.1f} %; {}{}); "
                   "clave del pase sin XXH3 {} veces ({}); alto util recordado {} veces ({}); ajustes de los "
                   "dibujos sin color {}",
-                  encuadre_aciertos_informe_, encuadres,
-                  100.0 * double(encuadre_aciertos_informe_) / double(encuadres),
-                  encuadre_cache_apagada_ ? "APAGADA por la guardia" : encuadre_cache_ ? "encendida" : "apagada",
-                  encuadre_comprobados_ >= kEncuadresAComprobar ? ", guardia superada" : ", comprobando",
-                  claves_pase_rapidas_ - claves_pase_rapidas_previas_,
-                  clave_pase_rapida_apagada_ ? "APAGADA por la guardia" : clave_pase_rapida_ ? "encendida" : "apagada",
-                  alto_util_memo_aciertos_ - alto_util_memo_aciertos_previos_,
-                  alto_util_memo_apagado_ ? "APAGADO por la guardia" : alto_util_memo_activo_ ? "encendido" : "apagado",
-                  cvars_por_fotograma_ ? "una vez por fotograma" : "en cada dibujo");
+                  framing_hits_report_, framings,
+                  100.0 * double(framing_hits_report_) / double(framings),
+                  framing_cache_disabled_ ? "APAGADA por la guardia" : framing_cache_ ? "encendida" : "apagada",
+                  framing_checked_ >= kFramingsToCheck ? ", guardia superada" : ", comprobando",
+                  fast_pass_keys_ - fast_pass_keys_previous_,
+                  fast_pass_key_disabled_ ? "APAGADA por la guardia" : fast_pass_key_ ? "encendida" : "apagada",
+                  hits_memo_usable_height_ - hits_memo_usable_height_previous_,
+                  memo_usable_height_disabled_ ? "APAGADO por la guardia" : active_memo_usable_height_ ? "encendido" : "apagado",
+                  cvars_per_frame_ ? "una vez por fotograma" : "en cada dibujo");
     }
-    encuadre_aciertos_informe_ = 0;
-    encuadre_calculos_informe_ = 0;
-    claves_pase_rapidas_previas_ = claves_pase_rapidas_;
-    alto_util_memo_aciertos_previos_ = alto_util_memo_aciertos_;
+    framing_hits_report_ = 0;
+    framing_calculations_report_ = 0;
+    fast_pass_keys_previous_ = fast_pass_keys_;
+    hits_memo_usable_height_previous_ = hits_memo_usable_height_;
   }
 
   // The guard of the direct-mapped pipeline cache. The same key in the map (the usual path) must give the
   // same VkPipeline as the slot. Otherwise it switches off and returns false.
-  bool ComprobarCasillaPipeline(uint64_t huella, const ClavePipeline& clave, VkPipeline en_casilla, uint64_t n) {
-    ++pipelines_directa_comprobadas_;
-    VkPipeline del_mapa = VK_NULL_HANDLE;
-    if (const auto it = pipelines_.find(huella);
-        it != pipelines_.end() && std::memcmp(&it->second.first, &clave, sizeof(clave)) == 0) {
-      del_mapa = it->second.second;
+  bool CheckPipelineSlot(uint64_t fingerprint, const PipelineKey& key, VkPipeline in_slot, uint64_t n) {
+    ++checked_direct_pipelines_;
+    VkPipeline from_map_table = VK_NULL_HANDLE;
+    if (const auto it = pipelines_.find(fingerprint);
+        it != pipelines_.end() && std::memcmp(&it->second.first, &key, sizeof(key)) == 0) {
+      from_map_table = it->second.second;
     }
-    if (del_mapa != en_casilla) {
-      pipelines_directa_apagada_ = true;
-      pipelines_directa_ = false;
+    if (from_map_table != in_slot) {
+      direct_pipelines_disabled_ = true;
+      direct_pipelines_ = false;
       REXLOG_ERROR("[nativo] C6 pipelines: DIFERENCIA entre la cache directa y el mapa (comprobacion {}, VS {} PS {} "
                    "especializacion {:08X}). Apagada para el resto de la sesion: manda el mapa",
-                   n, clave.vs, clave.ps, clave.especializacion);
+                   n, key.vs, key.ps, key.specialization);
       return false;
     }
-    if (n == kPipelinesAComprobar) {
-      NFSMW_INFORME_ANILLO("[nativo] C6 pipelines: {} aciertos de la cache directa comprobados contra el mapa, 0 "
+    if (n == kPipelinesToCheck) {
+      NFSMW_RING_REPORT("[nativo] C6 pipelines: {} aciertos de la cache directa comprobados contra el mapa, 0 "
                   "diferencias; sigue comprobando 1 de cada 4096", n);
     }
     return true;
@@ -4528,8 +4528,8 @@ class DibujosVulkanImpl final : public DibujosVulkan {
    * same: no effect. Cost: an 80-byte memcmp and about 60 operations per bind (0.3-0.4 binds per draw). It
    * changes nothing.
    */
-  static uint32_t ClaseTopologia(uint32_t topologia) {
-    switch (topologia) {
+  static uint32_t TopologyClass(uint32_t topo) {
+    switch (topo) {
       case VK_PRIMITIVE_TOPOLOGY_POINT_LIST:
         return 0;
       case VK_PRIMITIVE_TOPOLOGY_LINE_LIST:
@@ -4546,23 +4546,23 @@ class DibujosVulkanImpl final : public DibujosVulkan {
 
   // What PipelineDe really reads from a key's blending, masks and depth, with its same criterion
   // (blendEnable per target; depthWriteEnable = test and write; the back face copies the front).
-  static void EstadoCanonico(const ClavePipeline& c, uint32_t mezcla[4], uint32_t& mascaras, uint32_t& profundidad) {
-    mascaras = 0;
+  static void CanonicalState(const PipelineKey& c, uint32_t blend[4], uint32_t& masks, uint32_t& depth_value) {
+    masks = 0;
     for (uint32_t i = 0; i < 4; ++i) {
-      mezcla[i] = 0;
-      if (!c.formatos[i]) {
+      blend[i] = 0;
+      if (!c.formats[i]) {
         continue;  // PipelineDe skips color targets not in the pass
       }
-      const uint32_t mascara = (c.mascaras >> (i * 4)) & 0xF;
-      mascaras |= mascara << (i * 4);
-      const uint32_t m = c.mezcla[i];
-      const bool color_directo = (m & 0x1F) == 1 && ((m >> 8) & 0x1F) == 0 && ((m >> 5) & 0x7) == 0;
-      const bool alfa_directo = ((m >> 16) & 0x1F) == 1 && ((m >> 24) & 0x1F) == 0 && ((m >> 21) & 0x7) == 0;
-      if (((mascara & 0x7) && !color_directo) || ((mascara & 0x8) && !alfa_directo)) {
-        mezcla[i] = m;  // blendEnable: factors count (without blending Vulkan ignores them)
+      const uint32_t mask = (c.masks >> (i * 4)) & 0xF;
+      masks |= mask << (i * 4);
+      const uint32_t m = c.blend[i];
+      const bool direct_color = (m & 0x1F) == 1 && ((m >> 8) & 0x1F) == 0 && ((m >> 5) & 0x7) == 0;
+      const bool direct_alpha = ((m >> 16) & 0x1F) == 1 && ((m >> 24) & 0x1F) == 0 && ((m >> 21) & 0x7) == 0;
+      if (((mask & 0x7) && !direct_color) || ((mask & 0x8) && !direct_alpha)) {
+        blend[i] = m;  // blendEnable: factors count (without blending Vulkan ignores them)
       }
     }
-    uint32_t d = c.formatos[4] ? c.profundidad : 0;  // without a depth target PipelineDe ignores it
+    uint32_t d = c.formats[4] ? c.depth_value : 0;  // without a depth target PipelineDe ignores it
     d &= ~0x8u;                                      // PipelineDe does not read bit 3
     if (!((d >> 1) & 0x1)) {
       d &= ~0x74u;  // without a Z test, write and function do not count
@@ -4572,147 +4572,147 @@ class DibujosVulkanImpl final : public DibujosVulkan {
     } else if (!((d >> 7) & 0x1)) {
       d &= 0x000FFFF7u;  // without its own back face state, the back copies the front
     }
-    profundidad = d;
+    depth_value = d;
   }
 
   // Classifies a vkCmdBindPipeline from Dibujar against the last key bound in this buffer.
   // tras_empezar_pase: EmpezarPase had forgotten the bound pipeline (pipeline_enlazado_ set to
   // VK_NULL_HANDLE).
-  void ContarCambioPipeline(const ClavePipeline& nueva, bool tras_empezar_pase) {
-    uint64_t* const n = cambios_pipeline_.data();
-    ++n[kCambioEnlaces];
-    n[kCambioTrasPase] += tras_empezar_pase ? 1 : 0;
-    const ClavePipeline& a = clave_enlazada_;
-    constexpr uint32_t kBitsPruebaAlfa = 0x2u | (0x7u << kSpecFuncionAlfaDesplazamiento);
-    if (!clave_enlazada_valida_) {
-      ++n[kCambioPrimero];
-    } else if (std::memcmp(&a, &nueva, sizeof(nueva)) == 0) {
-      ++n[kCambioIdentica];  // only after EmpezarPase: Vulkan kept the bound pipeline across passes
-    } else if (a.vs != nueva.vs || a.ps != nueva.ps) {
-      ++n[kCambioShaders];
-    } else if (a.entrada != nueva.entrada) {
-      ++n[kCambioEntrada];
-    } else if (std::memcmp(a.formatos, nueva.formatos, sizeof(a.formatos)) != 0) {
-      ++n[kCambioFormatos];
-    } else if (const uint32_t spec = a.especializacion ^ nueva.especializacion; spec != 0) {
-      ++n[(spec & ~kBitsPruebaAlfa) == 0                      ? kCambioSpecAlfa
-          : (spec & ~(kBitsPruebaAlfa | kSpecZTemprana)) == 0 ? kCambioSpecZTemprana
-                                                              : kCambioSpecOtra];
+  void CountPipelineChange(const PipelineKey& incoming, bool after_pass_start) {
+    uint64_t* const n = pipeline_changes_.data();
+    ++n[kBindingsChange];
+    n[kChangeAfterPass] += after_pass_start ? 1 : 0;
+    const PipelineKey& a = bound_key_;
+    constexpr uint32_t kAlphaTestBits = 0x2u | (0x7u << kSpecOffsetAlphaFunction);
+    if (!valid_bound_key_) {
+      ++n[kChangeFirst];
+    } else if (std::memcmp(&a, &incoming, sizeof(incoming)) == 0) {
+      ++n[kIdenticalChange];  // only after EmpezarPase: Vulkan kept the bound pipeline across passes
+    } else if (a.vs != incoming.vs || a.ps != incoming.ps) {
+      ++n[kShadersChange];
+    } else if (a.entry != incoming.entry) {
+      ++n[kEntryChange];
+    } else if (std::memcmp(a.formats, incoming.formats, sizeof(a.formats)) != 0) {
+      ++n[kFormatsChange];
+    } else if (const uint32_t spec = a.specialization ^ incoming.specialization; spec != 0) {
+      ++n[(spec & ~kAlphaTestBits) == 0                      ? kAlphaSpecChange
+          : (spec & ~(kAlphaTestBits | kSpecZEarly)) == 0 ? kEarlySpecZChange
+                                                              : kOtherSpecChange];
     } else {
       // Same shaders, input, formats and specialization: only fixed pipeline state changes.
-      uint32_t mezcla_a[4], mezcla_n[4], mascaras_a, mascaras_n, prof_a, prof_n;
-      EstadoCanonico(a, mezcla_a, mascaras_a, prof_a);
-      EstadoCanonico(nueva, mezcla_n, mascaras_n, prof_n);
-      const bool topologia = a.topologia != nueva.topologia;
-      const bool clase = ClaseTopologia(a.topologia) != ClaseTopologia(nueva.topologia);
-      const bool mezcla = std::memcmp(mezcla_a, mezcla_n, sizeof(mezcla_a)) != 0;
-      const bool mascaras = mascaras_a != mascaras_n;
+      uint32_t blend_to[4], n_blend[4], masks_to, n_masks, prof_a, prof_n;
+      CanonicalState(a, blend_to, masks_to, prof_a);
+      CanonicalState(incoming, n_blend, n_masks, prof_n);
+      const bool topo = a.topo != incoming.topo;
+      const bool topo_class = TopologyClass(a.topo) != TopologyClass(incoming.topo);
+      const bool blend = std::memcmp(blend_to, n_blend, sizeof(blend_to)) != 0;
+      const bool masks = masks_to != n_masks;
       const uint32_t prof = prof_a ^ prof_n;
-      const uint32_t rast = a.rasterizado ^ nueva.rasterizado;
-      if (!topologia && !mezcla && !mascaras && !prof && !rast) {
-        ++n[kCambioSinEfecto];  // only bits PipelineDe does not read: effectively the same pipeline
-        n[kCambioSinEfectoTrasPase] += tras_empezar_pase ? 1 : 0;
+      const uint32_t rast = a.rasterizado ^ incoming.rasterizado;
+      if (!topo && !blend && !masks && !prof && !rast) {
+        ++n[kChangeWithoutEffect];  // only bits PipelineDe does not read: effectively the same pipeline
+        n[kChangeWithoutEffectAfterPass] += after_pass_start ? 1 : 0;
       } else {
-        const bool eds12 = !mezcla && !mascaras && !clase;
-        ++n[kCambioSoloEstado];
-        n[kCambioEstadoTrasPase] += tras_empezar_pase ? 1 : 0;
-        n[kCambioEds12] += eds12 ? 1 : 0;
-        n[kCambioEds12TrasPase] += (eds12 && tras_empezar_pase) ? 1 : 0;
-        n[kCampoTopologia] += topologia ? 1 : 0;
-        n[kCampoClaseTopologia] += clase ? 1 : 0;
-        n[kCampoMezcla] += mezcla ? 1 : 0;
-        n[kCampoMascaras] += mascaras ? 1 : 0;
-        n[kCampoZ] += (prof & 0x76u) ? 1 : 0;
-        n[kCampoEstencil] += (prof & ~0x76u) ? 1 : 0;
-        n[kCampoCara] += (rast & 0x7u) ? 1 : 0;
-        n[kCampoReinicio] += (rast & 0x8u) ? 1 : 0;
-        n[kCampoSesgo] += (rast & 0x10u) ? 1 : 0;
+        const bool eds12 = !blend && !masks && !topo_class;
+        ++n[kStateOnlyChange];
+        n[kStateChangeAfterPass] += after_pass_start ? 1 : 0;
+        n[kEds12Change] += eds12 ? 1 : 0;
+        n[kEds12ChangeAfterPass] += (eds12 && after_pass_start) ? 1 : 0;
+        n[kTopologyField] += topo ? 1 : 0;
+        n[kTopologyClassField] += topo_class ? 1 : 0;
+        n[kBlendField] += blend ? 1 : 0;
+        n[kMasksField] += masks ? 1 : 0;
+        n[kFieldZ] += (prof & 0x76u) ? 1 : 0;
+        n[kStencilField] += (prof & ~0x76u) ? 1 : 0;
+        n[kFaceField] += (rast & 0x7u) ? 1 : 0;
+        n[kResetField] += (rast & 0x8u) ? 1 : 0;
+        n[kBiasField] += (rast & 0x10u) ? 1 : 0;
       }
     }
-    clave_enlazada_ = nueva;
-    clave_enlazada_valida_ = true;
+    bound_key_ = incoming;
+    valid_bound_key_ = true;
   }
 
   // Every 20 s, what changes at each vkCmdBindPipeline of the ring (measurement only). Reads its cvar on
   // every call: InformePipelinesDirecta calls it, once per frame.
-  void InformeCambiosPipeline(std::chrono::steady_clock::time_point ahora) {
-    const bool contar = REXCVAR_GET(nfsmw_nativo_contar_cambios_pipeline);
-    if (contar != contar_cambios_pipeline_) {
-      contar_cambios_pipeline_ = contar;
-      clave_enlazada_valida_ = false;  // what was tracked while not counting cannot be compared
+  void PipelineChangesReport(std::chrono::steady_clock::time_point now_time) {
+    const bool bump = REXCVAR_GET(nfsmw_nativo_contar_cambios_pipeline);
+    if (bump != count_pipeline_changes_) {
+      count_pipeline_changes_ = bump;
+      valid_bound_key_ = false;  // what was tracked while not counting cannot be compared
     }
-    if (ahora - cambios_informe_ < std::chrono::seconds(20)) {
+    if (now_time - changes_report_ < std::chrono::seconds(20)) {
       return;
     }
-    const bool primera = cambios_informe_ == std::chrono::steady_clock::time_point{};
-    const double segundos = std::chrono::duration<double>(ahora - cambios_informe_).count();
-    cambios_informe_ = ahora;
-    const uint64_t dibujos = dibujados_ - cambios_dibujos_previos_;
-    const uint64_t fotogramas = fotograma_ - cambios_fotogramas_previos_;
-    cambios_dibujos_previos_ = dibujados_;
-    cambios_fotogramas_previos_ = fotograma_;
-    const std::array<uint64_t, kCambiosN> n = cambios_pipeline_;
-    cambios_pipeline_.fill(0);
-    if (primera || !contar_cambios_pipeline_ || !n[kCambioEnlaces] || !dibujos || !fotogramas) {
+    const bool is_first = changes_report_ == std::chrono::steady_clock::time_point{};
+    const double secs = std::chrono::duration<double>(now_time - changes_report_).count();
+    changes_report_ = now_time;
+    const uint64_t draws = drawn_ - draws_changes_previous_;
+    const uint64_t frames = frame_ - frames_changes_previous_;
+    draws_changes_previous_ = drawn_;
+    frames_changes_previous_ = frame_;
+    const std::array<uint64_t, kNChanges> n = pipeline_changes_;
+    pipeline_changes_.fill(0);
+    if (is_first || !count_pipeline_changes_ || !n[kBindingsChange] || !draws || !frames) {
       return;
     }
-    const double enlaces = double(n[kCambioEnlaces]);
-    const double f = double(fotogramas);
-    const auto por_dibujo = [&](uint64_t x) { return double(x) / double(dibujos); };
-    const auto pct = [&](uint64_t x) { return 100.0 * double(x) / enlaces; };
-    const uint64_t spec = n[kCambioSpecAlfa] + n[kCambioSpecZTemprana] + n[kCambioSpecOtra];
-    NFSMW_INFORME_ANILLO(
+    const double bindings = double(n[kBindingsChange]);
+    const double f = double(frames);
+    const auto per_draw = [&](uint64_t x) { return double(x) / double(draws); };
+    const auto pct = [&](uint64_t x) { return 100.0 * double(x) / bindings; };
+    const uint64_t spec = n[kAlphaSpecChange] + n[kEarlySpecZChange] + n[kOtherSpecChange];
+    NFSMW_RING_REPORT(
         "[nativo] C6 cambios de pipeline (build 184, solo medida): {} vkCmdBindPipeline en {:.0f} s ({:.3f} por "
         "dibujo, {:.1f} por fotograma; {} son el primero de un pase) | sin clave anterior {} | la MISMA clave tras "
         "empezar pase {} ({:.1f} %) | cambian shaders {} ({:.1f} %) | otra entrada {} | otros formatos {} | "
         "especializacion {} ({:.1f} %: prueba de alfa {}, con Z temprana {}, otra {}) | sin efecto (bits que "
         "PipelineDe no lee) {} ({:.1f} %) | SOLO ESTADO {} ({:.1f} %, {:.3f} por dibujo): EDS1/EDS2 sin tocar el SDK "
         "{}, el resto pide EDS3",
-        n[kCambioEnlaces], segundos, por_dibujo(n[kCambioEnlaces]), enlaces / f, n[kCambioTrasPase],
-        n[kCambioPrimero], n[kCambioIdentica], pct(n[kCambioIdentica]), n[kCambioShaders], pct(n[kCambioShaders]),
-        n[kCambioEntrada], n[kCambioFormatos], spec, pct(spec), n[kCambioSpecAlfa], n[kCambioSpecZTemprana],
-        n[kCambioSpecOtra], n[kCambioSinEfecto], pct(n[kCambioSinEfecto]), n[kCambioSoloEstado],
-        pct(n[kCambioSoloEstado]), por_dibujo(n[kCambioSoloEstado]), n[kCambioEds12]);
+        n[kBindingsChange], secs, per_draw(n[kBindingsChange]), bindings / f, n[kChangeAfterPass],
+        n[kChangeFirst], n[kIdenticalChange], pct(n[kIdenticalChange]), n[kShadersChange], pct(n[kShadersChange]),
+        n[kEntryChange], n[kFormatsChange], spec, pct(spec), n[kAlphaSpecChange], n[kEarlySpecZChange],
+        n[kOtherSpecChange], n[kChangeWithoutEffect], pct(n[kChangeWithoutEffect]), n[kStateOnlyChange],
+        pct(n[kStateOnlyChange]), per_draw(n[kStateOnlyChange]), n[kEds12Change]);
     // Avoidable binds per frame with each fix, each one separately (those of the first draw of a pass are
     // not avoided by dynamic state or by the canonical key while EmpezarPase forgets the bound pipeline).
-    constexpr double kUsPorEnlace = 3.0;  // BindPipeline: 3.3-4.5 us per call in a race
-    const uint64_t canonica = n[kCambioSinEfecto] - n[kCambioSinEfectoTrasPase];
-    const uint64_t eds12 = n[kCambioEds12] - n[kCambioEds12TrasPase];
-    const uint64_t eds123 = n[kCambioSoloEstado] - n[kCambioEstadoTrasPase];
-    NFSMW_INFORME_ANILLO(
+    constexpr double kUsPerBinding = 3.0;  // BindPipeline: 3.3-4.5 us per call in a race
+    const uint64_t canonical = n[kChangeWithoutEffect] - n[kChangeWithoutEffectAfterPass];
+    const uint64_t eds12 = n[kEds12Change] - n[kEds12ChangeAfterPass];
+    const uint64_t eds123 = n[kStateOnlyChange] - n[kStateChangeAfterPass];
+    NFSMW_RING_REPORT(
         "[nativo] C6 cambios de pipeline, campos del solo estado: topologia {} (de clase {}), mezcla {}, mascaras {}, "
         "Z {}, estencil {}, cara {}, reinicio {}, sesgo {}; {} de ellos el primero de un pase | enlaces evitables por "
         "fotograma (a ~3 us cada uno): {:.1f} con la clave canonica ({:.2f} ms), {:.1f} sin olvidar el pipeline al "
         "empezar pase ({:.2f} ms), {:.1f} con EDS1/EDS2 ({:.2f} ms), {:.1f} con EDS1/EDS2/EDS3 ({:.2f} ms)",
-        n[kCampoTopologia], n[kCampoClaseTopologia], n[kCampoMezcla], n[kCampoMascaras], n[kCampoZ],
-        n[kCampoEstencil], n[kCampoCara], n[kCampoReinicio], n[kCampoSesgo], n[kCambioEstadoTrasPase],
-        double(canonica) / f, double(canonica) / f * kUsPorEnlace / 1000.0, double(n[kCambioIdentica]) / f,
-        double(n[kCambioIdentica]) / f * kUsPorEnlace / 1000.0, double(eds12) / f,
-        double(eds12) / f * kUsPorEnlace / 1000.0, double(eds123) / f, double(eds123) / f * kUsPorEnlace / 1000.0);
+        n[kTopologyField], n[kTopologyClassField], n[kBlendField], n[kMasksField], n[kFieldZ],
+        n[kStencilField], n[kFaceField], n[kResetField], n[kBiasField], n[kStateChangeAfterPass],
+        double(canonical) / f, double(canonical) / f * kUsPerBinding / 1000.0, double(n[kIdenticalChange]) / f,
+        double(n[kIdenticalChange]) / f * kUsPerBinding / 1000.0, double(eds12) / f,
+        double(eds12) / f * kUsPerBinding / 1000.0, double(eds123) / f, double(eds123) / f * kUsPerBinding / 1000.0);
   }
 
   // Every 10 s, the hit rate of the direct-mapped pipeline cache.
-  void InformePipelinesDirecta() {
-    const auto ahora = std::chrono::steady_clock::now();
-    InformeCambiosPipeline(ahora);  // reads its cvar every frame and writes every 20 s
-    IntentarPrecalentar();       // starts the thread as soon as the library is loaded
-    InformePrecalentado(ahora);  // every 10 s, if there is anything new, and its guard
-    if (ahora - pipelines_directa_informe_ < std::chrono::seconds(10)) {
+  void DirectPipelinesReport() {
+    const auto now_time = std::chrono::steady_clock::now();
+    PipelineChangesReport(now_time);  // reads its cvar every frame and writes every 20 s
+    TryPrewarm();       // starts the thread as soon as the library is loaded
+    PrewarmedReport(now_time);  // every 10 s, if there is anything new, and its guard
+    if (now_time - direct_pipelines_report_ < std::chrono::seconds(10)) {
       return;
     }
-    const bool primera = pipelines_directa_informe_ == std::chrono::steady_clock::time_point{};
-    pipelines_directa_informe_ = ahora;
-    const uint64_t aciertos = pipelines_directa_aciertos_ - pipelines_directa_aciertos_previos_;
-    const uint64_t fallos = pipelines_directa_fallos_ - pipelines_directa_fallos_previos_;
-    pipelines_directa_aciertos_previos_ = pipelines_directa_aciertos_;
-    pipelines_directa_fallos_previos_ = pipelines_directa_fallos_;
-    if (!primera && (aciertos || fallos)) {
-      NFSMW_INFORME_ANILLO("[nativo] C6 pipelines (build 179): cache directa {} aciertos y {} fallos ({:.1f} % de las "
+    const bool is_first = direct_pipelines_report_ == std::chrono::steady_clock::time_point{};
+    direct_pipelines_report_ = now_time;
+    const uint64_t hits = hits_direct_pipelines_ - hits_direct_pipelines_previous_;
+    const uint64_t failures = failures_direct_pipelines_ - failures_direct_pipelines_previous_;
+    hits_direct_pipelines_previous_ = hits_direct_pipelines_;
+    failures_direct_pipelines_previous_ = failures_direct_pipelines_;
+    if (!is_first && (hits || failures)) {
+      NFSMW_RING_REPORT("[nativo] C6 pipelines (build 179): cache directa {} aciertos y {} fallos ({:.1f} % de las "
                   "busquedas que no resuelve el atajo de una entrada); {} comprobadas contra el mapa ({})",
-                  aciertos, fallos, 100.0 * double(aciertos) / double(aciertos + fallos),
-                  pipelines_directa_comprobadas_,
-                  pipelines_directa_apagada_ ? "APAGADA por la guardia"
-                  : pipelines_directa_comprobadas_ >= kPipelinesAComprobar ? "guardia superada"
+                  hits, failures, 100.0 * double(hits) / double(hits + failures),
+                  checked_direct_pipelines_,
+                  direct_pipelines_disabled_ ? "APAGADA por la guardia"
+                  : checked_direct_pipelines_ >= kPipelinesToCheck ? "guardia superada"
                                                                            : "comprobando");
     }
   }
@@ -4722,53 +4722,53 @@ class DibujosVulkanImpl final : public DibujosVulkan {
    * cuts inside it (C6 subetapas 15-18), only on the timed draws (1 in 64): they cost four clock reads on
    * those draws, so the "indices" stage reads ~0.2-0.3 us higher than without them.
    */
-  void CortarSubetapa(size_t k, std::chrono::steady_clock::time_point& t) {
-    if (!cronometrar_) {
+  void CutSubstage(size_t k, std::chrono::steady_clock::time_point& t) {
+    if (!time_) {
       return;
     }
-    const auto ahora = std::chrono::steady_clock::now();
-    sub_ns_[k] += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(ahora - t).count());
+    const auto now_time = std::chrono::steady_clock::now();
+    sub_ns_[k] += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(now_time - t).count());
     ++sub_n_[k];
-    t = ahora;
+    t = now_time;
   }
 
-  void Etapa(size_t etapa, std::chrono::steady_clock::time_point& marca) {
-    if (!cronometrar_) {
+  void Stage(size_t stage_idx, std::chrono::steady_clock::time_point& mark) {
+    if (!time_) {
       return;
     }
-    const auto ahora = std::chrono::steady_clock::now();
-    etapas_ns_[etapa] += uint64_t(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(ahora - marca).count());
-    marca = ahora;
+    const auto now_time = std::chrono::steady_clock::now();
+    stages_ns_[stage_idx] += uint64_t(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(now_time - mark).count());
+    mark = now_time;
   }
 
   // Diagnostic nfsmw_nativo_diag_vertices_repetidos: vertex bytes that repeat address, size, byte order
   // and content within the same frame or relative to an earlier frame.
-  void AnotarVerticesRepetidos(uint64_t direccion, uint32_t bytes, uint32_t orden,
-                               const uint8_t* datos) {
-    const auto antes = std::chrono::steady_clock::now();
-    const uint64_t huella = XXH3_64bits(datos, bytes);
-    const uint64_t clave =
-        XXH3_64bits_withSeed(&direccion, sizeof(direccion), (uint64_t(bytes) << 2) | orden);
-    if (vertices_vistos_.size() > 200000) {
-      vertices_vistos_.clear();  // memory cap of the diagnostic
+  void TrackRepeatedVertices(uint64_t address, uint32_t bytes, uint32_t orden,
+                               const uint8_t* payload) {
+    const auto before = std::chrono::steady_clock::now();
+    const uint64_t fingerprint = XXH3_64bits(payload, bytes);
+    const uint64_t key =
+        XXH3_64bits_withSeed(&address, sizeof(address), (uint64_t(bytes) << 2) | orden);
+    if (seen_vertices_.size() > 200000) {
+      seen_vertices_.clear();  // memory cap of the diagnostic
     }
-    VerticesVistos& visto = vertices_vistos_[clave];
-    if (visto.huella == huella && visto.fotograma == fotograma_) {
-      bytes_repetidos_fotograma_ += bytes;
-    } else if (visto.huella == huella && visto.fotograma != UINT64_MAX &&
-               visto.fotograma < fotograma_) {
-      bytes_iguales_anterior_ += bytes;
+    SeenVertices& seen = seen_vertices_[key];
+    if (seen.fingerprint == fingerprint && seen.frame == frame_) {
+      frame_repeated_bytes_ += bytes;
+    } else if (seen.fingerprint == fingerprint && seen.frame != UINT64_MAX &&
+               seen.frame < frame_) {
+      previous_equal_bytes_ += bytes;
     }
-    visto.fotograma = fotograma_;
-    visto.huella = huella;
+    seen.frame = frame_;
+    seen.fingerprint = fingerprint;
     ns_hash_vertices_ += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                      std::chrono::steady_clock::now() - antes)
+                                      std::chrono::steady_clock::now() - before)
                                       .count());
   }
 
-  void TerminarPase() override {
-    if (pase_activo_) {
+  void FinishPass() override {
+    if (active_pass_) {
       /*
        * Fallback path of the deferred sky. If nothing has emitted it yet (no transparent draw arrived, or the
        * pass closes because of a copy, a resolve or a submission), it is emitted here, inside the pass and
@@ -4776,101 +4776,101 @@ class DibujosVulkanImpl final : public DibujosVulkan {
        * place it can be, and it is always reached: the command buffer is only closed through EnviarTrabajo
        * -> AntesDeEnviar -> TerminarPase.
        */
-      if (cielo_pendiente_) {
-        EmitirCieloAplazado(pase_comandos_, kCieloPorFinDePase);
+      if (sky_pending_) {
+        EmitDeferredSky(commands_pass_, kSkyPerPassEnd);
       }
       // A host occlusion query cannot stay open outside its pass.
-      if (consulta_oclusion_ != UINT32_MAX) {
-        contexto_->TerminarConsultaOclusion(consulta_oclusion_);
-        consulta_oclusion_ = UINT32_MAX;
+      if (occlusion_query_ != UINT32_MAX) {
+        contexto_->FinishOcclusionQuery(occlusion_query_);
+        occlusion_query_ = UINT32_MAX;
       }
-      const auto antes_fin = std::chrono::steady_clock::now();
-      dfn_.vkCmdEndRenderPass(pase_comandos_);
-      if (estadisticas_pase_ != UINT32_MAX) {
-        contexto_->TerminarEstadisticas(estadisticas_pase_);
-        estadisticas_pase_ = UINT32_MAX;
+      const auto before_end = std::chrono::steady_clock::now();
+      dfn_.vkCmdEndRenderPass(commands_pass_);
+      if (pass_stats_ != UINT32_MAX) {
+        contexto_->FinishStats(pass_stats_);
+        pass_stats_ = UINT32_MAX;
       }
       ns_render_pass_ += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
-          std::chrono::steady_clock::now() - antes_fin).count());
-      const uint32_t categoria_cerrada = categoria_pase_;
-      pase_activo_ = false;
+          std::chrono::steady_clock::now() - before_end).count());
+      const uint32_t closed_category = pass_category_;
+      active_pass_ = false;
       // Just in case. A pending sky with the pass already closed cannot be recorded; it is counted so it
       // shows up in the report instead of disappearing silently.
-      if (cielo_pendiente_) {
-        cielo_pendiente_ = false;
-        ++cielo_perdidos_;
+      if (sky_pending_) {
+        sky_pending_ = false;
+        ++sky_lost_;
       }
       // As soon as the shadow pass closes, submit to the GPU. Once per frame: the flag keeps reopened passes
       // from submitting again. EnviarYEsperar submits and keeps recording in the next slot; it waits for
       // nothing (the name is misleading).
-      if (categoria_cerrada == kGpuSombras && !enviado_tras_sombras_ && contexto_ &&
+      if (closed_category == kGpuShadows && !sent_after_shadows_ && contexto_ &&
           REXCVAR_GET(nfsmw_nativo_enviar_tras_sombras)) {
-        enviado_tras_sombras_ = true;
-        ++envios_tras_sombras_;
-        contexto_->EnviarYEsperar();
+        sent_after_shadows_ = true;
+        ++sends_after_shadows_;
+        contexto_->SendAndWait();
       }
     }
   }
 
-  void AntesDeEnviar() override {
-    EsperarSubidas();  // deferred vertex copies, before flushing the mapping and submitting
-    TerminarPase();
+  void BeforeSend() override {
+    WaitUploads();  // deferred vertex copies, before flushing the mapping and submitting
+    FinishPass();
     // Whatever is still on the texture bind thread, with its views, descriptors, barriers and copies, goes
     // into this upload buffer before it is closed (nfsmw_nativo_texturas_enlace_hilo). It is the last thing
     // recorded: after the pass closes (which may emit the deferred sky), and meanwhile the thread has kept
     // binding.
-    RecogerEnlaces(true);
+    CollectBindings(true);
     // The data of the new textures prepared by the hash thread, into this upload buffer before the mapping
     // is flushed and it is submitted (nfsmw_nativo_texturas_huella_hilo). Their barrier and copy are
     // already recorded.
-    RecogerHuellas();
-    if (subida_usado_ && !subida_coherente_) {
-      rex::ui::vulkan::util::FlushMappedMemoryRange(dispositivo_, subida_memoria_, subida_tipo_, 0,
-                                                    subida_tamano_real_, subida_usado_);
+    CollectFingerprints();
+    if (used_upload_ && !coherent_upload_) {
+      rex::ui::vulkan::util::FlushMappedMemoryRange(vk_device_, memory_upload_, type_upload_, 0,
+                                                    real_size_upload_, used_upload_);
     }
-    if (compartidas_aparte_ && compartidas_usado_ && !compartidas_coherente_) {
-      rex::ui::vulkan::util::FlushMappedMemoryRange(dispositivo_, compartidas_memoria_, compartidas_tipo_, 0,
-                                                    compartidas_tamano_real_, compartidas_usado_);
-      compartidas_bytes_publicados_ += compartidas_usado_;
+    if (separately_shared_ && used_shared_ && !coherent_shared_) {
+      rex::ui::vulkan::util::FlushMappedMemoryRange(vk_device_, memory_shared_, type_shared_, 0,
+                                                    real_size_shared_, used_shared_);
+      published_bytes_shared_ += used_shared_;
     }
   }
 
-  void UsarRanura(uint32_t ranura) override {
-    EsperarSubidas();  // already empty after AntesDeEnviar; just in case, before switching buffers
-    InformeCopias();  // every 10 s, who made the vertex copies and how long the ring waited
-    InformeCacheFetch();  // every 10 s, the per-fetch sampler table
+  void UseSlot(uint32_t ranura) override {
+    WaitUploads();  // already empty after AntesDeEnviar; just in case, before switching buffers
+    CopiesReport();  // every 10 s, who made the vertex copies and how long the ring waited
+    CacheFetchReport();  // every 10 s, the per-fetch sampler table
     // A texture may arrive here with its bind in flight (it was prepared before this submission's first
     // Grabar) and that is normal; what it cannot have is its data already in the upload buffer just
     // submitted.
-    ComprobarEnlacesAlCambiarDeBufer();
-    ComprobarHuellasAlCambiarDeBufer();  // before resetting the upload buffer
-    const BuferSubida& s = subidas_[ranura % subidas_.size()];
-    subida_ = s.bufer;
-    subida_memoria_ = s.memoria;
-    subida_tamano_real_ = s.tamano_real;
-    subida_datos_ = s.datos;
-    subida_direccion_ = s.direccion;
-    ranura_actual_ = uint32_t(ranura % subidas_.size());  // this slot's UBO set
-    subida_usado_ = 0;
-    if (compartidas_aparte_) {
-      const BuferSubida& c = compartidas_bufs_[ranura_actual_];
-      compartidas_datos_ = c.datos;
-      compartidas_memoria_ = c.memoria;
-      compartidas_tamano_real_ = c.tamano_real;
-      compartidas_usado_ = 0;
+    CheckBindingsOnBufferChange();
+    CheckFingerprintsOnBufferChange();  // before resetting the upload buffer
+    const UploadBuffer& s = uploads_[ranura % uploads_.size()];
+    upload_ = s.buf;
+    memory_upload_ = s.mem;
+    real_size_upload_ = s.real_size;
+    data_upload_ = s.payload;
+    address_upload_ = s.address;
+    current_slot_ = uint32_t(ranura % uploads_.size());  // this slot's UBO set
+    used_upload_ = 0;
+    if (separately_shared_) {
+      const UploadBuffer& c = bufs_shared_[current_slot_];
+      data_shared_ = c.payload;
+      memory_shared_ = c.mem;
+      real_size_shared_ = c.real_size;
+      used_shared_ = 0;
     }
-    ++epoca_subida_;
-    ++fotograma_;
-    CerrarFotogramaDeLaGuardiaDelCielo();
+    ++upload_epoch_;
+    ++frame_;
+    CloseSkyGuardFrame();
     // nfsmw_reflejo_visibilidad, once per submission (the guard may switch it off mid-session).
-    medir_visibilidad_ = nfsmw::reflejo_demanda::MedirVisibilidad();
-    if (medir_visibilidad_ && fotograma_ >= testigo_siguiente_) {
-      testigo_pendiente_ = true;
+    measure_visibility_ = nfsmw::demand_reflection::MeasureVisibility();
+    if (measure_visibility_ && frame_ >= next_sentinel_) {
+      pending_sentinel_ = true;
     }
     // The upload buffer is reset here, so the recorded offsets are no longer valid. This also covers
     // EnviarYEsperar, which goes through here.
-    dedupe_.NuevoFotograma(fotograma_);
-    enviado_tras_sombras_ = false;  // the post-shadow submission is once per frame
+    dedupe_.NewFrame(frame_);
+    sent_after_shadows_ = false;  // the post-shadow submission is once per frame
     /*
      * Diagnostic cvars are read once per frame, not per draw.
      *
@@ -4879,122 +4879,122 @@ class DibujosVulkanImpl final : public DibujosVulkan {
      * and one returned a std::string that was then compared. With 2,345 draws per frame that shows, and it
      * serves no purpose: none of them changes within a frame.
      */
-    diag_omitir_ps_texto_ = REXCVAR_GET(nfsmw_nativo_diag_omitir_ps);
-    diag_vertices_repetidos_ = REXCVAR_GET(nfsmw_nativo_diag_vertices_repetidos);
-    dedupe_activo_ = REXCVAR_GET(nfsmw_nativo_dedupe_vertices);
-    vertices_base_cero_ = REXCVAR_GET(nfsmw_nativo_vertices_base_cero) && !vertices_base_cero_apagado_;
-    diag_estadisticas_dibujo_ = REXCVAR_GET(nfsmw_nativo_estadisticas_por_dibujo_s) > 0;
-    area_util_ = REXCVAR_GET(nfsmw_nativo_pase_area_util);
+    diag_skip_text_ps_ = REXCVAR_GET(nfsmw_nativo_diag_omitir_ps);
+    diag_repeated_vertices_ = REXCVAR_GET(nfsmw_nativo_diag_vertices_repetidos);
+    active_dedupe_ = REXCVAR_GET(nfsmw_nativo_dedupe_vertices);
+    zero_vertices_base_ = REXCVAR_GET(nfsmw_nativo_vertices_base_cero) && !zero_vertices_base_disabled_;
+    diag_draw_stats_ = REXCVAR_GET(nfsmw_nativo_estadisticas_por_dibujo_s) > 0;
+    usable_area_ = REXCVAR_GET(nfsmw_nativo_pase_area_util);
     // The small per-draw savings.
-    encuadre_cache_ = REXCVAR_GET(nfsmw_nativo_encuadre_cache) && !encuadre_cache_apagada_;
-    alto_util_memo_activo_ = REXCVAR_GET(nfsmw_nativo_alto_util_memo) && !alto_util_memo_apagado_;
-    clave_pase_rapida_ = REXCVAR_GET(nfsmw_nativo_clave_pase_rapida) && !clave_pase_rapida_apagada_;
-    cvars_por_fotograma_ = REXCVAR_GET(nfsmw_nativo_cvars_por_fotograma);
-    ps_solo_alfa_fotograma_ = PsSoloAlfa();
-    sin_ps_sin_color_fotograma_ = SinPsSinColor();
-    sin_vegetacion_ = REXCVAR_GET(nfsmw_sombras_sin_vegetacion);
-    pipelines_directa_ = REXCVAR_GET(nfsmw_nativo_pipelines_directa) && !pipelines_directa_apagada_;
-    clave_canonica_ = REXCVAR_GET(nfsmw_nativo_clave_canonica) && !clave_canonica_apagada_;  // phase 0a
+    framing_cache_ = REXCVAR_GET(nfsmw_nativo_encuadre_cache) && !framing_cache_disabled_;
+    active_memo_usable_height_ = REXCVAR_GET(nfsmw_nativo_alto_util_memo) && !memo_usable_height_disabled_;
+    fast_pass_key_ = REXCVAR_GET(nfsmw_nativo_clave_pase_rapida) && !fast_pass_key_disabled_;
+    cvars_per_frame_ = REXCVAR_GET(nfsmw_nativo_cvars_por_fotograma);
+    frame_alpha_only_ps_ = PsAlphaOnly();
+    without_ps_without_frame_color_ = NoPsNoColor();
+    without_vegetation_ = REXCVAR_GET(nfsmw_sombras_sin_vegetacion);
+    direct_pipelines_ = REXCVAR_GET(nfsmw_nativo_pipelines_directa) && !direct_pipelines_disabled_;
+    canonical_key_ = REXCVAR_GET(nfsmw_nativo_clave_canonica) && !canonical_key_disabled_;  // phase 0a
     {
-      const bool nuevo = REXCVAR_GET(nfsmw_nativo_pipeline_entre_pases);  // phase 0b
-      if (nuevo != pipeline_entre_pases_ || !pipeline_entre_pases_anotado_) {
-        pipeline_entre_pases_ = nuevo;
-        pipeline_entre_pases_anotado_ = true;
+      const bool fresh = REXCVAR_GET(nfsmw_nativo_pipeline_entre_pases);  // phase 0b
+      if (fresh != pipeline_between_passes_ || !pipeline_between_tracked_passes_) {
+        pipeline_between_passes_ = fresh;
+        pipeline_between_tracked_passes_ = true;
         REXLOG_INFO("[nativo] C6 pipeline al empezar pase: {} (fotograma {})",
-                    nuevo ? "se CONSERVA el enlazado (fase 0b del estado dinamico)" : "se vuelve a enlazar, como antes",
-                    fotograma_);
+                    fresh ? "se CONSERVA el enlazado (fase 0b del estado dinamico)" : "se vuelve a enlazar, como antes",
+                    frame_);
       }
     }
     // Dynamic state phases 1 and 2, once per command buffer: the whole buffer uses one mode, because a
     // pipeline with a fixed state invalidates the dynamic value of that state.
     {
-      uint32_t modo = 0;
-      if (eds12_disponible_ && !eds_apagado_ && REXCVAR_GET(nfsmw_nativo_estado_dinamico)) {
-        modo |= kEds12;
+      uint32_t mode = 0;
+      if (eds12_available_ && !eds_disabled_ && REXCVAR_GET(nfsmw_nativo_estado_dinamico)) {
+        mode |= kEds12;
       }
-      if (eds3_disponible_ && !eds_apagado_ && REXCVAR_GET(nfsmw_nativo_estado_dinamico3)) {
-        modo |= kEds3;
+      if (eds3_available_ && !eds_disabled_ && REXCVAR_GET(nfsmw_nativo_estado_dinamico3)) {
+        mode |= kEds3;
       }
-      if (modo != eds_modo_ || !eds_modo_anotado_) {
-        eds_modo_anotado_ = true;
-        REXLOG_INFO("[nativo] C6 estado dinamico: {} (fotograma {})", NombreModoEds(modo), fotograma_);
+      if (mode != eds_mode_ || !eds_tracked_mode_) {
+        eds_tracked_mode_ = true;
+        REXLOG_INFO("[nativo] C6 estado dinamico: {} (fotograma {})", EdsModeName(mode), frame_);
       }
-      eds_modo_ = modo;
+      eds_mode_ = mode;
     }
-    tijera_prueba_ = TijeraDePrueba();
-    sin_desenfoque_fotograma_ = REXCVAR_GET(nfsmw_nativo_sin_desenfoque);  // once per frame
+    test_scissor_ = TestScissor();
+    without_frame_blur_ = REXCVAR_GET(nfsmw_nativo_sin_desenfoque);  // once per frame
     // The cheap PCF bit also changes the pipeline: once per frame.
     {
-      bool nuevo = REXCVAR_GET(nfsmw_nativo_pcf_barato);
+      bool fresh = REXCVAR_GET(nfsmw_nativo_pcf_barato);
       const int32_t alternar_pcf = REXCVAR_GET(nfsmw_nativo_pcf_barato_alternar_s);
       if (alternar_pcf > 0) {
-        const auto segundos = std::chrono::duration_cast<std::chrono::seconds>(
-                                  std::chrono::steady_clock::now() - inicio_alternancia_ps_)
+        const auto secs = std::chrono::duration_cast<std::chrono::seconds>(
+                                  std::chrono::steady_clock::now() - ps_toggle_start_)
                                   .count();
-        nuevo = (segundos / alternar_pcf) % 2 == 1;
+        fresh = (secs / alternar_pcf) % 2 == 1;
       }
-      if (nuevo != pcf_barato_) {
-        pcf_barato_ = nuevo;
+      if (fresh != cheap_pcf_) {
+        cheap_pcf_ = fresh;
         REXLOG_INFO("[nativo] C2 muestreo del mapa de sombras: {}",
-                    nuevo ? "un solo texel (PCF barato)" : "patron 3x3 a medio texel");
+                    fresh ? "un solo texel (PCF barato)" : "patron 3x3 a medio texel");
       }
     }
     // The filter between mip levels is part of the sampler key, so it is also decided once per frame. Off
     // (the normal case), this is reading one cvar and comparing a bool.
     {
-      bool nuevo = REXCVAR_GET(nfsmw_nativo_prueba_mip_puntual);
+      bool fresh = REXCVAR_GET(nfsmw_nativo_prueba_mip_puntual);
       const int32_t alternar_mip = REXCVAR_GET(nfsmw_nativo_prueba_mip_puntual_alternar_s);
       if (alternar_mip > 0) {
-        const auto segundos = std::chrono::duration_cast<std::chrono::seconds>(
-                                  std::chrono::steady_clock::now() - inicio_alternancia_ps_)
+        const auto secs = std::chrono::duration_cast<std::chrono::seconds>(
+                                  std::chrono::steady_clock::now() - ps_toggle_start_)
                                   .count();
-        nuevo = (segundos / alternar_mip) % 2 == 1;
+        fresh = (secs / alternar_mip) % 2 == 1;
       }
-      if (nuevo != mip_puntual_prueba_) {
-        mip_puntual_prueba_ = nuevo;
+      if (fresh != test_point_mip_) {
+        test_point_mip_ = fresh;
         REXLOG_INFO("[nativo] C4 filtro entre niveles de mip: {}",
-                    nuevo ? "PUNTUAL (prueba: trilineal -> bilineal, la TMU hace la mitad)"
+                    fresh ? "PUNTUAL (prueba: trilineal -> bilineal, la TMU hace la mitad)"
                           : "lineal (el que pide el juego)");
       }
     }
     // nfsmw_nativo_diag_mip_minimo. Part of the sampler key; when it changes the per-texture sampler caches
     // are invalidated (generacion_texturas_, as when an image is retired) so it shows in the next frame.
     {
-      const uint32_t nuevo = uint32_t(std::clamp(int32_t(REXCVAR_GET(nfsmw_nativo_diag_mip_minimo)), 0, 4));
-      if (nuevo != diag_mip_minimo_) {
-        diag_mip_minimo_ = nuevo;
-        ++generacion_texturas_;
-        REXLOG_INFO("[nativo] C4 diagnostico de mips: las texturas con mips empiezan {} niveles mas abajo{}", nuevo,
-                    nuevo ? " (DIAGNOSTICO: todo se vera borroso)" : " (normal)");
+      const uint32_t fresh = uint32_t(std::clamp(int32_t(REXCVAR_GET(nfsmw_nativo_diag_mip_minimo)), 0, 4));
+      if (fresh != diag_mip_min_) {
+        diag_mip_min_ = fresh;
+        ++textures_generation_;
+        REXLOG_INFO("[nativo] C4 diagnostico de mips: las texturas con mips empiezan {} niveles mas abajo{}", fresh,
+                    fresh ? " (DIAGNOSTICO: todo se vera borroso)" : " (normal)");
       }
     }
     // The shadow map's own depth bias, once per frame.
     {
       const int32_t constante = std::clamp(int32_t(REXCVAR_GET(nfsmw_nativo_sombras_sesgo_constante)), 0, 100);
-      const int32_t pendiente = std::clamp(int32_t(REXCVAR_GET(nfsmw_nativo_sombras_sesgo_pendiente)), 0, 100);
-      if (constante != sombras_sesgo_constante_ || pendiente != sombras_sesgo_pendiente_ || !sombras_sesgo_anotado_) {
-        sombras_sesgo_constante_ = constante;
-        sombras_sesgo_pendiente_ = pendiente;
-        sombras_sesgo_anotado_ = true;
+      const int32_t pending = std::clamp(int32_t(REXCVAR_GET(nfsmw_nativo_sombras_sesgo_pendiente)), 0, 100);
+      if (constante != shadows_constant_bias_ || pending != shadows_slope_bias_ || !shadows_tracked_bias_) {
+        shadows_constant_bias_ = constante;
+        shadows_slope_bias_ = pending;
+        shadows_tracked_bias_ = true;
         REXLOG_INFO("[nativo] C4 desplazamiento de profundidad del mapa de sombras: pendiente {:.1f}, constante {} "
                     "(x1000 unidades de 24 bits){}",
-                    double(pendiente) * 0.1, constante, (constante || pendiente) ? "" : " (apagado, como antes)");
+                    double(pending) * 0.1, constante, (constante || pending) ? "" : " (apagado, como antes)");
       }
     }
     // The 1/size bit changes the pipeline, so it is decided once per frame.
     {
       const int32_t alternar = REXCVAR_GET(nfsmw_nativo_inv_tamano_tex_alternar_s);
-      bool nuevo = REXCVAR_GET(nfsmw_nativo_inv_tamano_tex);
+      bool fresh = REXCVAR_GET(nfsmw_nativo_inv_tamano_tex);
       if (alternar > 0) {
-        const auto segundos = std::chrono::duration_cast<std::chrono::seconds>(
-                                  std::chrono::steady_clock::now() - inicio_alternancia_ps_)
+        const auto secs = std::chrono::duration_cast<std::chrono::seconds>(
+                                  std::chrono::steady_clock::now() - ps_toggle_start_)
                                   .count();
-        nuevo = (segundos / alternar) % 2 == 1;
+        fresh = (secs / alternar) % 2 == 1;
       }
-      if (nuevo != inv_tamano_tex_) {
-        inv_tamano_tex_ = nuevo;
+      if (fresh != tex_size_inv_) {
+        tex_size_inv_ = fresh;
         REXLOG_INFO("[nativo] C2 tamano de textura: {}",
-                    nuevo ? "por constante" : "preguntado a la textura");
+                    fresh ? "por constante" : "preguntado a la textura");
       }
     }
     /*
@@ -5003,142 +5003,142 @@ class DibujosVulkanImpl final : public DibujosVulkan {
      */
     {
       const int32_t alternar = REXCVAR_GET(nfsmw_nativo_z_temprana_alternar_s);
-      bool nuevo = REXCVAR_GET(nfsmw_nativo_z_temprana);
+      bool fresh = REXCVAR_GET(nfsmw_nativo_z_temprana);
       if (alternar > 0) {
-        const auto segundos = std::chrono::duration_cast<std::chrono::seconds>(
-                                  std::chrono::steady_clock::now() - inicio_alternancia_z_)
+        const auto secs = std::chrono::duration_cast<std::chrono::seconds>(
+                                  std::chrono::steady_clock::now() - toggle_z_start_)
                                   .count();
-        nuevo = (segundos / alternar) % 2 == 1;
+        fresh = (secs / alternar) % 2 == 1;
       }
-      if (nuevo != z_temprana_ || !alternancia_z_anotada_) {
-        z_temprana_ = nuevo;
-        alternancia_z_anotada_ = true;
+      if (fresh != z_early_ || !tracked_toggle_z_) {
+        z_early_ = fresh;
+        tracked_toggle_z_ = true;
         REXLOG_INFO("[nativo] C6 prueba de profundidad: {} (fotograma {})",
-                    nuevo ? "ANTES de sombrear donde no se escribe Z (Z temprana)"
+                    fresh ? "ANTES de sombrear donde no se escribe Z (Z temprana)"
                           : "despues de sombrear, como antes",
-                    fotograma_);
+                    frame_);
       }
     }
-    saltar_invisibles_ = REXCVAR_GET(nfsmw_nativo_saltar_invisibles);
+    skip_invisible_ = REXCVAR_GET(nfsmw_nativo_saltar_invisibles);
     // The deferred sky, also once per frame. If it is switched off mid-frame with one already deferred, the
     // pending one is still emitted through its usual path.
     {
-      const bool nuevo = REXCVAR_GET(nfsmw_nativo_cielo_aplazado);
-      if (nuevo != cielo_aplazado_ || !cielo_anotado_) {
-        cielo_aplazado_ = nuevo;
-        cielo_anotado_ = true;
+      const bool fresh = REXCVAR_GET(nfsmw_nativo_cielo_aplazado);
+      if (fresh != sky_deferred_ || !sky_tracked_) {
+        sky_deferred_ = fresh;
+        sky_tracked_ = true;
         REXLOG_INFO("[nativo] C6 cielo: {} (fotograma {})",
-                    nuevo ? "APLAZADO hasta despues de los opacos del pase"
+                    fresh ? "APLAZADO hasta despues de los opacos del pase"
                           : "en su sitio original (el primero, sobre el Z vacio)",
-                    fotograma_);
+                    frame_);
       }
     }
-    InformeZTemprana();
-    InformePipelinesDirecta();
-    InformeMinucias();
-    InformeBaseCero();
+    EarlyZReport();
+    DirectPipelinesReport();
+    DetailsReport();
+    ZeroBaseReport();
     ControlSet4();  // set 4 by differences in NVK (cvar, alternation and guard)
-    InformeSet4();
-    ControlDibujoNvk();  // the draw path in NVK (measurement, improvements and guards)
-    InformeDibujoNvk();
-    InformeClaveCanonica();  // Dynamic state, phase 0a
-    InformePipelineEntrePases();  // Dynamic state, phase 0b
-    InformeEstadoDinamico();  // dynamic state phases 1 and 2
-    InformeEnlaces();  // texture bind thread, every 10 s
-    InformeHuellas();  // texture hash thread, every 10 s
-    InformeReutilizar();  // measurement only: new textures with a live one's content, every 10 s
-    ExpulsarTexturasSiHaceFalta();
-    pool_texturas_.PorFotograma(fotograma_);  // grows with headroom, never exactly on demand
+    Set4Report();
+    NvkDrawControl();  // the draw path in NVK (measurement, improvements and guards)
+    NvkDrawReport();
+    CanonicalKeyReport();  // Dynamic state, phase 0a
+    PipelineBetweenPassesReport();  // Dynamic state, phase 0b
+    DynamicStateReport();  // dynamic state phases 1 and 2
+    BindingsReport();  // texture bind thread, every 10 s
+    FingerprintsReport();  // texture hash thread, every 10 s
+    ReuseReport();  // measurement only: new textures with a live one's content, every 10 s
+    EvictTexturesIfNeeded();
+    textures_pool_.PerFrame(frame_);  // grows with headroom, never exactly on demand
     // Test nfsmw_nativo_constantes_ubo_alternar_s. Switched here because the new epoch forces all constants
     // to be allocated again: nothing allocated in one mode is reused in the other.
     if (alternar_ubo_s_ > 0) {
-      const auto segundos =
-          std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - inicio_ubo_).count();
-      const bool ubo = (segundos / alternar_ubo_s_) % 2 == 1;
-      if (ubo != usar_ubo_) {
-        usar_ubo_ = ubo;
+      const auto secs =
+          std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - ubo_start_).count();
+      const bool ubo = (secs / alternar_ubo_s_) % 2 == 1;
+      if (ubo != use_ubo_) {
+        use_ubo_ = ubo;
         // With UBOs no push constants are recorded, so when going back to pointers the tracked state is
         // stale.
-        std::memset(push_grabado_, 0, sizeof(push_grabado_));
-        REXLOG_INFO("[nativo] prueba de constantes: {} (fotograma {})", ubo ? "por UBO" : "por puntero", fotograma_);
+        std::memset(recorded_push_, 0, sizeof(recorded_push_));
+        REXLOG_INFO("[nativo] prueba de constantes: {} (fotograma {})", ubo ? "por UBO" : "por puntero", frame_);
       }
     }
-    ++envios_;  // "C6 constantes por UBO" report
-    if (usar_ubo_) {
-      ++envios_ubo_;
+    ++sends_;  // "C6 constantes por UBO" report
+    if (use_ubo_) {
+      ++ubo_sends_;
     }
     // What the prewarm thread actually compiles also goes into the cache and has to be saved.
-    if (const uint32_t compilados = precalentado_compilados_.load(std::memory_order_relaxed);
-        compilados != precalentado_contados_) {
-      pipelines_sin_guardar_ += compilados - precalentado_contados_;
-      precalentado_contados_ = compilados;
+    if (const uint32_t compilados = prewarmed_compiled_.load(std::memory_order_relaxed);
+        compilados != prewarmed_counted_) {
+      pipelines_without_save_ += compilados - prewarmed_counted_;
+      prewarmed_counted_ = compilados;
     }
     // The pipeline cache is saved after 64 new pipelines, or after a minute with any new one: on the
     // Switch, exiting does not always reach the destructor.
-    if (pipelines_sin_guardar_ &&
-        (pipelines_sin_guardar_ >= 64 ||
-         std::chrono::steady_clock::now() - cache_guardada_ >= std::chrono::seconds(60))) {
-      GuardarCachePipelines();
+    if (pipelines_without_save_ &&
+        (pipelines_without_save_ >= 64 ||
+         std::chrono::steady_clock::now() - saved_cache_ >= std::chrono::seconds(60))) {
+      SaveCachePipelines();
     }
   }
 
-  void InvalidarTexturas() override { ++generacion_texturas_; }
+  void InvalidateTextures() override { ++textures_generation_; }
 
   // Only the cache entries that use a view of those images. The views stay valid (they go with their
   // image); what has to be redone is which slot each fetch constant gets.
-  void InvalidarImagenes(VkImage a, VkImage b) override {
+  void InvalidateImages(VkImage a, VkImage b) override {
     std::array<std::pair<uint32_t, uint32_t>, 64> ranuras{};
     size_t n = 0;
-    for (VkImage imagen : {a, b}) {
-      if (imagen == VK_NULL_HANDLE || (imagen == b && a == b)) {
+    for (VkImage img : {a, b}) {
+      if (img == VK_NULL_HANDLE || (img == b && a == b)) {
         continue;
       }
-      const auto it = vistas_por_imagen_.find(imagen);
-      if (it == vistas_por_imagen_.end()) {
+      const auto it = views_per_image_.find(img);
+      if (it == views_per_image_.end()) {
         continue;
       }
-      for (uint64_t clave : it->second) {
-        const auto v = vistas_.find(clave);
-        if (v != vistas_.end() && v->second.imagen == imagen && n < ranuras.size()) {
-          ranuras[n++] = {v->second.monton, v->second.ranura};
+      for (uint64_t key : it->second) {
+        const auto v = views_.find(key);
+        if (v != views_.end() && v->second.img == img && n < ranuras.size()) {
+          ranuras[n++] = {v->second.heap, v->second.ranura};
         }
       }
     }
     if (!n) {
       return;
     }
-    const auto afectada = [&](const CacheSampler& c) {
+    const auto affected = [&](const CacheSampler& c) {
       for (size_t i = 0; i < n; ++i) {
-        if (ranuras[i].first == c.monton && ranuras[i].second == c.ranura) {
+        if (ranuras[i].first == c.heap && ranuras[i].second == c.ranura) {
           return true;
         }
       }
       return false;
     };
     for (CacheSampler& c : cache_samplers_) {
-      if (afectada(c)) {
-        c.fotograma = UINT64_MAX;
-        c.valido_hasta = 0;
+      if (affected(c)) {
+        c.frame = UINT64_MAX;
+        c.valid_until = 0;
       }
     }
     for (CacheSampler& c : cache_fetch_) {
-      if (afectada(c)) {
-        c.fotograma = UINT64_MAX;
-        c.valido_hasta = 0;
+      if (affected(c)) {
+        c.frame = UINT64_MAX;
+        c.valid_until = 0;
       }
     }
   }
 
-  void OclusionAbierta(bool abierta) override {
-    if (!abierta && consulta_oclusion_ != UINT32_MAX) {
+  void OcclusionOpen(bool open) override {
+    if (!open && occlusion_query_ != UINT32_MAX) {
       // Still inside the pass of the last counted draw: TerminarPase would have closed it already.
-      contexto_->TerminarConsultaOclusion(consulta_oclusion_);
-      consulta_oclusion_ = UINT32_MAX;
+      contexto_->FinishOcclusionQuery(occlusion_query_);
+      occlusion_query_ = UINT32_MAX;
     }
-    oclusion_abierta_ = abierta;
+    open_occlusion_ = open;
   }
 
-  uint64_t Dibujados() const override { return dibujados_; }
+  uint64_t Drawn() const override { return drawn_; }
 
   // nfsmw_nativo_texturas_mb_max: with the texture cache above the limit, evict the textures unused for
   // the longest until it drops to 75 %, at most once every 60 frames.
@@ -5146,7 +5146,7 @@ class DibujosVulkanImpl final : public DibujosVulkan {
   // any pending submission. The slot caches are valid for at most 32 frames after preparing, and only the
   // previous submission can still be on the GPU (Grabar waits for the slot before reusing it). The heap
   // slots are updated with UPDATE_AFTER_BIND, and the new generation invalidates the caches.
-  static constexpr uint64_t kFotogramasSinUsoParaSoltar = 120;
+  static constexpr uint64_t kFramesWithoutUseForRelease = 120;
   /*
    * How much GPU memory there is and how much is left.
    *
@@ -5154,48 +5154,48 @@ class DibujosVulkanImpl final : public DibujosVulkan {
    * With VK_EXT_memory_budget the driver reports the budget and the usage; without it, at least the heap
    * sizes are visible. It goes with the cache report, every 256 new textures.
    */
-  void AnotarMemoriaDeLaGpu() {
-    const auto* instancia = dispositivo_->vulkan_instance();
+  void TrackGpuMemory() {
+    const auto* instancia = vk_device_->vulkan_instance();
     if (!instancia) {
       return;
     }
     const auto& ifn = instancia->functions();
-    const VkPhysicalDevice fisico = dispositivo_->physical_device();
-    const bool hay_presupuesto = dispositivo_->extensions().ext_EXT_memory_budget &&
+    const VkPhysicalDevice phys = vk_device_->physical_device();
+    const bool has_budget = vk_device_->extensions().ext_EXT_memory_budget &&
                                  ifn.vkGetPhysicalDeviceMemoryProperties2 != nullptr;
-    VkPhysicalDeviceMemoryBudgetPropertiesEXT presupuesto{};
-    presupuesto.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT;
-    VkPhysicalDeviceMemoryProperties2 propiedades2{};
-    propiedades2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2;
-    propiedades2.pNext = hay_presupuesto ? &presupuesto : nullptr;
-    if (hay_presupuesto) {
-      ifn.vkGetPhysicalDeviceMemoryProperties2(fisico, &propiedades2);
+    VkPhysicalDeviceMemoryBudgetPropertiesEXT budget{};
+    budget.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT;
+    VkPhysicalDeviceMemoryProperties2 properties2{};
+    properties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2;
+    properties2.pNext = has_budget ? &budget : nullptr;
+    if (has_budget) {
+      ifn.vkGetPhysicalDeviceMemoryProperties2(phys, &properties2);
     } else {
-      ifn.vkGetPhysicalDeviceMemoryProperties(fisico, &propiedades2.memoryProperties);
+      ifn.vkGetPhysicalDeviceMemoryProperties(phys, &properties2.memoryProperties);
     }
-    const auto& mp = propiedades2.memoryProperties;
+    const auto& mp = properties2.memoryProperties;
     std::string texto;
     for (uint32_t i = 0; i < mp.memoryHeapCount; ++i) {
       if (!texto.empty()) {
         texto += " | ";
       }
       const bool local = (mp.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0;
-      if (hay_presupuesto) {
+      if (has_budget) {
         texto += fmt::format("monton {}{}: {} MB usados de {} MB presupuestados (tamano {} MB)", i,
-                             local ? " (GPU)" : "", presupuesto.heapUsage[i] >> 20,
-                             presupuesto.heapBudget[i] >> 20, mp.memoryHeaps[i].size >> 20);
+                             local ? " (GPU)" : "", budget.heapUsage[i] >> 20,
+                             budget.heapBudget[i] >> 20, mp.memoryHeaps[i].size >> 20);
       } else {
         texto += fmt::format("monton {}{}: {} MB", i, local ? " (GPU)" : "",
                              mp.memoryHeaps[i].size >> 20);
       }
     }
     REXLOG_INFO("[nativo] C3 memoria de la GPU: {}{}; la cache de texturas lleva {} MB de {} MB", texto,
-                hay_presupuesto ? "" : " (sin VK_EXT_memory_budget: solo tamanos)", bytes_texturas_ >> 20,
-                texturas_mb_max_);
+                has_budget ? "" : " (sin VK_EXT_memory_budget: solo tamanos)", textures_bytes_ >> 20,
+                textures_max_mb_);
     // Without this line there is no way to know whether the pool is working or fragmenting. A vegetation
     // counter once existed and was never printed.
-    if (pool_texturas_.Activo()) {
-      REXLOG_INFO("[nativo] C3 {}", pool_texturas_.Resumen());
+    if (textures_pool_.Active()) {
+      REXLOG_INFO("[nativo] C3 {}", textures_pool_.Summary());
     }
   }
 
@@ -5211,71 +5211,71 @@ class DibujosVulkanImpl final : public DibujosVulkan {
    * is forced: the cache is allowed to grow, since going a little over is better than uploading and
    * evicting the same thing.
    */
-  static constexpr uint32_t kSoltarPorFotograma = 4;
+  static constexpr uint32_t kReleasePerFrame = 4;
 
-  void ExpulsarTexturasSiHaceFalta() {
-    const uint64_t limite = uint64_t(std::max(texturas_mb_max_, 0)) << 20;
-    if (!limite) {
+  void EvictTexturesIfNeeded() {
+    const uint64_t limit = uint64_t(std::max(textures_max_mb_, 0)) << 20;
+    if (!limit) {
       return;
     }
     // Little by little, from 75 % of the limit. That is what avoids the stutter.
-    if (bytes_texturas_ > limite / 4 * 3) {
-      SoltarUnasPocasFrias();
+    if (textures_bytes_ > limit / 4 * 3) {
+      ReleaseColdFewSome();
     }
     // Safety net: if it still goes over the limit (because almost everything is hot), one batch every 60
     // frames. With the above working, this should almost never trigger.
-    if (bytes_texturas_ > limite && fotograma_ >= intento_expulsion_ + 60) {
-      intento_expulsion_ = fotograma_;
-      SoltarTexturas(limite / 4 * 3, kFotogramasSinUsoParaSoltar, "por encima del limite");
+    if (textures_bytes_ > limit && frame_ >= eviction_attempt_ + 60) {
+      eviction_attempt_ = frame_;
+      ReleaseTextures(limit / 4 * 3, kFramesWithoutUseForRelease, "por encima del limite");
     }
   }
 
   // The kSoltarPorFotograma oldest cold ones. Without sorting the whole cache: they are picked on the fly.
-  void SoltarUnasPocasFrias() {
-    std::array<std::pair<uint64_t, uint64_t>, kSoltarPorFotograma> elegidas{};  // (frame, key)
-    uint32_t cuantas = 0;
-    for (const auto& [clave, textura] : texturas_) {
+  void ReleaseColdFewSome() {
+    std::array<std::pair<uint64_t, uint64_t>, kReleasePerFrame> chosen_set{};  // (frame, key)
+    uint32_t how_many = 0;
+    for (const auto& [key, texture] : textures_) {
       // Nor those with a bind in flight, nor those owned by the hash thread.
-      if (textura.imagen.imagen == VK_NULL_HANDLE || textura.subir || textura.en_vuelo || textura.huella_trabajo ||
-          textura.fotograma == UINT64_MAX ||
-          textura.fotograma + kFotogramasSinUsoParaSoltar >= fotograma_) {
+      if (texture.img.img == VK_NULL_HANDLE || texture.do_upload || texture.in_flight || texture.job_fingerprint ||
+          texture.frame == UINT64_MAX ||
+          texture.frame + kFramesWithoutUseForRelease >= frame_) {
         continue;
       }
-      if (cuantas < kSoltarPorFotograma) {
-        elegidas[cuantas++] = {textura.fotograma, clave};
+      if (how_many < kReleasePerFrame) {
+        chosen_set[how_many++] = {texture.frame, key};
         continue;
       }
       // Replaces the most recent of the chosen ones, if this one is older.
-      uint32_t peor = 0;
-      for (uint32_t i = 1; i < cuantas; ++i) {
-        if (elegidas[i].first > elegidas[peor].first) {
-          peor = i;
+      uint32_t worst = 0;
+      for (uint32_t i = 1; i < how_many; ++i) {
+        if (chosen_set[i].first > chosen_set[worst].first) {
+          worst = i;
         }
       }
-      if (textura.fotograma < elegidas[peor].first) {
-        elegidas[peor] = {textura.fotograma, clave};
+      if (texture.frame < chosen_set[worst].first) {
+        chosen_set[worst] = {texture.frame, key};
       }
     }
-    if (cuantas == 0) {
+    if (how_many == 0) {
       return;  // all hot: let it grow rather than thrash
     }
-    std::unordered_set<VkImage> imagenes;
-    for (uint32_t i = 0; i < cuantas; ++i) {
-      auto it = texturas_.find(elegidas[i].second);
-      if (it == texturas_.end()) {
+    std::unordered_set<VkImage> images;
+    for (uint32_t i = 0; i < how_many; ++i) {
+      auto it = textures_.find(chosen_set[i].second);
+      if (it == textures_.end()) {
         continue;
       }
-      imagenes.insert(it->second.imagen.imagen);
-      bytes_texturas_ -= std::min(bytes_texturas_, it->second.bytes);
+      images.insert(it->second.img.img);
+      textures_bytes_ -= std::min(textures_bytes_, it->second.bytes);
     }
-    SoltarImagenes(imagenes);
-    texturas_soltadas_ += imagenes.size();
-    soltadas_poco_a_poco_ += imagenes.size();
-    if (fotograma_ >= aviso_goteo_ + 600) {  // one warning every 600 frames, not one per texture
-      aviso_goteo_ = fotograma_;
+    ReleaseImages(images);
+    released_textures_ += images.size();
+    few_released_to_few_ += images.size();
+    if (frame_ >= trickle_warning_ + 600) {  // one warning every 600 frames, not one per texture
+      trickle_warning_ = frame_;
       REXLOG_INFO("[nativo] C3: cache de texturas cerca del limite: se sueltan frias a goteo ({} en total); "
                   "quedan {} texturas y {} MB de {} MB",
-                  soltadas_poco_a_poco_, texturas_.size(), bytes_texturas_ >> 20, texturas_mb_max_);
+                  few_released_to_few_, textures_.size(), textures_bytes_ >> 20, textures_max_mb_);
     }
   }
 
@@ -5291,77 +5291,77 @@ class DibujosVulkanImpl final : public DibujosVulkan {
    * finish everything in flight, and then none is in use. It costs a one-frame stutter; crashing costs
    * the game.
    */
-  bool SoltarTexturasPorFaltaDeMemoria() override {
-    if (texturas_.empty() || bytes_texturas_ == 0 || soltando_por_falta_de_memoria_) {
+  bool ReleaseTexturesOnMemoryShortage() override {
+    if (textures_.empty() || textures_bytes_ == 0 || releasing_per_memory_missing_) {
       return false;  // the guard keeps an allocation inside the cleanup itself from re-entering here
     }
-    soltando_por_falta_de_memoria_ = true;
+    releasing_per_memory_missing_ = true;
     bool algo = false;
-    if (contexto_ && contexto_->EsperarGpuDelTodo()) {
-      algo = SoltarTexturas(bytes_texturas_ / 2, 0, "SIN MEMORIA EN LA GPU") > 0;
+    if (contexto_ && contexto_->WaitGpuIdle()) {
+      algo = ReleaseTextures(textures_bytes_ / 2, 0, "SIN MEMORIA EN LA GPU") > 0;
     }
-    soltando_por_falta_de_memoria_ = false;
+    releasing_per_memory_missing_ = false;
     return algo;
   }
 
   // Actually retires a group of images. First the views and their slots (pointed at the empty texture),
   // then the images. Used by both the gradual and the batch eviction.
-  void SoltarImagenes(const std::unordered_set<VkImage>& imagenes) {
-    ++generacion_texturas_;
-    for (auto it = vistas_.begin(); it != vistas_.end();) {
-      if (!imagenes.count(it->second.imagen)) {
+  void ReleaseImages(const std::unordered_set<VkImage>& images) {
+    ++textures_generation_;
+    for (auto it = views_.begin(); it != views_.end();) {
+      if (!images.count(it->second.img)) {
         ++it;
         continue;
       }
-      EscribirImagen(it->second.monton, it->second.ranura, vacias_[it->second.monton].vista);
-      montones_[it->second.monton].libres.push_back(it->second.ranura);
-      dfn_.vkDestroyImageView(device_, it->second.vista, nullptr);
-      vistas_por_imagen_.erase(it->second.imagen);  // all views of that image go
-      it = vistas_.erase(it);
+      WriteImage(it->second.heap, it->second.ranura, empty_[it->second.heap].view);
+      heaps_[it->second.heap].free_items.push_back(it->second.ranura);
+      dfn_.vkDestroyImageView(device_, it->second.view, nullptr);
+      views_per_image_.erase(it->second.img);  // all views of that image go
+      it = views_.erase(it);
     }
-    for (auto it = texturas_.begin(); it != texturas_.end();) {
-      if (!imagenes.count(it->second.imagen.imagen)) {
+    for (auto it = textures_.begin(); it != textures_.end();) {
+      if (!images.count(it->second.img.img)) {
         ++it;
         continue;
       }
-      QuitarContenidoTextura(it->second, it->first);  // measurement only: nfsmw_nativo_diag_reutilizar
-      DestruirImagen(it->second.imagen);
-      it = texturas_.erase(it);
+      RemoveTextureContent(it->second, it->first);  // measurement only: nfsmw_nativo_diag_reutilizar
+      DestroyImage(it->second.img);
+      it = textures_.erase(it);
     }
   }
 
   // Evicts unused textures until below `objetivo`. Returns the bytes freed.
-  uint64_t SoltarTexturas(uint64_t objetivo, uint64_t edad_minima, const char* motivo) {
-    std::vector<std::pair<uint64_t, uint64_t>> candidatas;  // (last frame it was prepared, key)
-    for (const auto& [clave, textura] : texturas_) {
+  uint64_t ReleaseTextures(uint64_t goal, uint64_t min_age, const char* reason) {
+    std::vector<std::pair<uint64_t, uint64_t>> candidate_items;  // (last frame it was prepared, key)
+    for (const auto& [key, texture] : textures_) {
       // Nor those with a bind in flight (their image has no memory yet), nor those owned by the hash thread.
-      if (textura.imagen.imagen != VK_NULL_HANDLE && !textura.subir && !textura.en_vuelo && !textura.huella_trabajo &&
-          textura.fotograma != UINT64_MAX &&
-          textura.fotograma + edad_minima < fotograma_) {
-        candidatas.emplace_back(textura.fotograma, clave);
+      if (texture.img.img != VK_NULL_HANDLE && !texture.do_upload && !texture.in_flight && !texture.job_fingerprint &&
+          texture.frame != UINT64_MAX &&
+          texture.frame + min_age < frame_) {
+        candidate_items.emplace_back(texture.frame, key);
       }
     }
-    std::sort(candidatas.begin(), candidatas.end());
-    const uint64_t antes = bytes_texturas_;
-    std::unordered_set<VkImage> imagenes;
-    for (const auto& [ultimo, clave] : candidatas) {
-      if (bytes_texturas_ <= objetivo) {
+    std::sort(candidate_items.begin(), candidate_items.end());
+    const uint64_t before = textures_bytes_;
+    std::unordered_set<VkImage> images;
+    for (const auto& [is_last, key] : candidate_items) {
+      if (textures_bytes_ <= goal) {
         break;
       }
-      auto it = texturas_.find(clave);
-      imagenes.insert(it->second.imagen.imagen);
-      bytes_texturas_ -= std::min(bytes_texturas_, it->second.bytes);
+      auto it = textures_.find(key);
+      images.insert(it->second.img.img);
+      textures_bytes_ -= std::min(textures_bytes_, it->second.bytes);
     }
-    if (imagenes.empty()) {
+    if (images.empty()) {
       return 0;
     }
-    SoltarImagenes(imagenes);
-    texturas_soltadas_ += imagenes.size();
+    ReleaseImages(images);
+    released_textures_ += images.size();
     REXLOG_INFO("[nativo] C3: cache de texturas {} ({} MB): fuera {} sin usar desde hace mas de {} fotogramas "
                 "({} MB); quedan {} texturas y {} MB ({} soltadas en total)",
-                motivo, antes >> 20, imagenes.size(), edad_minima,
-                (antes - bytes_texturas_) >> 20, texturas_.size(), bytes_texturas_ >> 20, texturas_soltadas_);
-    return antes - bytes_texturas_;
+                reason, before >> 20, images.size(), min_age,
+                (before - textures_bytes_) >> 20, textures_.size(), textures_bytes_ >> 20, released_textures_);
+    return before - textures_bytes_;
   }
 
   // ZCULL: clears a depth image by opening a pass with loadOp = CLEAR. Needed for images created without
@@ -5369,72 +5369,72 @@ class DibujosVulkanImpl final : public DibujosVulkan {
   // requires that usage (VUID-vkCmdClearDepthStencilImage-pRanges-02660). It costs no extra GPU time: it
   // is exactly how NVK implements that command internally (nvk_cmd_clear.c, clear_image opens a pass with
   // loadOp = CLEAR).
-  bool BorrarProfundidadEnPase(VkCommandBuffer comandos, const ImagenNativa& imagen,
-                               float profundidad, uint32_t stencil) override {
-    if (comandos == VK_NULL_HANDLE || imagen.vista == VK_NULL_HANDLE || !imagen.ancho ||
-        !imagen.alto) {
+  bool ClearDepthInPass(VkCommandBuffer commands, const NativeImage& img,
+                               float depth_value, uint32_t stencil) override {
+    if (commands == VK_NULL_HANDLE || img.view == VK_NULL_HANDLE || !img.width_px ||
+        !img.height_px) {
       return false;
     }
-    TerminarPase();  // a pass cannot be opened inside another
-    uint32_t formatos[5] = {0, 0, 0, 0, uint32_t(imagen.formato)};
-    const VkRenderPass pase = PaseDe(formatos, kCargaBorrar);
-    if (pase == VK_NULL_HANDLE) {
+    FinishPass();  // a pass cannot be opened inside another
+    uint32_t formats[5] = {0, 0, 0, 0, uint32_t(img.format_id)};
+    const VkRenderPass pass = PassOf(formats, kClearLoad);
+    if (pass == VK_NULL_HANDLE) {
       return false;
     }
-    std::array<VkImageView, 5> vistas{};
-    vistas[4] = imagen.vista;
-    const VkFramebuffer framebuffer = FramebufferDe(pase, vistas, imagen.ancho, imagen.alto);
+    std::array<VkImageView, 5> views{};
+    views[4] = img.view;
+    const VkFramebuffer framebuffer = FramebufferDe(pass, views, img.width_px, img.height_px);
     if (framebuffer == VK_NULL_HANDLE) {
       return false;
     }
-    VkClearValue borrado{};
-    borrado.depthStencil = {profundidad, stencil};
-    VkRenderPassBeginInfo inicio{};
-    inicio.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    inicio.renderPass = pase;
-    inicio.framebuffer = framebuffer;
-    inicio.renderArea.extent = {imagen.ancho, imagen.alto};
-    inicio.clearValueCount = 1;
-    inicio.pClearValues = &borrado;
-    dfn_.vkCmdBeginRenderPass(comandos, &inicio, VK_SUBPASS_CONTENTS_INLINE);
-    dfn_.vkCmdEndRenderPass(comandos);
-    ++borrados_profundidad_en_pase_;
+    VkClearValue clear_info{};
+    clear_info.depthStencil = {depth_value, stencil};
+    VkRenderPassBeginInfo start{};
+    start.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    start.renderPass = pass;
+    start.framebuffer = framebuffer;
+    start.renderArea.extent = {img.width_px, img.height_px};
+    start.clearValueCount = 1;
+    start.pClearValues = &clear_info;
+    dfn_.vkCmdBeginRenderPass(commands, &start, VK_SUBPASS_CONTENTS_INLINE);
+    dfn_.vkCmdEndRenderPass(commands);
+    ++depth_clears_in_pass_;
     return true;
   }
 
   // nfsmw_nativo_borrar_area_util. Clears only the `area` rectangle of a color image with a
   // loadOp = CLEAR pass: what NVK does internally for vkCmdClearColorImage (nvk_cmd_clear.c), over that
   // rectangle. What lies outside is not touched (Vulkan only loads and stores the renderArea).
-  bool BorrarColorEnPase(VkCommandBuffer comandos, const ImagenNativa& imagen, const VkClearColorValue& color,
+  bool ClearColorInPass(VkCommandBuffer commands, const NativeImage& img, const VkClearColorValue& color,
                          const VkRect2D& area) override {
-    if (comandos == VK_NULL_HANDLE || imagen.vista == VK_NULL_HANDLE || !area.extent.width || !area.extent.height ||
-        area.offset.x < 0 || area.offset.y < 0 || uint32_t(area.offset.x) + area.extent.width > imagen.ancho ||
-        uint32_t(area.offset.y) + area.extent.height > imagen.alto) {
+    if (commands == VK_NULL_HANDLE || img.view == VK_NULL_HANDLE || !area.extent.width || !area.extent.height ||
+        area.offset.x < 0 || area.offset.y < 0 || uint32_t(area.offset.x) + area.extent.width > img.width_px ||
+        uint32_t(area.offset.y) + area.extent.height > img.height_px) {
       return false;
     }
-    TerminarPase();  // a pass cannot be opened inside another
-    uint32_t formatos[5] = {uint32_t(imagen.formato), 0, 0, 0, 0};
-    const VkRenderPass pase = PaseDe(formatos, kCargaBorrar);
-    if (pase == VK_NULL_HANDLE) {
+    FinishPass();  // a pass cannot be opened inside another
+    uint32_t formats[5] = {uint32_t(img.format_id), 0, 0, 0, 0};
+    const VkRenderPass pass = PassOf(formats, kClearLoad);
+    if (pass == VK_NULL_HANDLE) {
       return false;
     }
-    std::array<VkImageView, 5> vistas{};
-    vistas[0] = imagen.vista;
-    const VkFramebuffer framebuffer = FramebufferDe(pase, vistas, imagen.ancho, imagen.alto);
+    std::array<VkImageView, 5> views{};
+    views[0] = img.view;
+    const VkFramebuffer framebuffer = FramebufferDe(pass, views, img.width_px, img.height_px);
     if (framebuffer == VK_NULL_HANDLE) {
       return false;
     }
-    VkClearValue borrado{};
-    borrado.color = color;
-    VkRenderPassBeginInfo inicio{};
-    inicio.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    inicio.renderPass = pase;
-    inicio.framebuffer = framebuffer;
-    inicio.renderArea = area;
-    inicio.clearValueCount = 1;
-    inicio.pClearValues = &borrado;
-    dfn_.vkCmdBeginRenderPass(comandos, &inicio, VK_SUBPASS_CONTENTS_INLINE);
-    dfn_.vkCmdEndRenderPass(comandos);
+    VkClearValue clear_info{};
+    clear_info.color = color;
+    VkRenderPassBeginInfo start{};
+    start.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    start.renderPass = pass;
+    start.framebuffer = framebuffer;
+    start.renderArea = area;
+    start.clearValueCount = 1;
+    start.pClearValues = &clear_info;
+    dfn_.vkCmdBeginRenderPass(commands, &start, VK_SUBPASS_CONTENTS_INLINE);
+    dfn_.vkCmdEndRenderPass(commands);
     return true;
   }
 
@@ -5446,147 +5446,147 @@ class DibujosVulkanImpl final : public DibujosVulkan {
   // in the log and, for the rest of the session, nothing is destroyed at runtime: the affected
   // framebuffers (or the whole cache, if they are out of step) are retired and destroyed at shutdown.
   // Retiring is never worse than the previous behaviour.
-  void OlvidarVista(VkImageView vista) override {
-    if (vista == VK_NULL_HANDLE || !REXCVAR_GET(nfsmw_nativo_framebuffers_olvidan_vistas)) {
+  void ForgetView(VkImageView view) override {
+    if (view == VK_NULL_HANDLE || !REXCVAR_GET(nfsmw_nativo_framebuffers_olvidan_vistas)) {
       return;
     }
-    const bool a_la_par = framebuffers_vistas_.size() == framebuffers_.size();
-    if (!fb_retirar_ && (pase_activo_ || !a_la_par)) {
-      fb_retirar_ = true;
+    const bool a_la_par = views_framebuffers_.size() == framebuffers_.size();
+    if (!fb_retire_ && (active_pass_ || !a_la_par)) {
+      fb_retire_ = true;
       REXLOG_ERROR("[nativo] C6 framebuffers (build 184): DIFERENCIA al destruir la vista {:016X}: {}. Para el resto "
                    "de la sesion los framebuffers afectados se retiran sin destruirlos (se destruyen al cerrar)",
-                   uint64_t(reinterpret_cast<uintptr_t>(vista)),
-                   pase_activo_ ? "hay un pase abierto (quien destruye la vista no ha enviado el trabajo)"
+                   uint64_t(reinterpret_cast<uintptr_t>(view)),
+                   active_pass_ ? "hay un pase abierto (quien destruye la vista no ha enviado el trabajo)"
                                 : "la cache y su lista de vistas no van a la par (alguien crea framebuffers por otro "
                                   "camino)");
     }
-    uint32_t fuera = 0;
+    uint32_t outside = 0;
     if (!a_la_par) {
       // Unknown which ones use the view: drop them all (they are rebuilt on request).
-      for (auto& [clave, framebuffer] : framebuffers_) {
-        fb_retirados_.push_back(framebuffer);
+      for (auto& [key, framebuffer] : framebuffers_) {
+        fb_retired_.push_back(framebuffer);
       }
-      fuera = uint32_t(framebuffers_.size());
+      outside = uint32_t(framebuffers_.size());
       framebuffers_.clear();
-      framebuffers_vistas_.clear();
+      views_framebuffers_.clear();
     } else {
-      for (auto it = framebuffers_vistas_.begin(); it != framebuffers_vistas_.end();) {
-        if (std::find(it->second.begin(), it->second.end(), vista) == it->second.end()) {
+      for (auto it = views_framebuffers_.begin(); it != views_framebuffers_.end();) {
+        if (std::find(it->second.begin(), it->second.end(), view) == it->second.end()) {
           ++it;
           continue;
         }
         const auto fb = framebuffers_.find(it->first);
         if (fb != framebuffers_.end()) {
-          if (fb_retirar_) {
-            fb_retirados_.push_back(fb->second);
+          if (fb_retire_) {
+            fb_retired_.push_back(fb->second);
           } else {
             dfn_.vkDestroyFramebuffer(device_, fb->second, nullptr);
           }
           framebuffers_.erase(fb);
-          ++fuera;
+          ++outside;
         }
-        it = framebuffers_vistas_.erase(it);
+        it = views_framebuffers_.erase(it);
       }
     }
-    ++fb_vistas_olvidadas_;
-    fb_olvidados_ += fuera;
-    if (fb_vistas_olvidadas_ <= 16 || (fb_vistas_olvidadas_ & 63) == 0) {
-      NFSMW_INFORME_ANILLO("[nativo] C6 framebuffers (build 184): vista {:016X} destruida: {} framebuffers {} con "
+    ++fb_forgotten_views_;
+    fb_forgotten_ += outside;
+    if (fb_forgotten_views_ <= 16 || (fb_forgotten_views_ & 63) == 0) {
+      NFSMW_RING_REPORT("[nativo] C6 framebuffers (build 184): vista {:016X} destruida: {} framebuffers {} con "
                            "ella; quedan {} en la cache ({} vistas y {} framebuffers desde el arranque; {} "
                            "retirados)",
-                           uint64_t(reinterpret_cast<uintptr_t>(vista)), fuera,
-                           fb_retirar_ ? "retirados (sin destruir)" : "destruidos", framebuffers_.size(),
-                           fb_vistas_olvidadas_, fb_olvidados_, fb_retirados_.size());
+                           uint64_t(reinterpret_cast<uintptr_t>(view)), outside,
+                           fb_retire_ ? "retirados (sin destruir)" : "destruidos", framebuffers_.size(),
+                           fb_forgotten_views_, fb_forgotten_, fb_retired_.size());
     }
   }
 
-  void OlvidarImagen(VkImage imagen) override {
-    ++generacion_texturas_;  // the sampler cache could point to a retired view
-    const auto indice = vistas_por_imagen_.find(imagen);  // without walking vistas_
-    if (indice == vistas_por_imagen_.end()) {
+  void ForgetImage(VkImage img) override {
+    ++textures_generation_;  // the sampler cache could point to a retired view
+    const auto index = views_per_image_.find(img);  // without walking vistas_
+    if (index == views_per_image_.end()) {
       return;
     }
-    for (uint64_t clave : indice->second) {
-      const auto it = vistas_.find(clave);
-      if (it == vistas_.end() || it->second.imagen != imagen) {
+    for (uint64_t key : index->second) {
+      const auto it = views_.find(key);
+      if (it == views_.end() || it->second.img != img) {
         continue;
       }
-      EscribirImagen(it->second.monton, it->second.ranura, vacias_[it->second.monton].vista);
-      montones_[it->second.monton].libres.push_back(it->second.ranura);
-      dfn_.vkDestroyImageView(device_, it->second.vista, nullptr);
-      vistas_.erase(it);
+      WriteImage(it->second.heap, it->second.ranura, empty_[it->second.heap].view);
+      heaps_[it->second.heap].free_items.push_back(it->second.ranura);
+      dfn_.vkDestroyImageView(device_, it->second.view, nullptr);
+      views_.erase(it);
     }
-    vistas_por_imagen_.erase(indice);
+    views_per_image_.erase(index);
   }
 
-  EstadisticasDibujos Estadisticas() const override {
-    EstadisticasDibujos e;
-    e.dibujados = dibujados_;
-    e.rechazados = rechazados_;
+  DrawStats Stats() const override {
+    DrawStats e;
+    e.drawn = drawn_;
+    e.rejected = rejected_;
     e.pipelines = pipelines_.size();
-    e.texturas = texturas_.size();
-    e.subidas_textura = subidas_textura_;
-    e.megas_subidos = megas_bytes_ >> 20;
-    e.megas_texturas = bytes_texturas_ >> 20;
+    e.textures = textures_.size();
+    e.texture_uploads = texture_uploads_;
+    e.uploaded_megas = megas_bytes_ >> 20;
+    e.textures_megas = textures_bytes_ >> 20;
     e.ms_pipelines = ns_pipelines_ / 1000000;
-    e.pases = pases_empezados_;
-    e.envios_llenos = envios_llenos_;
-    e.ns_envios_llenos = ns_envios_llenos_;
+    e.passes = started_passes_;
+    e.full_sends = full_sends_;
+    e.full_sends_ns = full_sends_ns_;
     e.bytes_vertices = bytes_vertices_;
-    e.dedupe_aciertos = dedupe_.aciertos();
-    e.dedupe_bytes = dedupe_.bytes_ahorrados();
-    e.dedupe_colisiones = dedupe_.colisiones();
-    e.bytes_indices = bytes_indices_subidos_;
-    e.samplers = samplers_preparados_;
+    e.hits_dedupe = dedupe_.hits();
+    e.dedupe_bytes = dedupe_.saved_bytes();
+    e.collisions_dedupe = dedupe_.collisions();
+    e.bytes_indices = uploaded_indices_bytes_;
+    e.samplers = prepared_samplers_;
     e.samplers_cache = samplers_cache_ + samplers_cache_fetch_;
-    e.ns_pases = ns_pases_;
+    e.passes_ns = passes_ns_;
     e.ns_vertices = ns_vertices_;
-    e.entradas_calculadas = entradas_calculadas_;
-    e.ns_entradas = ns_entradas_;
-    e.entradas_reutilizadas = entradas_reutilizadas_ + entradas_cache_aciertos_;
-    e.pases_por_generacion = pases_por_generacion_;
-    e.pases_por_destino = pases_por_destino_;
-    e.pases_reanudados = pases_reanudados_;
+    e.computed_entries = computed_entries_;
+    e.entries_ns = entries_ns_;
+    e.reused_entries = reused_entries_ + hits_cache_entries_;
+    e.passes_per_generation = passes_per_generation_;
+    e.passes_per_target = passes_per_target_;
+    e.resumed_passes = resumed_passes_;
     e.ns_render_pass = ns_render_pass_;
-    e.texels_pases = texels_pases_;
-    e.texels_por_categoria = texels_por_categoria_;
-    e.dibujos_por_categoria = dibujos_por_categoria_;
-    e.dibujos_ps_inutil = dibujos_ps_inutil_;
-    e.dibujos_ps_necesario = dibujos_ps_necesario_;
-    e.sombras_alfa_activa = sombras_alfa_activa_;
-    e.sombras_alfa_apagada = sombras_alfa_apagada_;
-    e.triangulos_por_categoria = triangulos_por_categoria_;
-    e.pases_por_categoria = pases_por_categoria_;
-    e.envios = envios_;
-    e.envios_ubo = envios_ubo_;
-    e.compartidas_miradas = compartidas_miradas_;
-    e.compartidas_cambiadas = compartidas_cambiadas_;
-    e.bytes_repetidos_fotograma = bytes_repetidos_fotograma_;
-    e.bytes_iguales_anterior = bytes_iguales_anterior_;
+    e.passes_texels = passes_texels_;
+    e.texels_per_category = texels_per_category_;
+    e.draws_per_category = draws_per_category_;
+    e.useless_ps_draws = useless_ps_draws_;
+    e.required_ps_draws = required_ps_draws_;
+    e.shadows_active_alpha = shadows_active_alpha_;
+    e.shadows_alpha_disabled = shadows_alpha_disabled_;
+    e.triangles_per_category = triangles_per_category_;
+    e.passes_per_category = passes_per_category_;
+    e.sends = sends_;
+    e.ubo_sends = ubo_sends_;
+    e.peeked_shared = peeked_shared_;
+    e.changed_shared = changed_shared_;
+    e.frame_repeated_bytes = frame_repeated_bytes_;
+    e.previous_equal_bytes = previous_equal_bytes_;
     e.ns_hash_vertices = ns_hash_vertices_;
-    e.causas.assign(causas_.begin(), causas_.end());
-    e.etapas_ns = etapas_ns_;
-    e.escena_con_descarte = escena_con_descarte_;
-    e.escena_sin_descarte = escena_sin_descarte_;
-    e.dibujados_cronometrados = dibujados_cronometrados_;
-    e.vegetacion_pronto = dibujos_vegetacion_pronto_;
-    std::sort(e.causas.begin(), e.causas.end(),
+    e.causes.assign(causes_.begin(), causes_.end());
+    e.stages_ns = stages_ns_;
+    e.scene_with_discard = scene_with_discard_;
+    e.scene_without_discard = scene_without_discard_;
+    e.timed_drawn = timed_drawn_;
+    e.vegetation_soon = soon_vegetation_draws_;
+    std::sort(e.causes.begin(), e.causes.end(),
               [](const auto& a, const auto& b) { return a.second > b.second; });
     return e;
   }
 
  private:
-  bool Rechazar(uint32_t causa, const char* texto) {
-    ++rechazados_;
-    ++causas_[causa];
-    ultima_causa_ = causa;
-    Avisar(causa, texto);
+  bool Reject(uint32_t cause, const char* texto) {
+    ++rejected_;
+    ++causes_[cause];
+    last_cause_ = cause;
+    Warn(cause, texto);
     return false;
   }
 
-  void Avisar(uint32_t causa, const char* texto) {
-    if (avisados_.insert(causa).second) {
-      REXLOG_WARN("[nativo] C6: {} (causa {})", texto, causa);
+  void Warn(uint32_t cause, const char* texto) {
+    if (warned_.insert(cause).second) {
+      REXLOG_WARN("[nativo] C6: {} (causa {})", texto, cause);
     }
   }
 
@@ -5625,155 +5625,155 @@ class DibujosVulkanImpl final : public DibujosVulkan {
    * whatever was in flight finishes through the fallback path). And if for 3 reports in a row the ring
    * waits for the thread longer than the thread takes to bind, it does not pay off: it switches off too.
    */
-  void DecidirEnlaces() {
-    const bool pedido = REXCVAR_GET(nfsmw_nativo_texturas_enlace_hilo);
-    enlaces_prioridad_ = std::clamp<int32_t>(REXCVAR_GET(nfsmw_nativo_texturas_enlace_hilo_prioridad), 0x2C, 0x3B);
-    enlaces_fase_ = pedido ? kEnlacesMirando : kEnlacesApagado;
+  void DecideBindings() {
+    const bool request = REXCVAR_GET(nfsmw_nativo_texturas_enlace_hilo);
+    priority_bindings_ = std::clamp<int32_t>(REXCVAR_GET(nfsmw_nativo_texturas_enlace_hilo_prioridad), 0x2C, 0x3B);
+    phase_bindings_ = request ? kPeekingBindings : kBindingsDisabled;
     REXLOG_INFO("[nativo] C3: enlace de las texturas nuevas en un hilo aparte (nfsmw_nativo_texturas_enlace_hilo) = {}",
-                pedido ? fmt::format("SI, prioridad {:#x}; fase MIRANDO: las {} primeras esperan su enlace al momento "
+                request ? fmt::format("SI, prioridad {:#x}; fase MIRANDO: las {} primeras esperan su enlace al momento "
                                      "(solo texturas del pool, que esta {})",
-                                     enlaces_prioridad_, kEnlacesAComprobar,
-                                     pool_texturas_.Activo() ? "encendido" : "APAGADO: no se usara")
+                                     priority_bindings_, kBindingsToCheck,
+                                     textures_pool_.Active() ? "encendido" : "APAGADO: no se usara")
                        : std::string("no, en el hilo del anillo como siempre"));
   }
 
-  void ApagarEnlaces(const std::string& motivo) {
-    if (enlaces_fase_ == kEnlacesApagado) {
+  void DisableBindings(const std::string& reason) {
+    if (phase_bindings_ == kBindingsDisabled) {
       return;
     }
-    enlaces_fase_ = kEnlacesApagado;
+    phase_bindings_ = kBindingsDisabled;
     REXLOG_ERROR("[nativo] C3: hilo de enlaces de texturas APAGADO para el resto de la sesion: {}. Las texturas nuevas "
                  "vuelven a crearse enteras en el hilo del anillo ({} enlazadas en el hilo, {} fallidas, {} vistas y {} "
                  "copias aplazadas)",
-                 motivo, enlaces_hilo_total_, enlaces_fallidos_, vistas_aplazadas_, copias_aplazadas_);
+                 reason, thread_bindings_total_, failed_bindings_, deferred_views_, deferred_copies_);
   }
 
   // Queues the vkBindImageMemory of an image. false = not queued (queue full or no thread): the usual path.
-  bool EncolarEnlace(VkImage imagen, VkDeviceMemory memoria, VkDeviceSize offset, uint64_t& ticket) {
-    if (!enlaces_hilo_.joinable()) {
+  bool EnqueueBinding(VkImage img, VkDeviceMemory mem, VkDeviceSize offset, uint64_t& ticket) {
+    if (!thread_bindings_.joinable()) {
       try {
-        enlaces_hilo_ = std::thread([this] { BucleEnlaces(); });
+        thread_bindings_ = std::thread([this] { BindLoop(); });
       } catch (const std::system_error& error) {
-        ApagarEnlaces(fmt::format("DIFERENCIA: no se pudo crear el hilo ({})", error.what()));
+        DisableBindings(fmt::format("DIFERENCIA: no se pudo crear el hilo ({})", error.what()));
         return false;
       }
     }
-    bool avisar = false;
+    bool warn = false;
     {
-      std::lock_guard<std::mutex> cerrojo(enlaces_mutex_);
-      if (enlaces_pedidos_ - enlaces_recogidos_ >= kColaEnlaces) {
-        ++enlaces_cola_llena_;
+      std::lock_guard<std::mutex> mutex_lock(mutex_bindings_);
+      if (requests_bindings_ - collected_bindings_ >= kBindingsQueue) {
+        ++full_queue_bindings_;
         return false;
       }
-      PeticionEnlace& peticion = cola_enlaces_[enlaces_pedidos_ & (kColaEnlaces - 1)];
-      peticion.imagen = imagen;
-      peticion.memoria = memoria;
-      peticion.offset = offset;
-      peticion.resultado = VK_NOT_READY;
-      peticion.ns = 0;
-      ticket = enlaces_pedidos_++;
-      avisar = enlaces_durmiendo_;  // decided under the lock: if it sleeps, it is inside its wait with the predicate
+      BindingRequest& req_info = bindings_queue_[requests_bindings_ & (kBindingsQueue - 1)];
+      req_info.img = img;
+      req_info.mem = mem;
+      req_info.offset = offset;
+      req_info.result = VK_NOT_READY;
+      req_info.ns = 0;
+      ticket = requests_bindings_++;
+      warn = sleeping_bindings_;  // decided under the lock: if it sleeps, it is inside its wait with the predicate
     }
-    if (avisar) {
-      enlaces_cv_.notify_one();
+    if (warn) {
+      cv_bindings_.notify_one();
     }
     return true;
   }
 
   // The thread: the requests' vkBindImageMemory calls, in order. It sleeps on a decision taken under the
   // lock; it never spins. It does not write to the log (the ring records the figures in InformeEnlaces).
-  void BucleEnlaces() {
+  void BindLoop() {
     rex::thread::set_current_thread_name("NFSMW enlaces de texturas");
 #if REX_PLATFORM_SWITCH
-    const bool prioridad_ok = RexSwitchSetCurrentThreadPriorityOk(int(enlaces_prioridad_));
+    const bool priority_ok = RexSwitchSetCurrentThreadPriorityOk(int(priority_bindings_));
 #else
-    const bool prioridad_ok = true;
+    const bool priority_ok = true;
 #endif
-    std::unique_lock<std::mutex> cerrojo(enlaces_mutex_);
-    enlaces_prioridad_ok_ = prioridad_ok;
+    std::unique_lock<std::mutex> mutex_lock(mutex_bindings_);
+    priority_bindings_ok_ = priority_ok;
     for (;;) {
-      if (enlaces_hechos_ == enlaces_pedidos_) {
-        if (enlaces_parar_) {
+      if (done_bindings_ == requests_bindings_) {
+        if (stop_bindings_) {
           return;  // stop, nothing pending
         }
-        if (enlaces_esperando_) {
-          enlaces_hechos_cv_.notify_one();
+        if (waiting_bindings_) {
+          cv_done_bindings_.notify_one();
         }
-        enlaces_durmiendo_ = true;
-        enlaces_cv_.wait(cerrojo, [this] { return enlaces_parar_ || enlaces_hechos_ != enlaces_pedidos_; });
-        enlaces_durmiendo_ = false;
+        sleeping_bindings_ = true;
+        cv_bindings_.wait(mutex_lock, [this] { return stop_bindings_ || done_bindings_ != requests_bindings_; });
+        sleeping_bindings_ = false;
         continue;
       }
       // The slot is not reused until the ring collects it (enlaces_recogidos_): it stays ours without the lock.
-      PeticionEnlace& peticion = cola_enlaces_[enlaces_hechos_ & (kColaEnlaces - 1)];
-      const VkImage imagen = peticion.imagen;
-      const VkDeviceMemory memoria = peticion.memoria;
-      const VkDeviceSize offset = peticion.offset;
-      cerrojo.unlock();
-      const auto antes = std::chrono::steady_clock::now();
-      const VkResult resultado = dfn_.vkBindImageMemory(device_, imagen, memoria, offset);
+      BindingRequest& req_info = bindings_queue_[done_bindings_ & (kBindingsQueue - 1)];
+      const VkImage img = req_info.img;
+      const VkDeviceMemory mem = req_info.mem;
+      const VkDeviceSize offset = req_info.offset;
+      mutex_lock.unlock();
+      const auto before = std::chrono::steady_clock::now();
+      const VkResult result = dfn_.vkBindImageMemory(device_, img, mem, offset);
       const uint64_t ns = uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                       std::chrono::steady_clock::now() - antes)
+                                       std::chrono::steady_clock::now() - before)
                                        .count());
-      cerrojo.lock();
-      peticion.resultado = resultado;
-      peticion.ns = ns;
-      ns_enlaces_hilo_ += ns;
-      ns_enlace_peor_ = std::max(ns_enlace_peor_, ns);
-      ++enlaces_hechos_;
-      if (enlaces_esperando_) {
-        enlaces_hechos_cv_.notify_one();
+      mutex_lock.lock();
+      req_info.result = result;
+      req_info.ns = ns;
+      thread_bindings_ns_ += ns;
+      worst_binding_ns_ = std::max(worst_binding_ns_, ns);
+      ++done_bindings_;
+      if (waiting_bindings_) {
+        cv_done_bindings_.notify_one();
       }
     }
   }
 
-  void PararEnlaces() {
-    if (!enlaces_hilo_.joinable()) {
+  void StopBindings() {
+    if (!thread_bindings_.joinable()) {
       return;
     }
     {
-      std::lock_guard<std::mutex> cerrojo(enlaces_mutex_);
-      enlaces_parar_ = true;
+      std::lock_guard<std::mutex> mutex_lock(mutex_bindings_);
+      stop_bindings_ = true;
     }
-    enlaces_cv_.notify_one();
-    enlaces_hilo_.join();  // first finishes every queued request
+    cv_bindings_.notify_one();
+    thread_bindings_.join();  // first finishes every queued request
     REXLOG_INFO("[nativo] C3: hilo de enlaces de texturas parado ({} enlazadas en el hilo, {} fallidas, {} vistas y {} "
                 "copias aplazadas, {} ranuras perdidas)",
-                enlaces_hilo_total_, enlaces_fallidos_, vistas_aplazadas_, copias_aplazadas_, ranuras_perdidas_);
+                thread_bindings_total_, failed_bindings_, deferred_views_, deferred_copies_, lost_slots_);
   }
 
   // The ring waits until the thread has done the requests before `objetivo`. With a timeout and a log line
   // every 2 s.
-  void EsperarEnlaces(uint64_t objetivo) {
-    std::unique_lock<std::mutex> cerrojo(enlaces_mutex_);
-    if (enlaces_hechos_ >= objetivo) {
+  void WaitBindings(uint64_t goal) {
+    std::unique_lock<std::mutex> mutex_lock(mutex_bindings_);
+    if (done_bindings_ >= goal) {
       return;
     }
-    const auto antes = std::chrono::steady_clock::now();
-    enlaces_esperando_ = true;
-    if (enlaces_durmiendo_) {
-      enlaces_cv_.notify_one();  // should not be needed (it has work); in case a wake-up was lost
+    const auto before = std::chrono::steady_clock::now();
+    waiting_bindings_ = true;
+    if (sleeping_bindings_) {
+      cv_bindings_.notify_one();  // should not be needed (it has work); in case a wake-up was lost
     }
-    int segundos = 0;
-    while (!enlaces_hechos_cv_.wait_for(cerrojo, std::chrono::seconds(2),
-                                        [this, objetivo] { return enlaces_hechos_ >= objetivo; })) {
-      segundos += 2;
-      enlaces_atascado_ = true;
+    int secs = 0;
+    while (!cv_done_bindings_.wait_for(mutex_lock, std::chrono::seconds(2),
+                                        [this, goal] { return done_bindings_ >= goal; })) {
+      secs += 2;
+      stuck_bindings_ = true;
       REXLOG_ERROR("[nativo] C3: el hilo del anillo lleva {} s esperando los enlaces de texturas: objetivo {}, hechos "
                    "{}, pedidos {}; el hilo esta {}",
-                   segundos, objetivo, enlaces_hechos_, enlaces_pedidos_,
-                   enlaces_durmiendo_ ? "DORMIDO (aviso perdido)" : "despierto (un ioctl que no vuelve)");
+                   secs, goal, done_bindings_, requests_bindings_,
+                   sleeping_bindings_ ? "DORMIDO (aviso perdido)" : "despierto (un ioctl que no vuelve)");
     }
-    enlaces_esperando_ = false;
-    cerrojo.unlock();
+    waiting_bindings_ = false;
+    mutex_lock.unlock();
     const uint64_t ns = uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                     std::chrono::steady_clock::now() - antes)
+                                     std::chrono::steady_clock::now() - before)
                                      .count());
-    ns_espera_enlaces_total_ += ns;
-    ns_espera_enlaces_informe_ += ns;
-    ns_espera_enlaces_peor_ = std::max(ns_espera_enlaces_peor_, ns);
-    ++esperas_enlaces_informe_;
-    nfsmw::esperas::g_ns_esperando_enlaces.fetch_add(ns, std::memory_order_relaxed);
+    bindings_wait_total_ns_ += ns;
+    bindings_wait_report_ns_ += ns;
+    worst_bindings_wait_ns_ = std::max(worst_bindings_wait_ns_, ns);
+    ++bindings_waits_report_;
+    nfsmw::waits::g_bindings_waiting_ns.fetch_add(ns, std::memory_order_relaxed);
   }
 
   /*
@@ -5781,158 +5781,158 @@ class DibujosVulkanImpl final : public DibujosVulkan {
    * thread. false = nothing was touched and the caller continues through CrearTextura: thread off, pool off
    * or full, queue full, or (in the observing phase) a failed bind whose fallback path also failed.
    */
-  bool CrearTexturaEnHilo(Textura& textura, VkFormat formato, uint32_t ancho, uint32_t alto, uint32_t capas,
-                          uint32_t fondo, uint32_t niveles) {
-    if (enlaces_fase_ == kEnlacesSinDecidir) {
-      DecidirEnlaces();
+  bool CreateTextureInThread(Texture& texture, VkFormat format_id, uint32_t width_px, uint32_t height_px, uint32_t layer_count,
+                          uint32_t background, uint32_t levels) {
+    if (phase_bindings_ == kBindingsWithoutDecide) {
+      DecideBindings();
     }
     // With the out-of-memory test enabled, everything goes through CrearTextura: that test lives there.
-    if (enlaces_fase_ == kEnlacesApagado || !pool_texturas_.Activo() || prueba_sin_memoria_cada_ > 0) {
+    if (phase_bindings_ == kBindingsDisabled || !textures_pool_.Active() || test_without_memory_every_ > 0) {
       return false;
     }
-    const VkImageCreateInfo info = InfoImagenTextura(formato, ancho, alto, capas, fondo, niveles);
-    VkImage imagen = VK_NULL_HANDLE;
-    if (dfn_.vkCreateImage(device_, &info, nullptr, &imagen) != VK_SUCCESS) {
+    const VkImageCreateInfo info = TextureImageInfo(format_id, width_px, height_px, layer_count, background, levels);
+    VkImage img = VK_NULL_HANDLE;
+    if (dfn_.vkCreateImage(device_, &info, nullptr, &img) != VK_SUCCESS) {
       return false;
     }
     VkMemoryRequirements req{};
-    dfn_.vkGetImageMemoryRequirements(device_, imagen, &req);
-    VkDeviceMemory bloque = VK_NULL_HANDLE;
+    dfn_.vkGetImageMemoryRequirements(device_, img, &req);
+    VkDeviceMemory block = VK_NULL_HANDLE;
     VkDeviceSize offset = 0;
-    uint32_t id_bloque = 0xFFFFFFFFu;
-    if (!pool_texturas_.Reservar(req, bloque, offset, id_bloque)) {
-      dfn_.vkDestroyImage(device_, imagen, nullptr);
+    uint32_t block_id = 0xFFFFFFFFu;
+    if (!textures_pool_.Reserve(req, block, offset, block_id)) {
+      dfn_.vkDestroyImage(device_, img, nullptr);
       return false;  // no room in the pool: CrearTextura, which can take the dedicated path
     }
     uint64_t ticket = 0;
-    if (!EncolarEnlace(imagen, bloque, offset, ticket)) {
-      dfn_.vkDestroyImage(device_, imagen, nullptr);  // before the chunk, as the pool requires (not bound yet)
-      pool_texturas_.Liberar(id_bloque);
+    if (!EnqueueBinding(img, block, offset, ticket)) {
+      dfn_.vkDestroyImage(device_, img, nullptr);  // before the chunk, as the pool requires (not bound yet)
+      textures_pool_.Dispose(block_id);
       return false;
     }
-    textura.imagen.imagen = imagen;
-    textura.imagen.memoria = VK_NULL_HANDLE;  // from the pool: not freed on its own
-    textura.imagen.pool_bloque = id_bloque;
-    textura.imagen.ancho = ancho;
-    textura.imagen.alto = alto;
-    textura.imagen.formato = formato;
-    textura.imagen.preparada = false;
-    TexturaEnVuelo vuelo;
-    vuelo.textura = &textura;
-    vuelo.ticket = ticket;
-    vuelo.imagen = imagen;
-    vuelo.formato = formato;
-    vuelo.ancho = ancho;
-    vuelo.alto = alto;
-    vuelo.capas = capas;
-    vuelo.fondo = fondo;
-    vuelo.niveles = niveles;
-    en_vuelo_.push_back(vuelo);
-    textura.en_vuelo = uint32_t(en_vuelo_.size());
-    imagenes_en_vuelo_.insert(imagen);
-    if (enlaces_fase_ == kEnlacesMirando) {
+    texture.img.img = img;
+    texture.img.mem = VK_NULL_HANDLE;  // from the pool: not freed on its own
+    texture.img.block_pool = block_id;
+    texture.img.width_px = width_px;
+    texture.img.height_px = height_px;
+    texture.img.format_id = format_id;
+    texture.img.prepared = false;
+    TextureInFlight flight;
+    flight.texture = &texture;
+    flight.ticket = ticket;
+    flight.img = img;
+    flight.format_id = format_id;
+    flight.width_px = width_px;
+    flight.height_px = height_px;
+    flight.layer_count = layer_count;
+    flight.background = background;
+    flight.levels = levels;
+    in_flight_.push_back(flight);
+    texture.in_flight = uint32_t(in_flight_.size());
+    images_in_flight_.insert(img);
+    if (phase_bindings_ == kPeekingBindings) {
       // Observing phase: wait now, before RanuraVista and SubirTextura: everything stays as without the thread.
-      RecogerEnlaces(true);
-      if (textura.imagen.imagen == VK_NULL_HANDLE) {
+      CollectBindings(true);
+      if (texture.img.img == VK_NULL_HANDLE) {
         return false;  // neither the thread nor the fallback (already logged): CrearTextura, with its emergency path
       }
-      if (++enlaces_comprobados_ >= kEnlacesAComprobar && enlaces_fase_ == kEnlacesMirando) {
-        enlaces_fase_ = kEnlacesAplicando;
-        uint64_t ns_hilo = 0;
-        bool prioridad_ok = true;
+      if (++checked_bindings_ >= kBindingsToCheck && phase_bindings_ == kPeekingBindings) {
+        phase_bindings_ = kApplyingBindings;
+        uint64_t thread_ns = 0;
+        bool priority_ok = true;
         {
-          std::lock_guard<std::mutex> cerrojo(enlaces_mutex_);
-          ns_hilo = ns_enlaces_hilo_;
-          prioridad_ok = enlaces_prioridad_ok_;
+          std::lock_guard<std::mutex> mutex_lock(mutex_bindings_);
+          thread_ns = thread_bindings_ns_;
+          priority_ok = priority_bindings_ok_;
         }
         REXLOG_INFO("[nativo] C3: hilo de enlaces de texturas: {} enlaces con espera inmediata y ninguno fallido ({:.0f} "
                     "us de media dentro de vkBindImageMemory; el anillo espero {:.0f} us de media por textura). Pasa a "
                     "fase APLICANDO: la espera va antes de cada envio{}",
-                    enlaces_comprobados_, double(ns_hilo) / 1e3 / double(enlaces_comprobados_),
-                    double(ns_espera_enlaces_total_) / 1e3 / double(enlaces_comprobados_),
-                    prioridad_ok ? "" : " (el kernel NO acepto la prioridad del hilo)");
+                    checked_bindings_, double(thread_ns) / 1e3 / double(checked_bindings_),
+                    double(bindings_wait_total_ns_) / 1e3 / double(checked_bindings_),
+                    priority_ok ? "" : " (el kernel NO acepto la prioridad del hilo)");
       }
     }
     return true;
   }
 
   // RanuraVista for an image with its bind in flight: the slot now, the view in RecogerEnlaces.
-  uint32_t RanuraVistaEnVuelo(uint64_t clave, VkImage imagen, VkFormat formato, uint32_t swizzle,
-                              uint16_t swizzle_host, uint32_t monton) {
-    Vista vista;
-    vista.imagen = imagen;
-    vista.monton = monton;
-    vista.ranura = ReservarRanura(monton);
-    if (!vista.ranura) {
-      Avisar(35, "monton de texturas lleno");
+  uint32_t ViewSlotInFlight(uint64_t key, VkImage img, VkFormat format_id, uint32_t swizzle,
+                              uint16_t swizzle_host, uint32_t heap) {
+    View view;
+    view.img = img;
+    view.heap = heap;
+    view.ranura = ReserveSlot(heap);
+    if (!view.ranura) {
+      Warn(35, "monton de texturas lleno");
       return 0;
     }
-    vistas_.emplace(clave, vista);  // vista.vista stays VK_NULL_HANDLE until RecogerEnlaces
-    vistas_por_imagen_[imagen].push_back(clave);
-    VistaEnVuelo aplazada;
-    aplazada.clave = clave;
-    aplazada.imagen = imagen;
-    aplazada.formato = formato;
-    aplazada.swizzle = swizzle;
-    aplazada.swizzle_host = swizzle_host;
-    aplazada.monton = monton;
-    aplazada.ranura = vista.ranura;
-    vistas_en_vuelo_.push_back(aplazada);
-    ++vistas_aplazadas_;
-    ++vistas_aplazadas_informe_;
-    return vista.ranura;
+    views_.emplace(key, view);  // vista.vista stays VK_NULL_HANDLE until RecogerEnlaces
+    views_per_image_[img].push_back(key);
+    ViewInFlight deferred;
+    deferred.key = key;
+    deferred.img = img;
+    deferred.format_id = format_id;
+    deferred.swizzle = swizzle;
+    deferred.swizzle_host = swizzle_host;
+    deferred.heap = heap;
+    deferred.ranura = view.ranura;
+    views_in_flight_.push_back(deferred);
+    ++deferred_views_;
+    ++deferred_views_report_;
+    return view.ranura;
   }
 
   // SubirTextura for a texture with its bind in flight: the data is already in the upload buffer; record
   // where.
-  bool AplazarCopia(Textura& textura, VkDeviceSize offset, VkCommandBuffer subida) {
-    const size_t indice = size_t(textura.en_vuelo) - 1;
-    if (indice >= en_vuelo_.size() || en_vuelo_[indice].textura != &textura || en_vuelo_[indice].copia) {
-      ApagarEnlaces(fmt::format("DIFERENCIA: indice de textura en vuelo incoherente ({} de {})", indice,
-                                en_vuelo_.size()));
+  bool DeferCopy(Texture& texture, VkDeviceSize offset, VkCommandBuffer upload) {
+    const size_t index = size_t(texture.in_flight) - 1;
+    if (index >= in_flight_.size() || in_flight_[index].texture != &texture || in_flight_[index].copy_info) {
+      DisableBindings(fmt::format("DIFERENCIA: indice de textura en vuelo incoherente ({} de {})", index,
+                                in_flight_.size()));
       return false;
     }
-    TexturaEnVuelo& vuelo = en_vuelo_[indice];
-    vuelo.copia = true;
-    vuelo.copia_offset = offset;
-    vuelo.copia_epoca = epoca_subida_;
-    vuelo.copia_comandos = subida;
-    ++copias_aplazadas_;
-    ++copias_aplazadas_informe_;
+    TextureInFlight& flight = in_flight_[index];
+    flight.copy_info = true;
+    flight.offset_copy = offset;
+    flight.epoch_copy = upload_epoch_;
+    flight.commands_copy = upload;
+    ++deferred_copies_;
+    ++deferred_copies_report_;
     return true;
   }
 
   // The deferred views of an image that had to be recreated: new key (it goes with the image) and its list.
-  void MoverVistasEnVuelo(VkImage vieja, VkImage nueva) {
-    if (vieja == nueva) {
+  void MoveViewsInFlight(VkImage old, VkImage incoming) {
+    if (old == incoming) {
       return;
     }
-    std::vector<uint64_t> claves;
-    for (VistaEnVuelo& aplazada : vistas_en_vuelo_) {
-      if (aplazada.imagen != vieja) {
+    std::vector<uint64_t> keys;
+    for (ViewInFlight& deferred : views_in_flight_) {
+      if (deferred.img != old) {
         continue;
       }
-      const auto it = vistas_.find(aplazada.clave);
-      if (it == vistas_.end()) {
+      const auto it = views_.find(deferred.key);
+      if (it == views_.end()) {
         continue;
       }
-      Vista vista = it->second;
-      vistas_.erase(it);
-      vista.imagen = nueva;
-      aplazada.imagen = nueva;
-      if (nueva != VK_NULL_HANDLE) {
-        aplazada.clave = ClaveVista(nueva, aplazada.swizzle, aplazada.swizzle_host, aplazada.monton);
+      View view = it->second;
+      views_.erase(it);
+      view.img = incoming;
+      deferred.img = incoming;
+      if (incoming != VK_NULL_HANDLE) {
+        deferred.key = ViewKey(incoming, deferred.swizzle, deferred.swizzle_host, deferred.heap);
       }
-      if (!vistas_.emplace(aplazada.clave, vista).second) {
-        aplazada.clave = 0;  // key collision: RecogerEnlaces puts the empty one in its slot
+      if (!views_.emplace(deferred.key, view).second) {
+        deferred.key = 0;  // key collision: RecogerEnlaces puts the empty one in its slot
         continue;
       }
-      claves.push_back(aplazada.clave);
+      keys.push_back(deferred.key);
     }
-    vistas_por_imagen_.erase(vieja);  // an image in flight only has deferred views
-    if (nueva != VK_NULL_HANDLE && !claves.empty()) {
-      auto& lista = vistas_por_imagen_[nueva];
-      lista.insert(lista.end(), claves.begin(), claves.end());
+    views_per_image_.erase(old);  // an image in flight only has deferred views
+    if (incoming != VK_NULL_HANDLE && !keys.empty()) {
+      auto& item_list = views_per_image_[incoming];
+      item_list.insert(item_list.end(), keys.begin(), keys.end());
     }
   }
 
@@ -5941,127 +5941,127 @@ class DibujosVulkanImpl final : public DibujosVulkan {
    * (the upload buffer would no longer be the one holding that data): those textures are uploaded again at
    * their next check.
    */
-  void RecogerEnlaces(bool con_copias) {
+  void CollectBindings(bool with_copies) {
     // No re-entry: if something in here ended up starting new work (UsarRanura), that call does nothing and
     // the outer one sees the upload buffer changed (DIFERENCIA and a full upload at the next check).
-    if (en_vuelo_.empty() || recogiendo_enlaces_) {
+    if (in_flight_.empty() || bindings_collecting_) {
       return;
     }
-    recogiendo_enlaces_ = true;
-    const auto inicio = std::chrono::steady_clock::now();
-    const uint64_t espera_antes = ns_espera_enlaces_total_;
-    const uint64_t objetivo = en_vuelo_.back().ticket + 1;
-    EsperarEnlaces(objetivo);
-    if (enlaces_atascado_) {
-      enlaces_atascado_ = false;
-      ApagarEnlaces("DIFERENCIA: una espera de mas de 2 s al hilo (ver las lineas de arriba)");
+    bindings_collecting_ = true;
+    const auto start = std::chrono::steady_clock::now();
+    const uint64_t wait_before = bindings_wait_total_ns_;
+    const uint64_t goal = in_flight_.back().ticket + 1;
+    WaitBindings(goal);
+    if (stuck_bindings_) {
+      stuck_bindings_ = false;
+      DisableBindings("DIFERENCIA: una espera de mas de 2 s al hilo (ver las lineas de arriba)");
     }
     {
-      std::lock_guard<std::mutex> cerrojo(enlaces_mutex_);
-      for (TexturaEnVuelo& vuelo : en_vuelo_) {
-        vuelo.resultado = cola_enlaces_[vuelo.ticket & (kColaEnlaces - 1)].resultado;
+      std::lock_guard<std::mutex> mutex_lock(mutex_bindings_);
+      for (TextureInFlight& flight : in_flight_) {
+        flight.result = bindings_queue_[flight.ticket & (kBindingsQueue - 1)].result;
       }
-      enlaces_recogidos_ = objetivo;  // from here on its slots can be reused
+      collected_bindings_ = goal;  // from here on its slots can be reused
     }
     // 1. Results, in order. If a bind failed, that image is dropped (no command references it yet) and the
     //    texture is created again through CrearTextura without the emergency path: releasing half the cache
     //    submits the work, and we are before that.
-    for (TexturaEnVuelo& vuelo : en_vuelo_) {
-      Textura& textura = *vuelo.textura;
-      imagenes_en_vuelo_.erase(vuelo.imagen);
-      textura.en_vuelo = 0;
-      if (vuelo.resultado == VK_SUCCESS) {
-        ++enlaces_hilo_total_;
-        ++enlaces_hilo_informe_;
-        nfsmw::esperas::g_texturas_enlazadas_hilo.fetch_add(1, std::memory_order_relaxed);
+    for (TextureInFlight& flight : in_flight_) {
+      Texture& texture = *flight.texture;
+      images_in_flight_.erase(flight.img);
+      texture.in_flight = 0;
+      if (flight.result == VK_SUCCESS) {
+        ++thread_bindings_total_;
+        ++thread_bindings_report_;
+        nfsmw::waits::g_thread_bound_textures.fetch_add(1, std::memory_order_relaxed);
         continue;
       }
-      ++enlaces_fallidos_;
-      ApagarEnlaces(fmt::format("DIFERENCIA: vkBindImageMemory devolvio {} en el hilo para una textura de {}x{} ({} "
+      ++failed_bindings_;
+      DisableBindings(fmt::format("DIFERENCIA: vkBindImageMemory devolvio {} en el hilo para una textura de {}x{} ({} "
                                 "niveles, {} capas)",
-                                int32_t(vuelo.resultado), vuelo.ancho, vuelo.alto, vuelo.niveles, vuelo.capas));
-      dfn_.vkDestroyImage(device_, vuelo.imagen, nullptr);
-      pool_texturas_.Liberar(textura.imagen.pool_bloque);
-      textura.imagen.imagen = VK_NULL_HANDLE;
-      textura.imagen.pool_bloque = 0xFFFFFFFFu;
-      if (!CrearTextura(textura.imagen, vuelo.formato, vuelo.ancho, vuelo.alto, vuelo.capas, vuelo.fondo,
-                        vuelo.niveles, false)) {
+                                int32_t(flight.result), flight.width_px, flight.height_px, flight.levels, flight.layer_count));
+      dfn_.vkDestroyImage(device_, flight.img, nullptr);
+      textures_pool_.Dispose(texture.img.block_pool);
+      texture.img.img = VK_NULL_HANDLE;
+      texture.img.block_pool = 0xFFFFFFFFu;
+      if (!CreateTexture(texture.img, flight.format_id, flight.width_px, flight.height_px, flight.layer_count, flight.background,
+                        flight.levels, false)) {
         // Not even then. The texture is left without an image: its draws in this submission see the empty one
         // (the same as when it cannot be created) and the next time it is used it is created in full, with the
         // emergency path.
-        textura.imagen = ImagenNativa{};
-        bytes_texturas_ -= std::min(bytes_texturas_, textura.bytes);
-        textura.bytes = 0;
+        texture.img = NativeImage{};
+        textures_bytes_ -= std::min(textures_bytes_, texture.bytes);
+        texture.bytes = 0;
       }
-      MoverVistasEnVuelo(vuelo.imagen, textura.imagen.imagen);
+      MoveViewsInFlight(flight.img, texture.img.img);
     }
     // 2. Deferred views: created and written to their slot. If that is not possible, the slot keeps the
     //    empty one (what a draw sees when RanuraVista returns 0) and is not reused: this submission
     //    references it (it is counted).
-    for (const VistaEnVuelo& aplazada : vistas_en_vuelo_) {
-      const auto it = aplazada.clave ? vistas_.find(aplazada.clave) : vistas_.end();
-      if (it != vistas_.end() && it->second.imagen != VK_NULL_HANDLE &&
-          CrearVistaTextura(it->second.imagen, aplazada.formato, aplazada.swizzle, aplazada.swizzle_host,
-                            aplazada.monton, it->second.vista) == VK_SUCCESS) {
-        EscribirImagen(aplazada.monton, aplazada.ranura, it->second.vista);
+    for (const ViewInFlight& deferred : views_in_flight_) {
+      const auto it = deferred.key ? views_.find(deferred.key) : views_.end();
+      if (it != views_.end() && it->second.img != VK_NULL_HANDLE &&
+          CreateTextureView(it->second.img, deferred.format_id, deferred.swizzle, deferred.swizzle_host,
+                            deferred.heap, it->second.view) == VK_SUCCESS) {
+        WriteImage(deferred.heap, deferred.ranura, it->second.view);
         continue;
       }
-      EscribirImagen(aplazada.monton, aplazada.ranura, vacias_[aplazada.monton].vista);
-      if (it != vistas_.end()) {
-        vistas_.erase(it);  // the image has no vistas_por_imagen_ left (MoverVistasEnVuelo) or is rebuilt when used
+      WriteImage(deferred.heap, deferred.ranura, empty_[deferred.heap].view);
+      if (it != views_.end()) {
+        views_.erase(it);  // the image has no vistas_por_imagen_ left (MoverVistasEnVuelo) or is rebuilt when used
       }
-      ++ranuras_perdidas_;
-      Avisar(34, "no se pudo crear la vista de una textura");
+      ++lost_slots_;
+      Warn(34, "no se pudo crear la vista de una textura");
     }
-    vistas_en_vuelo_.clear();
+    views_in_flight_.clear();
     // 3. Deferred barriers and copies, in the upload buffer where SubirTextura left their data.
-    VkCommandBuffer subida = VK_NULL_HANDLE;
-    for (const TexturaEnVuelo& vuelo : en_vuelo_) {
-      if (!vuelo.copia) {
+    VkCommandBuffer upload = VK_NULL_HANDLE;
+    for (const TextureInFlight& flight : in_flight_) {
+      if (!flight.copy_info) {
         continue;
       }
-      Textura& textura = *vuelo.textura;
-      if (textura.imagen.imagen == VK_NULL_HANDLE) {
+      Texture& texture = *flight.texture;
+      if (texture.img.img == VK_NULL_HANDLE) {
         continue;  // no image: created and fully uploaded next time it is used
       }
-      if (con_copias && subida == VK_NULL_HANDLE) {
-        subida = contexto_->ComandosSubida();
+      if (with_copies && upload == VK_NULL_HANDLE) {
+        upload = contexto_->UploadCommands();
       }
-      if (!con_copias || subida == VK_NULL_HANDLE || subida != vuelo.copia_comandos ||
-          vuelo.copia_epoca != epoca_subida_) {
-        ApagarEnlaces(fmt::format("DIFERENCIA: una copia aplazada ya no puede ir en su bufer de subida (epoca {} "
+      if (!with_copies || upload == VK_NULL_HANDLE || upload != flight.commands_copy ||
+          flight.epoch_copy != upload_epoch_) {
+        DisableBindings(fmt::format("DIFERENCIA: una copia aplazada ya no puede ir en su bufer de subida (epoca {} "
                                   "frente a {}, {})",
-                                  vuelo.copia_epoca, epoca_subida_,
-                                  con_copias ? "otro bufer de subida" : "recogida al cambiar de bufer"));
-        textura.imagen.preparada = false;  // the next check uploads it again in full, with its barrier
-        textura.siguiente = 0;
+                                  flight.epoch_copy, upload_epoch_,
+                                  with_copies ? "otro bufer de subida" : "recogida al cambiar de bufer"));
+        texture.img.prepared = false;  // the next check uploads it again in full, with its barrier
+        texture.next = 0;
         continue;
       }
-      if (!textura.imagen.preparada) {
-        Barrera(subida, textura.imagen.imagen, textura.capas);
-        textura.imagen.preparada = true;
+      if (!texture.img.prepared) {
+        Barrier(upload, texture.img.img, texture.layer_count);
+        texture.img.prepared = true;
       }
-      GrabarCopiaTextura(subida, textura, vuelo.copia_offset);
+      RecordTextureCopy(upload, texture, flight.offset_copy);
     }
-    en_vuelo_.clear();
-    recogiendo_enlaces_ = false;
-    if (!midiendo_creacion_) {  // inside PrepararTextura its stopwatch already counts it
+    in_flight_.clear();
+    bindings_collecting_ = false;
+    if (!creation_measuring_) {  // inside PrepararTextura its stopwatch already counts it
       const uint64_t ns = uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                       std::chrono::steady_clock::now() - inicio)
+                                       std::chrono::steady_clock::now() - start)
                                        .count());
-      const uint64_t espera = ns_espera_enlaces_total_ - espera_antes;
-      const uint64_t propio = ns > espera ? ns - espera : 0;
-      nfsmw::esperas::g_ns_crear_texturas.fetch_add(propio, std::memory_order_relaxed);
-      ns_crear_informe_ += propio;
+      const uint64_t wait_stats = bindings_wait_total_ns_ - wait_before;
+      const uint64_t own = ns > wait_stats ? ns - wait_stats : 0;
+      nfsmw::waits::g_textures_create_ns.fetch_add(own, std::memory_order_relaxed);
+      create_report_ns_ += own;
     }
   }
 
   // UsarRanura: a texture with its bind in flight may reach new work (it was prepared before that work's
   // first Grabar), but not with its data already in the previous upload buffer: that should never happen.
-  void ComprobarEnlacesAlCambiarDeBufer() {
-    for (const TexturaEnVuelo& vuelo : en_vuelo_) {
-      if (vuelo.copia) {
-        RecogerEnlaces(false);  // logs the DIFERENCIA, switches off and leaves those textures to be uploaded again
+  void CheckBindingsOnBufferChange() {
+    for (const TextureInFlight& flight : in_flight_) {
+      if (flight.copy_info) {
+        CollectBindings(false);  // logs the DIFERENCIA, switches off and leaves those textures to be uploaded again
         return;
       }
     }
@@ -6070,59 +6070,59 @@ class DibujosVulkanImpl final : public DibujosVulkan {
   // Every 10 s, if there were new textures: what the thread did and how long the ring waited. This is also
   // where it is decided whether it pays off: if for 3 reports in a row the ring waits for the thread longer
   // than the thread takes to bind, the ring would do better doing it itself, and it switches off.
-  void InformeEnlaces() {
-    if (enlaces_fase_ == kEnlacesSinDecidir) {
+  void BindingsReport() {
+    if (phase_bindings_ == kBindingsWithoutDecide) {
       return;
     }
-    const auto ahora = std::chrono::steady_clock::now();
-    if (ahora - informe_enlaces_ < std::chrono::seconds(10)) {
+    const auto now_time = std::chrono::steady_clock::now();
+    if (now_time - bindings_report_ < std::chrono::seconds(10)) {
       return;
     }
-    informe_enlaces_ = ahora;
-    uint64_t ns_hilo = 0;
-    uint64_t peor_hilo = 0;
-    uint64_t cola_llena = 0;
-    bool prioridad_ok = true;
+    bindings_report_ = now_time;
+    uint64_t thread_ns = 0;
+    uint64_t worst_thread = 0;
+    uint64_t full_queue = 0;
+    bool priority_ok = true;
     {
-      std::lock_guard<std::mutex> cerrojo(enlaces_mutex_);
-      ns_hilo = ns_enlaces_hilo_ - ns_enlaces_hilo_previo_;
-      ns_enlaces_hilo_previo_ = ns_enlaces_hilo_;
-      peor_hilo = ns_enlace_peor_;
-      ns_enlace_peor_ = 0;
-      cola_llena = enlaces_cola_llena_ - cola_llena_previa_;
-      cola_llena_previa_ = enlaces_cola_llena_;
-      prioridad_ok = enlaces_prioridad_ok_;
+      std::lock_guard<std::mutex> mutex_lock(mutex_bindings_);
+      thread_ns = thread_bindings_ns_ - thread_bindings_previous_ns_;
+      thread_bindings_previous_ns_ = thread_bindings_ns_;
+      worst_thread = worst_binding_ns_;
+      worst_binding_ns_ = 0;
+      full_queue = full_queue_bindings_ - full_queue_previous_;
+      full_queue_previous_ = full_queue_bindings_;
+      priority_ok = priority_bindings_ok_;
     }
-    const uint64_t creadas = texturas_creadas_ - creadas_informe_previas_;
-    creadas_informe_previas_ = texturas_creadas_;
-    if (creadas || enlaces_hilo_informe_ || esperas_enlaces_informe_) {
-      static constexpr const char* kFases[] = {"apagada", "MIRANDO", "APLICANDO"};
-      NFSMW_INFORME_ANILLO(
+    const uint64_t created = created_textures_ - created_report_previous_;
+    created_report_previous_ = created_textures_;
+    if (created || thread_bindings_report_ || bindings_waits_report_) {
+      static constexpr const char* kPhases[] = {"apagada", "MIRANDO", "APLICANDO"};
+      NFSMW_RING_REPORT(
           "[nativo] C3 texturas nuevas (build 184), ultimos 10 s: {} creadas, {} con el enlace en el hilo; el anillo "
           "gasto {:.1f} ms creando y espero al hilo {:.1f} ms en {} veces (peor {:.2f} ms); el hilo, {:.1f} ms dentro de "
           "vkBindImageMemory (media {:.0f} us, peor {:.2f} ms); {} vistas y {} copias aplazadas; {} por la ruta de "
           "siempre con la cola llena; fase {}{}",
-          creadas, enlaces_hilo_informe_, double(ns_crear_informe_) / 1e6, double(ns_espera_enlaces_informe_) / 1e6,
-          esperas_enlaces_informe_, double(ns_espera_enlaces_peor_) / 1e6, double(ns_hilo) / 1e6,
-          enlaces_hilo_informe_ ? double(ns_hilo) / 1e3 / double(enlaces_hilo_informe_) : 0.0,
-          double(peor_hilo) / 1e6, vistas_aplazadas_informe_, copias_aplazadas_informe_, cola_llena,
-          kFases[std::clamp<int32_t>(enlaces_fase_, 0, 2)], prioridad_ok ? "" : " (el kernel NO acepto la prioridad)");
+          created, thread_bindings_report_, double(create_report_ns_) / 1e6, double(bindings_wait_report_ns_) / 1e6,
+          bindings_waits_report_, double(worst_bindings_wait_ns_) / 1e6, double(thread_ns) / 1e6,
+          thread_bindings_report_ ? double(thread_ns) / 1e3 / double(thread_bindings_report_) : 0.0,
+          double(worst_thread) / 1e6, deferred_views_report_, deferred_copies_report_, full_queue,
+          kPhases[std::clamp<int32_t>(phase_bindings_, 0, 2)], priority_ok ? "" : " (el kernel NO acepto la prioridad)");
     }
-    if (enlaces_fase_ == kEnlacesAplicando && enlaces_hilo_informe_ >= 16) {
-      informes_sin_compensar_ = ns_espera_enlaces_informe_ > ns_hilo ? informes_sin_compensar_ + 1 : 0;
-      if (informes_sin_compensar_ >= 3) {
-        ApagarEnlaces(fmt::format("no compensa: en 3 informes seguidos el anillo espero al hilo mas de lo que el hilo "
+    if (phase_bindings_ == kApplyingBindings && thread_bindings_report_ >= 16) {
+      reports_without_compensate_ = bindings_wait_report_ns_ > thread_ns ? reports_without_compensate_ + 1 : 0;
+      if (reports_without_compensate_ >= 3) {
+        DisableBindings(fmt::format("no compensa: en 3 informes seguidos el anillo espero al hilo mas de lo que el hilo "
                                   "tardo en enlazar (el ultimo, {:.1f} ms de espera por {:.1f} ms de enlaces)",
-                                  double(ns_espera_enlaces_informe_) / 1e6, double(ns_hilo) / 1e6));
+                                  double(bindings_wait_report_ns_) / 1e6, double(thread_ns) / 1e6));
       }
     }
-    enlaces_hilo_informe_ = 0;
-    esperas_enlaces_informe_ = 0;
-    ns_espera_enlaces_informe_ = 0;
-    ns_espera_enlaces_peor_ = 0;
-    ns_crear_informe_ = 0;
-    vistas_aplazadas_informe_ = 0;
-    copias_aplazadas_informe_ = 0;
+    thread_bindings_report_ = 0;
+    bindings_waits_report_ = 0;
+    bindings_wait_report_ns_ = 0;
+    worst_bindings_wait_ns_ = 0;
+    create_report_ns_ = 0;
+    deferred_views_report_ = 0;
+    deferred_copies_report_ = 0;
   }
 
   // --- Hashing of new textures on a separate thread (nfsmw_nativo_texturas_huella_hilo) ------------------------
@@ -6166,101 +6166,101 @@ class DibujosVulkanImpl final : public DibujosVulkan {
    * DIFERENCIA, the thread's remaining textures are uploaded again in full. The worst case is the usual
    * path.
    */
-  struct LecturaHuella {  // one LeerNivel call, reading from the snapshot
-    uint64_t origen = 0;  // desplazamiento en instantaneas_
-    uint64_t fila_bytes = 0;
-    size_t destino = 0;  // offset in the texture data
-    uint32_t pitch_bloques = 0;
+  struct FingerprintReadback {  // one LeerNivel call, reading from the snapshot
+    uint64_t src = 0;  // desplazamiento en instantaneas_
+    uint64_t row_bytes = 0;
+    size_t target = 0;  // offset in the texture data
+    uint32_t blocks_pitch = 0;
     uint32_t ox = 0;
     uint32_t oy = 0;
     uint32_t bx = 0;
     uint32_t by = 0;
     uint32_t bx_host = 0;
-    bool mosaico = false;
-    bool comprobar = false;  // the fast untiling guard repeats this level on the usual path
+    bool tile = false;
+    bool run_check = false;  // the fast untiling guard repeats this level on the usual path
   };
-  struct TrabajoHuella {
+  struct FingerprintJob {
     // Written by the ring before publishing; whoever does the job (the thread or the ring) only reads it.
-    Textura* textura = nullptr;  // used by the ring only; in huellas_planeadas_, nullptr = already published or discarded
-    uint64_t clave = 0;
-    uint64_t secuencia = 0;
+    Texture* texture = nullptr;  // used by the ring only; in huellas_planeadas_, nullptr = already published or discarded
+    uint64_t key = 0;
+    uint64_t sequence = 0;
     uint64_t inst_base = 0;  // the copy of the base (all layers) in instantaneas_
     uint64_t bytes_base = 0;
     uint64_t inst_mips = 0;  // the copy of the mips
     uint64_t bytes_mips = 0;
-    size_t bytes_datos = 0;
-    uint8_t* destino = nullptr;  // its space in the upload buffer; nullptr for comparison jobs
-    uint64_t epoca = 0;          // epoca_subida_ of that buffer
-    uint32_t lectura_inicio = 0;  // su plan: lecturas_huella_[lectura_inicio, lectura_inicio + lecturas)
-    uint32_t lecturas = 0;
-    uint32_t bytes_bloque = 1;
-    uint32_t log2_bloque = 0;
-    uint32_t unidad_orden = 0;
+    size_t data_bytes = 0;
+    uint8_t* target = nullptr;  // its space in the upload buffer; nullptr for comparison jobs
+    uint64_t epoch = 0;          // epoca_subida_ of that buffer
+    uint32_t start_read = 0;  // su plan: lecturas_huella_[lectura_inicio, lectura_inicio + lecturas)
+    uint32_t reads = 0;
+    uint32_t block_bytes = 1;
+    uint32_t block_log2 = 0;
+    uint32_t order_unit = 0;
     uint32_t orden = 0;
-    uint32_t direccion = 0;  // for the log
-    uint32_t ancho = 0;
-    uint32_t alto = 0;
-    uint32_t formato = 0;
-    bool rapido = false;           // mosaico_rapido_ al planear
-    bool comprobar_orden = false;  // the fast byte swap guard checks this texture
-    bool comparar = false;         // observing phase (or 1 in kComprobarHuellaUnaDeCada): only returns its hashes
-    bool aviso_niveles = false;    // collected without differences: the "niveles comprobados ... todos iguales" line
-    bool aviso_ordenes = false;
+    uint32_t address = 0;  // for the log
+    uint32_t width_px = 0;
+    uint32_t height_px = 0;
+    uint32_t format_id = 0;
+    bool fast = false;           // mosaico_rapido_ al planear
+    bool check_order = false;  // the fast byte swap guard checks this texture
+    bool compare = false;         // observing phase (or 1 in kComprobarHuellaUnaDeCada): only returns its hashes
+    bool levels_warning = false;    // collected without differences: the "niveles comprobados ... todos iguales" line
+    bool commands_warning = false;
     // Written by whoever does the job; the ring reads it under huellas_mutex_ once it is done.
-    int32_t estado = 0;
-    bool por_anillo = false;
-    bool orden_distinto = false;
-    uint32_t niveles_distintos = 0;
-    std::array<uint32_t, 5> distinto{};  // first differing level: blocks in x and y, pitch and origin (x, y)
-    uint64_t huella_cruda = 0;
-    uint64_t huella_datos = 0;  // comparison jobs only
-    uint64_t ns_huella = 0;
-    uint64_t ns_resto = 0;
+    int32_t state = 0;
+    bool per_ring = false;
+    bool distinct_order = false;
+    uint32_t distinct_levels = 0;
+    std::array<uint32_t, 5> distinct{};  // first differing level: blocks in x and y, pitch and origin (x, y)
+    uint64_t raw_fingerprint = 0;
+    uint64_t data_fingerprint = 0;  // comparison jobs only
+    uint64_t fingerprint_ns = 0;
+    uint64_t rest_ns = 0;
   };
-  struct ComparacionHuella {  // ring only: what the usual path produced for a comparison texture
-    uint64_t cruda = 0;
-    uint64_t datos = 0;
-    bool anotada = false;
+  struct FingerprintCompare {  // ring only: what the usual path produced for a comparison texture
+    uint64_t raw_data = 0;
+    uint64_t payload = 0;
+    bool tracked = false;
   };
-  static constexpr size_t kLecturasPorTextura = 6 * 16;  // capas x niveles de mip
-  static constexpr uint32_t kLecturasHuella = 8192;       // reads planned between two collections
-  static constexpr uint64_t kColaHuellas = 256;           // potencia de 2
-  static constexpr uint32_t kTrabajoHuellaPublicado = 0xFFFFFFFFu;  // in Textura::huella_trabajo
-  static constexpr int32_t kTrabajoPendiente = 1;
-  static constexpr int32_t kTrabajoEnHilo = 2;
-  static constexpr int32_t kTrabajoEnAnillo = 3;
-  static constexpr int32_t kTrabajoHecho = 4;
-  static constexpr int32_t kHuellasSinDecidir = -1;
-  static constexpr int32_t kHuellasApagado = 0;
-  static constexpr int32_t kHuellasMirando = 1;
-  static constexpr int32_t kHuellasAplicando = 2;
-  static constexpr uint64_t kHuellasAComprobar = 64;
-  static constexpr uint64_t kComprobarHuellaUnaDeCada = 128;
+  static constexpr size_t kReadsPerTexture = 6 * 16;  // capas x niveles de mip
+  static constexpr uint32_t kFingerprintReads = 8192;       // reads planned between two collections
+  static constexpr uint64_t kFingerprintsQueue = 256;           // potencia de 2
+  static constexpr uint32_t kPublishedFingerprintJob = 0xFFFFFFFFu;  // in Textura::huella_trabajo
+  static constexpr int32_t kPendingJob = 1;
+  static constexpr int32_t kJobInThread = 2;
+  static constexpr int32_t kJobInRing = 3;
+  static constexpr int32_t kDoneJob = 4;
+  static constexpr int32_t kFingerprintsWithoutDecide = -1;
+  static constexpr int32_t kFingerprintsDisabled = 0;
+  static constexpr int32_t kPeekingFingerprints = 1;
+  static constexpr int32_t kApplyingFingerprints = 2;
+  static constexpr uint64_t kFingerprintsToCheck = 64;
+  static constexpr uint64_t kCheckFingerprintEvery = 128;
 
-  void DecidirHuellas() {
-    const bool pedido = REXCVAR_GET(nfsmw_nativo_texturas_huella_hilo);
-    huellas_prioridad_ = std::clamp<int32_t>(REXCVAR_GET(nfsmw_nativo_texturas_huella_hilo_prioridad), 0x2C, 0x3B);
-    huellas_nucleo_pedido_ = std::clamp<int32_t>(REXCVAR_GET(nfsmw_nativo_texturas_huella_hilo_nucleo), -2, 2);
-    instantaneas_bytes_ = uint64_t(std::clamp<int32_t>(REXCVAR_GET(nfsmw_nativo_texturas_huella_hilo_mb), 4, 64))
+  void DecideFingerprints() {
+    const bool request = REXCVAR_GET(nfsmw_nativo_texturas_huella_hilo);
+    priority_fingerprints_ = std::clamp<int32_t>(REXCVAR_GET(nfsmw_nativo_texturas_huella_hilo_prioridad), 0x2C, 0x3B);
+    request_core_fingerprints_ = std::clamp<int32_t>(REXCVAR_GET(nfsmw_nativo_texturas_huella_hilo_nucleo), -2, 2);
+    snapshots_bytes_ = uint64_t(std::clamp<int32_t>(REXCVAR_GET(nfsmw_nativo_texturas_huella_hilo_mb), 4, 64))
                           << 20;
-    huellas_fase_ = pedido ? kHuellasMirando : kHuellasApagado;
+    phase_fingerprints_ = request ? kPeekingFingerprints : kFingerprintsDisabled;
     REXLOG_INFO("[nativo] C3: huella y desenmosaicado de las texturas nuevas en un hilo aparte "
                 "(nfsmw_nativo_texturas_huella_hilo) = {}",
-                pedido ? fmt::format("SI, prioridad {:#x}, {} MB de instantaneas; fase MIRANDO: las {} primeras van "
+                request ? fmt::format("SI, prioridad {:#x}, {} MB de instantaneas; fase MIRANDO: las {} primeras van "
                                      "tambien por el camino de siempre y se comparan",
-                                     huellas_prioridad_, instantaneas_bytes_ >> 20, kHuellasAComprobar)
+                                     priority_fingerprints_, snapshots_bytes_ >> 20, kFingerprintsToCheck)
                        : std::string("no, en el hilo del anillo como siempre"));
   }
 
-  void ApagarHuellas(const std::string& motivo) {
-    if (huellas_fase_ == kHuellasApagado) {
+  void DisableFingerprints(const std::string& reason) {
+    if (phase_fingerprints_ == kFingerprintsDisabled) {
       return;
     }
-    huellas_fase_ = kHuellasApagado;
+    phase_fingerprints_ = kFingerprintsDisabled;
     REXLOG_ERROR("[nativo] C3: hilo de huellas de texturas APAGADO para el resto de la sesion: {}. Las texturas nuevas "
                  "vuelven a prepararse enteras en el hilo del anillo ({} hechas por el hilo, {} por el anillo, {} "
                  "comparadas)",
-                 motivo, huellas_hilo_total_, huellas_anillo_total_, huellas_comparadas_);
+                 reason, thread_fingerprints_total_, ring_fingerprints_total_, compared_fingerprints_);
   }
 
   /*
@@ -6271,46 +6271,46 @@ class DibujosVulkanImpl final : public DibujosVulkan {
    * 32x32-block tile plus the size of one tile; it was checked against what DesenmosaicarNivel and
    * LeerNivelMosaicoDeSiempre read.
    */
-  static bool PlanearLecturaHuella(std::array<LecturaHuella, kLecturasPorTextura>& lecturas, uint32_t& n,
-                                   uint64_t direccion, bool mosaico, uint32_t pitch_bloques, uint64_t fila_bytes,
-                                   const FormatoTextura& tf, uint32_t ox, uint32_t oy, uint32_t bx, uint32_t by,
-                                   uint32_t bx_host, size_t destino, uint64_t rango_inicio, uint64_t rango_bytes,
-                                   uint64_t en_copia) {
+  static bool PlanFingerprintRead(std::array<FingerprintReadback, kReadsPerTexture>& reads, uint32_t& n,
+                                   uint64_t address, bool tile, uint32_t blocks_pitch, uint64_t row_bytes,
+                                   const TextureFormat& tf, uint32_t ox, uint32_t oy, uint32_t bx, uint32_t by,
+                                   uint32_t bx_host, size_t target, uint64_t start_range, uint64_t range_bytes,
+                                   uint64_t in_copy) {
     if (!bx || !by) {
       return true;  // LeerNivel reads nothing
     }
     const uint32_t log2 = tf.bytes >= 16 ? 4 : tf.bytes >= 8 ? 3 : tf.bytes >= 4 ? 2 : tf.bytes >= 2 ? 1 : 0;
-    const uint64_t holgado =
-        mosaico ? uint64_t(std::max<int64_t>(DesplazamientoMosaico2D(int32_t((ox + bx + 31) & ~31u),
-                                                                     int32_t((oy + by + 31) & ~31u), pitch_bloques,
+    const uint64_t loose =
+        tile ? uint64_t(std::max<int64_t>(Tile2dOffset(int32_t((ox + bx + 31) & ~31u),
+                                                                     int32_t((oy + by + 31) & ~31u), blocks_pitch,
                                                                      log2),
                                              0))
-                : fila_bytes * (oy + by - 1) + uint64_t(ox + bx) * tf.bytes;
-    if (direccion + holgado > kMemoriaFisica) {
+                : row_bytes * (oy + by - 1) + uint64_t(ox + bx) * tf.bytes;
+    if (address + loose > kPhysicalMemory) {
       return false;  // LeerNivel would return false: let the usual path report it
     }
-    const uint64_t leido =
-        mosaico ? uint64_t(std::max<int64_t>(DesplazamientoMosaico2D(int32_t((ox + bx - 1) & ~31u),
-                                                                     int32_t((oy + by - 1) & ~31u), pitch_bloques,
+    const uint64_t was_read =
+        tile ? uint64_t(std::max<int64_t>(Tile2dOffset(int32_t((ox + bx - 1) & ~31u),
+                                                                     int32_t((oy + by - 1) & ~31u), blocks_pitch,
                                                                      log2),
                                              0)) +
                       (log2 == 0 ? 0xA00u : log2 == 1 ? 0xC00u : (0x400u << log2))
-                : fila_bytes * (oy + by - 1) + uint64_t(ox + bx) * tf.bytes;
-    if (n >= lecturas.size() || direccion < rango_inicio || direccion + leido > rango_inicio + rango_bytes) {
+                : row_bytes * (oy + by - 1) + uint64_t(ox + bx) * tf.bytes;
+    if (n >= reads.size() || address < start_range || address + was_read > start_range + range_bytes) {
       return false;
     }
-    LecturaHuella& l = lecturas[n++];
-    l.origen = en_copia + (direccion - rango_inicio);
-    l.fila_bytes = fila_bytes;
-    l.destino = destino;
-    l.pitch_bloques = pitch_bloques;
+    FingerprintReadback& l = reads[n++];
+    l.src = in_copy + (address - start_range);
+    l.row_bytes = row_bytes;
+    l.target = target;
+    l.blocks_pitch = blocks_pitch;
     l.ox = ox;
     l.oy = oy;
     l.bx = bx;
     l.by = by;
     l.bx_host = bx_host;
-    l.mosaico = mosaico;
-    l.comprobar = false;
+    l.tile = tile;
+    l.run_check = false;
     return true;
   }
 
@@ -6321,228 +6321,228 @@ class DibujosVulkanImpl final : public DibujosVulkan {
    * (observing phase, and 1 in kComprobarHuellaUnaDeCada), whose job is already published and is compared
    * when collected.
    */
-  bool PlanearHuella(Textura& textura, uint64_t clave, uint32_t n_lecturas, const uint8_t* crudo_base,
-                     uint64_t extension, const uint8_t* crudo_mips, uint64_t extension_mips, const FormatoTextura& tf,
-                     uint32_t orden, size_t bytes_datos, const std::array<size_t, 16>& desplazamientos,
-                     uint32_t direccion, uint32_t ancho, uint32_t alto, uint32_t formato, VkDeviceSize& bytes_subida) {
-    comparacion_textura_ = nullptr;
-    if (huellas_fase_ == kHuellasSinDecidir) {
-      DecidirHuellas();
+  bool PlanFingerprint(Texture& texture, uint64_t key, uint32_t n_reads, const uint8_t* base_raw,
+                     uint64_t extension, const uint8_t* mips_raw, uint64_t extension_mips, const TextureFormat& tf,
+                     uint32_t orden, size_t data_bytes, const std::array<size_t, 16>& offsets,
+                     uint32_t address, uint32_t width_px, uint32_t height_px, uint32_t format_id, VkDeviceSize& upload_bytes) {
+    texture_comparison_ = nullptr;
+    if (phase_fingerprints_ == kFingerprintsWithoutDecide) {
+      DecideFingerprints();
     }
-    if (huellas_fase_ == kHuellasApagado || textura.huella_trabajo != 0 ||
-        (huellas_fase_ == kHuellasMirando &&
-         huellas_comparaciones_planeadas_ >= kHuellasAComprobar + huellas_sin_comparar_)) {
+    if (phase_fingerprints_ == kFingerprintsDisabled || texture.job_fingerprint != 0 ||
+        (phase_fingerprints_ == kPeekingFingerprints &&
+         planned_comparisons_fingerprints_ >= kFingerprintsToCheck + fingerprints_without_compare_)) {
       return false;  // while observing, with comparisons already running, the rest only take the usual path
     }
-    if (!instantaneas_) {
-      instantaneas_.reset(new (std::nothrow) uint8_t[size_t(instantaneas_bytes_)]);
-      lecturas_huella_.reset(new (std::nothrow) LecturaHuella[kLecturasHuella]);
-      if (!instantaneas_ || !lecturas_huella_) {
-        instantaneas_.reset();
-        lecturas_huella_.reset();
-        ApagarHuellas(fmt::format("DIFERENCIA: no hay memoria para {} MB de instantaneas", instantaneas_bytes_ >> 20));
+    if (!snapshots_) {
+      snapshots_.reset(new (std::nothrow) uint8_t[size_t(snapshots_bytes_)]);
+      fingerprint_reads_.reset(new (std::nothrow) FingerprintReadback[kFingerprintReads]);
+      if (!snapshots_ || !fingerprint_reads_) {
+        snapshots_.reset();
+        fingerprint_reads_.reset();
+        DisableFingerprints(fmt::format("DIFERENCIA: no hay memoria para {} MB de instantaneas", snapshots_bytes_ >> 20));
         return false;
       }
     }
-    const uint64_t inst_base = (instantaneas_usado_ + 63) & ~uint64_t(63);
+    const uint64_t inst_base = (used_snapshots_ + 63) & ~uint64_t(63);
     const uint64_t inst_mips = inst_base + ((extension + 63) & ~uint64_t(63));  // the same space the plan assumes
-    const uint64_t en_cola = huellas_publicados_ - huellas_recogidos_ + huellas_planeadas_pendientes_;
-    if (en_cola >= kColaHuellas || lecturas_usadas_ + n_lecturas > kLecturasHuella ||
-        inst_mips + extension_mips > instantaneas_bytes_) {
-      ++huellas_sin_sitio_informe_;
+    const uint64_t in_queue = published_fingerprints_ - collected_fingerprints_ + pending_planned_fingerprints_;
+    if (in_queue >= kFingerprintsQueue || used_reads_ + n_reads > kFingerprintReads ||
+        inst_mips + extension_mips > snapshots_bytes_) {
+      ++fingerprints_without_room_report_;
       return false;
     }
-    const bool comparar =
-        huellas_fase_ == kHuellasMirando || (++huellas_nuevas_aplicando_ % kComprobarHuellaUnaDeCada) == 0;
+    const bool compare =
+        phase_fingerprints_ == kPeekingFingerprints || (++applying_new_fingerprints_ % kCheckFingerprintEvery) == 0;
     // The snapshot: the same bytes the usual path's hash covers, at the same point.
-    const auto antes_copia = std::chrono::steady_clock::now();
-    std::memcpy(instantaneas_.get() + inst_base, crudo_base, size_t(extension));
+    const auto before_copy = std::chrono::steady_clock::now();
+    std::memcpy(snapshots_.get() + inst_base, base_raw, size_t(extension));
     if (extension_mips) {
-      std::memcpy(instantaneas_.get() + inst_mips, crudo_mips, size_t(extension_mips));
+      std::memcpy(snapshots_.get() + inst_mips, mips_raw, size_t(extension_mips));
     }
-    const uint64_t ns_copia = uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                           std::chrono::steady_clock::now() - antes_copia)
+    const uint64_t copy_ns = uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                           std::chrono::steady_clock::now() - before_copy)
                                            .count());
-    instantaneas_usado_ = inst_mips + extension_mips;
-    ns_instantaneas_informe_ += ns_copia;
-    bytes_instantaneas_informe_ += extension + extension_mips;
-    nfsmw::esperas::g_ns_huella_instantanea.fetch_add(ns_copia, std::memory_order_relaxed);
+    used_snapshots_ = inst_mips + extension_mips;
+    snapshots_report_ns_ += copy_ns;
+    snapshots_report_bytes_ += extension + extension_mips;
+    nfsmw::waits::g_snapshot_fingerprint_ns.fetch_add(copy_ns, std::memory_order_relaxed);
     const uint32_t log2 = tf.bytes >= 16 ? 4 : tf.bytes >= 8 ? 3 : tf.bytes >= 4 ? 2 : tf.bytes >= 2 ? 1 : 0;
-    TrabajoHuella t;
-    t.textura = &textura;
-    t.clave = clave;
+    FingerprintJob t;
+    t.texture = &texture;
+    t.key = key;
     t.inst_base = inst_base;
     t.bytes_base = extension;
     t.inst_mips = inst_mips;
     t.bytes_mips = extension_mips;
-    t.bytes_datos = bytes_datos;
-    t.lectura_inicio = lecturas_usadas_;
-    t.lecturas = n_lecturas;
-    t.bytes_bloque = tf.bytes;
-    t.log2_bloque = log2;
-    t.unidad_orden = tf.unidad_orden;
+    t.data_bytes = data_bytes;
+    t.start_read = used_reads_;
+    t.reads = n_reads;
+    t.block_bytes = tf.bytes;
+    t.block_log2 = log2;
+    t.order_unit = tf.order_unit;
     t.orden = orden;
-    t.direccion = direccion;
-    t.ancho = ancho;
-    t.alto = alto;
-    t.formato = formato;
-    t.rapido = mosaico_rapido_ > 0;
-    t.comparar = comparar;
+    t.address = address;
+    t.width_px = width_px;
+    t.height_px = height_px;
+    t.format_id = format_id;
+    t.fast = fast_tile_ > 0;
+    t.compare = compare;
     // The plan, with the decisions of the fast untiling and byte swap guards taken in the same order as the
     // usual path (niveles_vistos_ and ordenes_vistos_). Not for a comparison texture: the usual path also
     // processes it, and that is what keeps those counts.
-    for (uint32_t i = 0; i < n_lecturas; ++i) {
-      LecturaHuella l = lecturas_plan_[i];
-      l.origen += inst_base;
-      if (!comparar && l.mosaico && t.rapido && tf.bytes == (1u << log2)) {
-        ++niveles_vistos_;
-        l.comprobar = niveles_vistos_ <= kNivelesAComprobar || niveles_vistos_ % kComprobarUnaDeCada == 0;
-        if (l.comprobar && ++niveles_comprobados_ == kNivelesAComprobar) {
-          t.aviso_niveles = true;
+    for (uint32_t i = 0; i < n_reads; ++i) {
+      FingerprintReadback l = plan_reads_[i];
+      l.src += inst_base;
+      if (!compare && l.tile && t.fast && tf.bytes == (1u << log2)) {
+        ++seen_levels_;
+        l.run_check = seen_levels_ <= kLevelsToCheck || seen_levels_ % kCheckEvery == 0;
+        if (l.run_check && ++checked_levels_ == kLevelsToCheck) {
+          t.levels_warning = true;
         }
       }
-      lecturas_huella_[lecturas_usadas_ + i] = l;
+      fingerprint_reads_[used_reads_ + i] = l;
     }
-    lecturas_usadas_ += n_lecturas;
-    if (!comparar && t.rapido && orden != 0 && (tf.unidad_orden == 2 || tf.unidad_orden == 4)) {
-      ++ordenes_vistos_;
-      t.comprobar_orden = ordenes_vistos_ <= kNivelesAComprobar || ordenes_vistos_ % kComprobarUnaDeCada == 0;
-      if (t.comprobar_orden && ++ordenes_comprobados_ == kNivelesAComprobar) {
-        t.aviso_ordenes = true;
+    used_reads_ += n_reads;
+    if (!compare && t.fast && orden != 0 && (tf.order_unit == 2 || tf.order_unit == 4)) {
+      ++seen_commands_;
+      t.check_order = seen_commands_ <= kLevelsToCheck || seen_commands_ % kCheckEvery == 0;
+      if (t.check_order && ++checked_commands_ == kLevelsToCheck) {
+        t.commands_warning = true;
       }
     }
-    ++huellas_planeadas_informe_;
-    if (comparar) {
+    ++planned_fingerprints_report_;
+    if (compare) {
       // Published now, with no space in the upload buffer: the thread only returns its two hashes. What gets
       // uploaded is the usual path's result, which continues on return (AnotarComparacionHuella stores its
       // hashes).
-      ++huellas_comparaciones_planeadas_;
-      ++huellas_comparacion_informe_;
-      const uint64_t secuencia = PublicarTrabajoHuella(t, nullptr);
-      comparaciones_huella_[secuencia & (kColaHuellas - 1)] = ComparacionHuella{};
-      comparacion_textura_ = &textura;
-      comparacion_secuencia_ = secuencia;
+      ++planned_comparisons_fingerprints_;
+      ++comparison_fingerprints_report_;
+      const uint64_t sequence = PublishFingerprintJob(t, nullptr);
+      fingerprint_comparisons_[sequence & (kFingerprintsQueue - 1)] = FingerprintCompare{};
+      texture_comparison_ = &texture;
+      sequence_comparison_ = sequence;
       return false;
     }
     // Applying phase: the tail of PrepararTextura for a new texture, the same as there.
-    huellas_planeadas_.push_back(t);
-    ++huellas_planeadas_pendientes_;
-    textura.huella_trabajo = uint32_t(huellas_planeadas_.size());
-    textura.muestra_valida = false;
-    textura.muestras_seguidas = 0;
-    for (uint32_t n = 0; n < textura.niveles; ++n) {
-      textura.desplazamiento_nivel[n] = uint32_t(desplazamientos[n]);
+    planned_fingerprints_.push_back(t);
+    ++pending_planned_fingerprints_;
+    texture.job_fingerprint = uint32_t(planned_fingerprints_.size());
+    texture.valid_sample = false;
+    texture.consecutive_samples = 0;
+    for (uint32_t n = 0; n < texture.levels; ++n) {
+      texture.level_offset[n] = uint32_t(offsets[n]);
     }
-    textura.intervalo = 1;
-    textura.siguiente = fotograma_ + 1;
-    textura.huella = 0;  // a new texture's data hash decides nothing: 0, as on the usual path
-    textura.subir = true;
-    texturas_a_subir_.push_back(&textura);
-    nfsmw::esperas::g_texturas_subidas.fetch_add(1, std::memory_order_relaxed);
-    nfsmw::esperas::g_bytes_subidos.fetch_add(bytes_datos, std::memory_order_relaxed);
-    bytes_subida += (bytes_datos + 3) & ~size_t(3);
+    texture.interval = 1;
+    texture.next = frame_ + 1;
+    texture.fingerprint = 0;  // a new texture's data hash decides nothing: 0, as on the usual path
+    texture.do_upload = true;
+    textures_to_upload_.push_back(&texture);
+    nfsmw::waits::g_uploads_textures.fetch_add(1, std::memory_order_relaxed);
+    nfsmw::waits::g_uploaded_bytes.fetch_add(data_bytes, std::memory_order_relaxed);
+    upload_bytes += (data_bytes + 3) & ~size_t(3);
     return true;
   }
 
   // Queues a job for the thread (under the lock), waking it if it sleeps. Returns its sequence number. If
   // the thread cannot be created, the job stays queued anyway and the ring does it when collecting (and the
   // feature switches off).
-  uint64_t PublicarTrabajoHuella(const TrabajoHuella& trabajo, uint8_t* destino) {
-    if (!huellas_hilo_.joinable() && !huellas_sin_hilo_) {
+  uint64_t PublishFingerprintJob(const FingerprintJob& job, uint8_t* target) {
+    if (!thread_fingerprints_.joinable() && !fingerprints_without_thread_) {
 #if REX_PLATFORM_SWITCH
-      const int anillo = RexSwitchCurrentCore();  // the ring thread asks for itself
+      const int ring = RexSwitchCurrentCore();  // the ring thread asks for itself
 #else
-      const int anillo = -1;
+      const int ring = -1;
 #endif
-      huellas_nucleo_ = huellas_nucleo_pedido_ != -2 ? huellas_nucleo_pedido_ : anillo == 2 ? 1 : 2;
+      core_fingerprints_ = request_core_fingerprints_ != -2 ? request_core_fingerprints_ : ring == 2 ? 1 : 2;
       try {
-        huellas_hilo_ = std::thread([this] { BucleHuellas(); });
+        thread_fingerprints_ = std::thread([this] { FingerprintsLoop(); });
         REXLOG_INFO("[nativo] C3: hilo de huellas de texturas creado: nucleo preferido {} (el anillo corre en el {}), "
                     "prioridad {:#x}",
-                    huellas_nucleo_, anillo, huellas_prioridad_);
+                    core_fingerprints_, ring, priority_fingerprints_);
       } catch (const std::system_error& error) {
-        huellas_sin_hilo_ = true;
-        ApagarHuellas(fmt::format("DIFERENCIA: no se pudo crear el hilo ({})", error.what()));
+        fingerprints_without_thread_ = true;
+        DisableFingerprints(fmt::format("DIFERENCIA: no se pudo crear el hilo ({})", error.what()));
       }
     }
-    bool avisar = false;
-    uint64_t secuencia = 0;
+    bool warn = false;
+    uint64_t sequence = 0;
     {
-      std::lock_guard<std::mutex> cerrojo(huellas_mutex_);
-      secuencia = huellas_publicados_;
-      TrabajoHuella& casilla = cola_huellas_[secuencia & (kColaHuellas - 1)];
-      casilla = trabajo;
-      casilla.secuencia = secuencia;
-      casilla.destino = destino;
-      casilla.epoca = epoca_subida_;
-      casilla.estado = kTrabajoPendiente;
-      ++huellas_publicados_;
-      avisar = huellas_durmiendo_;  // decided under the lock: if it sleeps, it is in its wait with the predicate
+      std::lock_guard<std::mutex> mutex_lock(mutex_fingerprints_);
+      sequence = published_fingerprints_;
+      FingerprintJob& slot = fingerprints_queue_[sequence & (kFingerprintsQueue - 1)];
+      slot = job;
+      slot.sequence = sequence;
+      slot.target = target;
+      slot.epoch = upload_epoch_;
+      slot.state = kPendingJob;
+      ++published_fingerprints_;
+      warn = sleeping_fingerprints_;  // decided under the lock: if it sleeps, it is in its wait with the predicate
     }
-    if (avisar) {
-      huellas_cv_.notify_one();
+    if (warn) {
+      cv_fingerprints_.notify_one();
     }
-    return secuencia;
+    return sequence;
   }
 
   // The data bytes of a planned texture (SubirTextura reserves that space). If its index does not match
   // (should not happen), the texture's own, which come from the same per-level computation.
-  size_t BytesHuellaPlaneada(const Textura& textura) const {
-    const size_t indice = size_t(textura.huella_trabajo) - 1;
-    return indice < huellas_planeadas_.size() && huellas_planeadas_[indice].textura == &textura
-               ? huellas_planeadas_[indice].bytes_datos
-               : size_t(textura.bytes);
+  size_t PlannedFingerprintBytes(const Texture& texture) const {
+    const size_t index = size_t(texture.job_fingerprint) - 1;
+    return index < planned_fingerprints_.size() && planned_fingerprints_[index].texture == &texture
+               ? planned_fingerprints_[index].data_bytes
+               : size_t(texture.bytes);
   }
 
   // SubirTextura for a planned texture: its job, with the space just reserved for it, goes to the thread's
   // queue.
-  void PublicarHuella(Textura& textura, uint8_t* destino, size_t bytes) {
-    const size_t indice = size_t(textura.huella_trabajo) - 1;
-    if (indice >= huellas_planeadas_.size() || huellas_planeadas_[indice].textura != &textura) {
+  void PublishFingerprint(Texture& texture, uint8_t* target, size_t bytes) {
+    const size_t index = size_t(texture.job_fingerprint) - 1;
+    if (index >= planned_fingerprints_.size() || planned_fingerprints_[index].texture != &texture) {
       // Should never happen. Without a job its data would never arrive: zeros in its space, and it is uploaded
       // in full next time.
-      std::memset(destino, 0, bytes);
-      textura.huella_trabajo = 0;
-      textura.huella_cruda = 0;
-      textura.siguiente = 0;
-      ApagarHuellas(fmt::format("DIFERENCIA: trabajo planeado incoherente ({} de {})", indice,
-                                huellas_planeadas_.size()));
+      std::memset(target, 0, bytes);
+      texture.job_fingerprint = 0;
+      texture.raw_fingerprint = 0;
+      texture.next = 0;
+      DisableFingerprints(fmt::format("DIFERENCIA: trabajo planeado incoherente ({} de {})", index,
+                                planned_fingerprints_.size()));
       return;
     }
-    PublicarTrabajoHuella(huellas_planeadas_[indice], destino);
-    huellas_planeadas_[indice].textura = nullptr;  // published: no longer counts as planned
-    --huellas_planeadas_pendientes_;
-    textura.huella_trabajo = kTrabajoHuellaPublicado;
+    PublishFingerprintJob(planned_fingerprints_[index], target);
+    planned_fingerprints_[index].texture = nullptr;  // published: no longer counts as planned
+    --pending_planned_fingerprints_;
+    texture.job_fingerprint = kPublishedFingerprintJob;
   }
 
   // At the start of each draw: the previous draw's planned textures that never reached SubirTextura (the
   // draw was rejected before). As on the usual path, they stay un-uploaded and are prepared again at their
   // next check.
-  void DescartarHuellasPlaneadas() {
-    if (!huellas_planeadas_pendientes_) {
+  void DiscardPlannedFingerprints() {
+    if (!pending_planned_fingerprints_) {
       return;
     }
-    for (TrabajoHuella& t : huellas_planeadas_) {
-      if (t.textura) {
-        t.textura->huella_trabajo = 0;
-        t.textura = nullptr;
-        ++huellas_descartadas_;
+    for (FingerprintJob& t : planned_fingerprints_) {
+      if (t.texture) {
+        t.texture->job_fingerprint = 0;
+        t.texture = nullptr;
+        ++discarded_fingerprints_;
       }
     }
-    huellas_planeadas_pendientes_ = 0;
+    pending_planned_fingerprints_ = 0;
   }
 
   // Observing phase (and 1 in kComprobarHuellaUnaDeCada): the usual path's hashes of the texture whose
   // comparison job was just published. RecogerHuellas compares them.
-  void AnotarComparacionHuella(const Textura& textura, const std::vector<uint8_t>& datos) {
-    comparacion_textura_ = nullptr;
-    if (comparacion_secuencia_ < huellas_recogidos_) {
+  void TrackFingerprintCompare(const Texture& texture, const std::vector<uint8_t>& payload) {
+    texture_comparison_ = nullptr;
+    if (sequence_comparison_ < collected_fingerprints_) {
       return;  // already collected (should not happen): left uncompared and counted
     }
-    ComparacionHuella& c = comparaciones_huella_[comparacion_secuencia_ & (kColaHuellas - 1)];
-    c.cruda = textura.huella_cruda;
-    c.datos = XXH3_64bits(datos.data(), datos.size());
-    c.anotada = true;
+    FingerprintCompare& c = fingerprint_comparisons_[sequence_comparison_ & (kFingerprintsQueue - 1)];
+    c.raw_data = texture.raw_fingerprint;
+    c.payload = XXH3_64bits(payload.data(), payload.size());
+    c.tracked = true;
   }
 
   /*
@@ -6553,140 +6553,140 @@ class DibujosVulkanImpl final : public DibujosVulkan {
    * ring's state. `rapido_apagado` belongs to whoever does the job: after a difference in its guard, the
    * rest takes the usual path, as on the ring (which also turns off mosaico_rapido_ when collecting it).
    */
-  void EjecutarHuella(TrabajoHuella& t, std::vector<uint8_t>& datos, std::vector<uint8_t>& comprobacion,
-                      bool& rapido_apagado) {
-    const auto inicio = std::chrono::steady_clock::now();
-    const uint8_t* const instantanea = instantaneas_.get();
-    uint64_t huella = XXH3_64bits(instantanea + t.inst_base, size_t(t.bytes_base));
+  void ExecuteFingerprint(FingerprintJob& t, std::vector<uint8_t>& payload, std::vector<uint8_t>& check,
+                      bool& fast_disabled) {
+    const auto start = std::chrono::steady_clock::now();
+    const uint8_t* const snap = snapshots_.get();
+    uint64_t fingerprint = XXH3_64bits(snap + t.inst_base, size_t(t.bytes_base));
     if (t.bytes_mips) {
-      huella = XXH3_64bits_withSeed(instantanea + t.inst_mips, size_t(t.bytes_mips), huella);
+      fingerprint = XXH3_64bits_withSeed(snap + t.inst_mips, size_t(t.bytes_mips), fingerprint);
     }
-    t.huella_cruda = huella;
-    const auto tras_huella = std::chrono::steady_clock::now();
-    datos.assign(t.bytes_datos, 0);
-    const uint32_t b = t.bytes_bloque;
-    for (uint32_t i = 0; i < t.lecturas; ++i) {
-      const LecturaHuella& l = lecturas_huella_[t.lectura_inicio + i];
-      const uint8_t* const origen = instantanea + l.origen;
-      uint8_t* const destino = datos.data() + l.destino;
-      if (!l.mosaico) {
+    t.raw_fingerprint = fingerprint;
+    const auto after_fingerprint = std::chrono::steady_clock::now();
+    payload.assign(t.data_bytes, 0);
+    const uint32_t b = t.block_bytes;
+    for (uint32_t i = 0; i < t.reads; ++i) {
+      const FingerprintReadback& l = fingerprint_reads_[t.start_read + i];
+      const uint8_t* const src = snap + l.src;
+      uint8_t* const target = payload.data() + l.target;
+      if (!l.tile) {
         for (uint32_t y = 0; y < l.by; ++y) {
-          std::memcpy(destino + size_t(y) * l.bx_host * b,
-                      origen + uint64_t(l.oy + y) * l.fila_bytes + uint64_t(l.ox) * b, size_t(l.bx) * b);
+          std::memcpy(target + size_t(y) * l.bx_host * b,
+                      src + uint64_t(l.oy + y) * l.row_bytes + uint64_t(l.ox) * b, size_t(l.bx) * b);
         }
         continue;
       }
-      if (t.rapido && !rapido_apagado && b == (1u << t.log2_bloque)) {
-        switch (t.log2_bloque) {
-          case 0: DesenmosaicarNivel<0>(origen, l.pitch_bloques, l.ox, l.oy, l.bx, l.by, l.bx_host, destino); break;
-          case 1: DesenmosaicarNivel<1>(origen, l.pitch_bloques, l.ox, l.oy, l.bx, l.by, l.bx_host, destino); break;
-          case 2: DesenmosaicarNivel<2>(origen, l.pitch_bloques, l.ox, l.oy, l.bx, l.by, l.bx_host, destino); break;
-          case 3: DesenmosaicarNivel<3>(origen, l.pitch_bloques, l.ox, l.oy, l.bx, l.by, l.bx_host, destino); break;
-          default: DesenmosaicarNivel<4>(origen, l.pitch_bloques, l.ox, l.oy, l.bx, l.by, l.bx_host, destino); break;
+      if (t.fast && !fast_disabled && b == (1u << t.block_log2)) {
+        switch (t.block_log2) {
+          case 0: UntileLevel<0>(src, l.blocks_pitch, l.ox, l.oy, l.bx, l.by, l.bx_host, target); break;
+          case 1: UntileLevel<1>(src, l.blocks_pitch, l.ox, l.oy, l.bx, l.by, l.bx_host, target); break;
+          case 2: UntileLevel<2>(src, l.blocks_pitch, l.ox, l.oy, l.bx, l.by, l.bx_host, target); break;
+          case 3: UntileLevel<3>(src, l.blocks_pitch, l.ox, l.oy, l.bx, l.by, l.bx_host, target); break;
+          default: UntileLevel<4>(src, l.blocks_pitch, l.ox, l.oy, l.bx, l.by, l.bx_host, target); break;
         }
-        if (l.comprobar) {
+        if (l.run_check) {
           // The LeerNivel guard: repeated on the usual path (which is the result kept) and compared.
-          comprobacion.assign(size_t(l.by) * l.bx_host * b, 0);
+          check.assign(size_t(l.by) * l.bx_host * b, 0);
           for (uint32_t y = 0; y < l.by; ++y) {
-            std::memcpy(comprobacion.data() + size_t(y) * l.bx_host * b, destino + size_t(y) * l.bx_host * b,
+            std::memcpy(check.data() + size_t(y) * l.bx_host * b, target + size_t(y) * l.bx_host * b,
                         size_t(l.bx) * b);
           }
-          LeerNivelMosaicoDeSiempre(origen, l.pitch_bloques, t.log2_bloque, b, l.ox, l.oy, l.bx, l.by, l.bx_host,
-                                    destino);
-          bool iguales = true;
-          for (uint32_t y = 0; y < l.by && iguales; ++y) {
-            iguales = std::memcmp(comprobacion.data() + size_t(y) * l.bx_host * b,
-                                  destino + size_t(y) * l.bx_host * b, size_t(l.bx) * b) == 0;
+          ReadLevelTileAsAlways(src, l.blocks_pitch, t.block_log2, b, l.ox, l.oy, l.bx, l.by, l.bx_host,
+                                    target);
+          bool all_equal = true;
+          for (uint32_t y = 0; y < l.by && all_equal; ++y) {
+            all_equal = std::memcmp(check.data() + size_t(y) * l.bx_host * b,
+                                  target + size_t(y) * l.bx_host * b, size_t(l.bx) * b) == 0;
           }
-          if (!iguales) {
-            if (!t.niveles_distintos++) {
-              t.distinto = {l.bx, l.by, l.pitch_bloques, l.ox, l.oy};
+          if (!all_equal) {
+            if (!t.distinct_levels++) {
+              t.distinct = {l.bx, l.by, l.blocks_pitch, l.ox, l.oy};
             }
-            rapido_apagado = true;
+            fast_disabled = true;
           }
         }
         continue;
       }
-      LeerNivelMosaicoDeSiempre(origen, l.pitch_bloques, t.log2_bloque, b, l.ox, l.oy, l.bx, l.by, l.bx_host, destino);
+      ReadLevelTileAsAlways(src, l.blocks_pitch, t.block_log2, b, l.ox, l.oy, l.bx, l.by, l.bx_host, target);
     }
     const auto orden = static_cast<xenos::Endian>(t.orden);
-    if (t.rapido && !rapido_apagado && orden != xenos::Endian::kNone && (t.unidad_orden == 2 || t.unidad_orden == 4)) {
-      if (t.comprobar_orden) {
-        comprobacion = datos;
+    if (t.fast && !fast_disabled && orden != xenos::Endian::kNone && (t.order_unit == 2 || t.order_unit == 4)) {
+      if (t.check_order) {
+        check = payload;
       }
-      CambiarOrdenBytes(datos.data(), datos.size(), t.unidad_orden, t.orden);
-      if (t.comprobar_orden) {
-        OrdenDeSiempre(comprobacion, t.unidad_orden, orden);
-        if (comprobacion != datos) {
-          t.orden_distinto = true;
-          datos.swap(comprobacion);  // the usual one is kept, as on the ring
-          rapido_apagado = true;
+      ChangeOrderBytes(payload.data(), payload.size(), t.order_unit, t.orden);
+      if (t.check_order) {
+        AlwaysOrder(check, t.order_unit, orden);
+        if (check != payload) {
+          t.distinct_order = true;
+          payload.swap(check);  // the usual one is kept, as on the ring
+          fast_disabled = true;
         }
       }
     } else {
-      OrdenDeSiempre(datos, t.unidad_orden, orden);
+      AlwaysOrder(payload, t.order_unit, orden);
     }
-    if (t.comparar) {
-      t.huella_datos = XXH3_64bits(datos.data(), datos.size());
+    if (t.compare) {
+      t.data_fingerprint = XXH3_64bits(payload.data(), payload.size());
     }
-    if (t.destino) {
-      std::memcpy(t.destino, datos.data(), datos.size());
+    if (t.target) {
+      std::memcpy(t.target, payload.data(), payload.size());
     }
-    const auto fin = std::chrono::steady_clock::now();
-    t.ns_huella = uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(tras_huella - inicio).count());
-    t.ns_resto = uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(fin - tras_huella).count());
+    const auto stop_pos = std::chrono::steady_clock::now();
+    t.fingerprint_ns = uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(after_fingerprint - start).count());
+    t.rest_ns = uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(stop_pos - after_fingerprint).count());
   }
 
   // The thread: the queued jobs, in order, skipping those the ring has taken. It sleeps on a decision taken
   // under the lock; it never spins. It does not write to the log (the ring records the figures when
   // collecting).
-  void BucleHuellas() {
+  void FingerprintsLoop() {
     rex::thread::set_current_thread_name("NFSMW huellas de texturas");
 #if REX_PLATFORM_SWITCH
-    const bool prioridad_ok = RexSwitchSetCurrentThreadPriorityOk(int(huellas_prioridad_));
-    const bool nucleo_ok = RexSwitchSetCurrentThreadCore(int(huellas_nucleo_));
-    const int nucleo = RexSwitchCurrentCore();
+    const bool priority_ok = RexSwitchSetCurrentThreadPriorityOk(int(priority_fingerprints_));
+    const bool core_ok = RexSwitchSetCurrentThreadCore(int(core_fingerprints_));
+    const int core = RexSwitchCurrentCore();
 #else
-    const bool prioridad_ok = true;
-    const bool nucleo_ok = true;
-    const int nucleo = -1;
+    const bool priority_ok = true;
+    const bool core_ok = true;
+    const int core = -1;
 #endif
-    std::vector<uint8_t> datos;         // owned by this thread only
-    std::vector<uint8_t> comprobacion;  // owned by this thread only
-    bool rapido_apagado = false;        // owned by this thread only: its fast-path guard saw a difference
-    std::unique_lock<std::mutex> cerrojo(huellas_mutex_);
-    huellas_prioridad_ok_ = prioridad_ok;
-    huellas_nucleo_ok_ = nucleo_ok;
-    huellas_nucleo_real_ = nucleo;
+    std::vector<uint8_t> payload;         // owned by this thread only
+    std::vector<uint8_t> check;  // owned by this thread only
+    bool fast_disabled = false;        // owned by this thread only: its fast-path guard saw a difference
+    std::unique_lock<std::mutex> mutex_lock(mutex_fingerprints_);
+    priority_fingerprints_ok_ = priority_ok;
+    core_fingerprints_ok_ = core_ok;
+    real_core_fingerprints_ = core;
     for (;;) {
-      while (huellas_tomados_ != huellas_publicados_ &&
-             cola_huellas_[huellas_tomados_ & (kColaHuellas - 1)].estado != kTrabajoPendiente) {
-        ++huellas_tomados_;  // taken by the ring
+      while (taken_fingerprints_ != published_fingerprints_ &&
+             fingerprints_queue_[taken_fingerprints_ & (kFingerprintsQueue - 1)].state != kPendingJob) {
+        ++taken_fingerprints_;  // taken by the ring
       }
-      if (huellas_tomados_ == huellas_publicados_) {
-        if (huellas_parar_) {
+      if (taken_fingerprints_ == published_fingerprints_) {
+        if (stop_fingerprints_) {
           return;  // stop, nothing pending
         }
-        if (huellas_esperando_) {
-          huellas_hechos_cv_.notify_one();
+        if (waiting_fingerprints_) {
+          cv_done_fingerprints_.notify_one();
         }
-        huellas_durmiendo_ = true;
-        huellas_cv_.wait(cerrojo, [this] { return huellas_parar_ || huellas_tomados_ != huellas_publicados_; });
-        huellas_durmiendo_ = false;
+        sleeping_fingerprints_ = true;
+        cv_fingerprints_.wait(mutex_lock, [this] { return stop_fingerprints_ || taken_fingerprints_ != published_fingerprints_; });
+        sleeping_fingerprints_ = false;
         continue;
       }
       // The slot belongs to this thread while it is EnHilo: the ring neither touches nor reuses it until it is
       // collected done.
-      TrabajoHuella& t = cola_huellas_[huellas_tomados_ & (kColaHuellas - 1)];
-      t.estado = kTrabajoEnHilo;
-      ++huellas_tomados_;
-      cerrojo.unlock();
-      EjecutarHuella(t, datos, comprobacion, rapido_apagado);
-      cerrojo.lock();
-      t.estado = kTrabajoHecho;
-      ++huellas_hechos_;
-      if (huellas_esperando_) {
-        huellas_hechos_cv_.notify_one();
+      FingerprintJob& t = fingerprints_queue_[taken_fingerprints_ & (kFingerprintsQueue - 1)];
+      t.state = kJobInThread;
+      ++taken_fingerprints_;
+      mutex_lock.unlock();
+      ExecuteFingerprint(t, payload, check, fast_disabled);
+      mutex_lock.lock();
+      t.state = kDoneJob;
+      ++done_fingerprints_;
+      if (waiting_fingerprints_) {
+        cv_done_fingerprints_.notify_one();
       }
     }
   }
@@ -6698,300 +6698,300 @@ class DibujosVulkanImpl final : public DibujosVulkan {
    * a log line every 2 s. Then it sets each texture's raw hash and compares the comparison jobs. If nothing
    * planned is left, the snapshots start over.
    */
-  void RecogerHuellas() {
-    if (recogiendo_huellas_) {
+  void CollectFingerprints() {
+    if (fingerprints_collecting_) {
       return;
     }
-    if (huellas_publicados_ == huellas_recogidos_) {
-      if (!huellas_planeadas_pendientes_ && (instantaneas_usado_ || lecturas_usadas_)) {
-        instantaneas_usado_ = 0;  // nothing published uncollected or planned: everything starts over
-        lecturas_usadas_ = 0;
-        huellas_planeadas_.clear();
+    if (published_fingerprints_ == collected_fingerprints_) {
+      if (!pending_planned_fingerprints_ && (used_snapshots_ || used_reads_)) {
+        used_snapshots_ = 0;  // nothing published uncollected or planned: everything starts over
+        used_reads_ = 0;
+        planned_fingerprints_.clear();
       }
       return;
     }
-    recogiendo_huellas_ = true;
-    uint64_t ns_espera = 0;
-    uint64_t ns_anillo = 0;
-    uint64_t hechas_anillo = 0;
+    fingerprints_collecting_ = true;
+    uint64_t wait_ns = 0;
+    uint64_t ring_ns = 0;
+    uint64_t ring_done = 0;
     {
-      std::unique_lock<std::mutex> cerrojo(huellas_mutex_);
-      int segundos = 0;
-      while (huellas_hechos_ != huellas_publicados_) {
+      std::unique_lock<std::mutex> mutex_lock(mutex_fingerprints_);
+      int secs = 0;
+      while (done_fingerprints_ != published_fingerprints_) {
         // 1. One the thread has not started, from the end of the queue (the thread goes from the start).
-        TrabajoHuella* mio = nullptr;
-        for (uint64_t i = huellas_publicados_; i > huellas_tomados_; --i) {
-          TrabajoHuella& t = cola_huellas_[(i - 1) & (kColaHuellas - 1)];
-          if (t.estado == kTrabajoPendiente) {
-            t.estado = kTrabajoEnAnillo;
+        FingerprintJob* mio = nullptr;
+        for (uint64_t i = published_fingerprints_; i > taken_fingerprints_; --i) {
+          FingerprintJob& t = fingerprints_queue_[(i - 1) & (kFingerprintsQueue - 1)];
+          if (t.state == kPendingJob) {
+            t.state = kJobInRing;
             mio = &t;
             break;
           }
         }
         if (mio) {
-          cerrojo.unlock();
-          const auto antes = std::chrono::steady_clock::now();
-          EjecutarHuella(*mio, huellas_datos_anillo_, huellas_comprobacion_anillo_, huellas_rapido_apagado_anillo_);
-          ns_anillo += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                    std::chrono::steady_clock::now() - antes)
+          mutex_lock.unlock();
+          const auto before = std::chrono::steady_clock::now();
+          ExecuteFingerprint(*mio, ring_data_fingerprints_, ring_check_fingerprints_, ring_disabled_fast_fingerprints_);
+          ring_ns += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                    std::chrono::steady_clock::now() - before)
                                     .count());
-          ++hechas_anillo;
-          cerrojo.lock();
-          mio->por_anillo = true;
-          mio->estado = kTrabajoHecho;
-          ++huellas_hechos_;
+          ++ring_done;
+          mutex_lock.lock();
+          mio->per_ring = true;
+          mio->state = kDoneJob;
+          ++done_fingerprints_;
           continue;
         }
         // 2. What is left, the thread has half done: wait for it, deciding under the lock.
-        const auto antes = std::chrono::steady_clock::now();
-        huellas_esperando_ = true;
-        if (huellas_durmiendo_) {
-          huellas_cv_.notify_one();  // should not be needed (it has one in progress); in case a wake-up was lost
+        const auto before = std::chrono::steady_clock::now();
+        waiting_fingerprints_ = true;
+        if (sleeping_fingerprints_) {
+          cv_fingerprints_.notify_one();  // should not be needed (it has one in progress); in case a wake-up was lost
         }
-        const bool listos = huellas_hechos_cv_.wait_for(cerrojo, std::chrono::seconds(2),
-                                                         [this] { return huellas_hechos_ == huellas_publicados_; });
-        huellas_esperando_ = false;
+        const bool ready = cv_done_fingerprints_.wait_for(mutex_lock, std::chrono::seconds(2),
+                                                         [this] { return done_fingerprints_ == published_fingerprints_; });
+        waiting_fingerprints_ = false;
         const uint64_t ns = uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                         std::chrono::steady_clock::now() - antes)
+                                         std::chrono::steady_clock::now() - before)
                                          .count());
-        ns_espera += ns;
-        ns_espera_huellas_peor_ = std::max(ns_espera_huellas_peor_, ns);
-        ++esperas_huellas_informe_;
-        if (!listos) {
-          segundos += 2;
-          huellas_atascado_ = true;
+        wait_ns += ns;
+        worst_fingerprints_wait_ns_ = std::max(worst_fingerprints_wait_ns_, ns);
+        ++fingerprints_waits_report_;
+        if (!ready) {
+          secs += 2;
+          stuck_fingerprints_ = true;
           REXLOG_ERROR("[nativo] C3: el hilo del anillo lleva {} s esperando al hilo de huellas de texturas: "
                        "publicados {}, tomados {}, hechos {}; el hilo esta {}",
-                       segundos, huellas_publicados_, huellas_tomados_, huellas_hechos_,
-                       huellas_durmiendo_ ? "DORMIDO (aviso perdido)" : "despierto (un trabajo que no acaba)");
+                       secs, published_fingerprints_, taken_fingerprints_, done_fingerprints_,
+                       sleeping_fingerprints_ ? "DORMIDO (aviso perdido)" : "despierto (un trabajo que no acaba)");
         }
       }
       // The results were written by whoever did each job; the lock makes them visible here.
-      huellas_recogidas_.clear();
-      for (uint64_t s = huellas_recogidos_; s < huellas_publicados_; ++s) {
-        huellas_recogidas_.push_back(cola_huellas_[s & (kColaHuellas - 1)]);
+      gathered_fingerprints_.clear();
+      for (uint64_t s = collected_fingerprints_; s < published_fingerprints_; ++s) {
+        gathered_fingerprints_.push_back(fingerprints_queue_[s & (kFingerprintsQueue - 1)]);
       }
-      huellas_recogidos_ = huellas_publicados_;  // from here on its slots can be reused
+      collected_fingerprints_ = published_fingerprints_;  // from here on its slots can be reused
     }
-    comparacion_textura_ = nullptr;
-    bool diferencia = false;
-    std::string detalle;
-    uint64_t hilo = 0;
-    uint64_t ns_hilo = 0;
-    for (TrabajoHuella& t : huellas_recogidas_) {
-      if (t.por_anillo) {
-        ++huellas_anillo_total_;
+    texture_comparison_ = nullptr;
+    bool difference = false;
+    std::string detail;
+    uint64_t thread_obj = 0;
+    uint64_t thread_ns = 0;
+    for (FingerprintJob& t : gathered_fingerprints_) {
+      if (t.per_ring) {
+        ++ring_fingerprints_total_;
       } else {
-        ++huellas_hilo_total_;
-        if (!t.comparar) {  // what the thread actually took off the ring
-          ++hilo;
-          ns_hilo += t.ns_huella + t.ns_resto;
-          ns_huella_cruda_hilo_informe_ += t.ns_huella;
+        ++thread_fingerprints_total_;
+        if (!t.compare) {  // what the thread actually took off the ring
+          ++thread_obj;
+          thread_ns += t.fingerprint_ns + t.rest_ns;
+          thread_raw_fingerprint_report_ns_ += t.fingerprint_ns;
         }
       }
       // The fast-path guards, with the same lines as the usual path (LeerNivel and the byte swap).
-      if (t.niveles_distintos) {
+      if (t.distinct_levels) {
         REXLOG_ERROR("[nativo] C3: el desenmosaicado rapido NO coincide ({}x{} bloques de {} bytes, pitch {}, desde "
                      "{},{}). Se APAGA y se usa el de siempre.",
-                     t.distinto[0], t.distinto[1], t.bytes_bloque, t.distinto[2], t.distinto[3], t.distinto[4]);
-        mosaico_rapido_ = 0;
-      } else if (t.aviso_niveles) {
+                     t.distinct[0], t.distinct[1], t.block_bytes, t.distinct[2], t.distinct[3], t.distinct[4]);
+        fast_tile_ = 0;
+      } else if (t.levels_warning) {
         REXLOG_INFO("[nativo] C3: desenmosaicado rapido: {} niveles comprobados contra el de siempre, todos iguales. "
                     "Sigue el rapido.",
-                    kNivelesAComprobar);
+                    kLevelsToCheck);
       }
-      if (t.orden_distinto) {
+      if (t.distinct_order) {
         REXLOG_ERROR("[nativo] C3: el cambio de orden rapido NO coincide (unidad {}, orden {}, {} bytes). Se APAGAN el "
                      "orden y el desenmosaicado rapidos.",
-                     t.unidad_orden, t.orden, t.bytes_datos);
-        mosaico_rapido_ = 0;
-      } else if (t.aviso_ordenes) {
+                     t.order_unit, t.orden, t.data_bytes);
+        fast_tile_ = 0;
+      } else if (t.commands_warning) {
         REXLOG_INFO("[nativo] C3: cambio de orden rapido: {} texturas comprobadas contra el de siempre, todas iguales.",
-                    kNivelesAComprobar);
+                    kLevelsToCheck);
       }
-      if (t.comparar) {
-        const ComparacionHuella& c = comparaciones_huella_[t.secuencia & (kColaHuellas - 1)];
-        if (!c.anotada) {
-          ++huellas_sin_comparar_;
+      if (t.compare) {
+        const FingerprintCompare& c = fingerprint_comparisons_[t.sequence & (kFingerprintsQueue - 1)];
+        if (!c.tracked) {
+          ++fingerprints_without_compare_;
           continue;
         }
-        ++huellas_comparadas_;
-        if (c.cruda != t.huella_cruda || c.datos != t.huella_datos) {
-          diferencia = true;
-          detalle = fmt::format("DIFERENCIA en la textura {:08X} {}x{} formato {}: huella cruda {:016X} en el anillo y "
+        ++compared_fingerprints_;
+        if (c.raw_data != t.raw_fingerprint || c.payload != t.data_fingerprint) {
+          difference = true;
+          detail = fmt::format("DIFERENCIA en la textura {:08X} {}x{} formato {}: huella cruda {:016X} en el anillo y "
                                 "{:016X} en el hilo; datos {:016X} y {:016X}",
-                                t.direccion, t.ancho, t.alto, t.formato, c.cruda, t.huella_cruda, c.datos,
-                                t.huella_datos);
+                                t.address, t.width_px, t.height_px, t.format_id, c.raw_data, t.raw_fingerprint, c.payload,
+                                t.data_fingerprint);
         }
         continue;
       }
       // A texture done by the thread: its raw hash is that of the same bytes that were uploaded. It must still
       // be in the cache as it was left, and its data must have gone to the current upload buffer (the one about
       // to be submitted).
-      const auto it = texturas_.find(t.clave);
-      if (it == texturas_.end() || &it->second != t.textura || t.textura->huella_trabajo != kTrabajoHuellaPublicado) {
-        diferencia = true;
-        detalle = fmt::format("DIFERENCIA: la textura {:08X} de un trabajo recogido ya no esta como se dejo",
-                              t.direccion);
-        t.textura = nullptr;
+      const auto it = textures_.find(t.key);
+      if (it == textures_.end() || &it->second != t.texture || t.texture->job_fingerprint != kPublishedFingerprintJob) {
+        difference = true;
+        detail = fmt::format("DIFERENCIA: la textura {:08X} de un trabajo recogido ya no esta como se dejo",
+                              t.address);
+        t.texture = nullptr;
         continue;
       }
-      if (t.epoca != epoca_subida_) {
-        diferencia = true;  // se vuelve a subir entera (huellas_sospechosas_)
-        detalle = fmt::format("DIFERENCIA: los datos de la textura {:08X} fueron a otro bufer de subida (epoca {} "
+      if (t.epoch != upload_epoch_) {
+        difference = true;  // se vuelve a subir entera (huellas_sospechosas_)
+        detail = fmt::format("DIFERENCIA: los datos de la textura {:08X} fueron a otro bufer de subida (epoca {} "
                               "frente a {})",
-                              t.direccion, t.epoca, epoca_subida_);
+                              t.address, t.epoch, upload_epoch_);
       }
-      t.textura->huella_cruda = t.huella_cruda;
-      t.textura->huella_trabajo = 0;
-      AnotarContenidoTextura(*t.textura, t.clave);  // measurement only: nfsmw_nativo_diag_reutilizar
+      t.texture->raw_fingerprint = t.raw_fingerprint;
+      t.texture->job_fingerprint = 0;
+      TrackTextureContent(*t.texture, t.key);  // measurement only: nfsmw_nativo_diag_reutilizar
     }
-    if (diferencia) {
-      huellas_sospechosas_ = true;
-      ApagarHuellas(detalle);
+    if (difference) {
+      suspicious_fingerprints_ = true;
+      DisableFingerprints(detail);
     }
-    if (huellas_atascado_) {
-      huellas_atascado_ = false;
-      ApagarHuellas("DIFERENCIA: una espera de mas de 2 s al hilo de huellas (ver las lineas de arriba)");
+    if (stuck_fingerprints_) {
+      stuck_fingerprints_ = false;
+      DisableFingerprints("DIFERENCIA: una espera de mas de 2 s al hilo de huellas (ver las lineas de arriba)");
     }
-    if (huellas_sospechosas_) {
+    if (suspicious_fingerprints_) {
       // The thread's textures planned before the DIFERENCIA may carry the same fault: they are uploaded again
       // in full, on the usual path (already switched off), at their next check.
-      for (const TrabajoHuella& t : huellas_recogidas_) {
-        if (!t.comparar && t.textura) {
-          t.textura->imagen.preparada = false;
-          t.textura->siguiente = 0;
-          t.textura->huella_trabajo = 0;
-          ++huellas_resubidas_;
+      for (const FingerprintJob& t : gathered_fingerprints_) {
+        if (!t.compare && t.texture) {
+          t.texture->img.prepared = false;
+          t.texture->next = 0;
+          t.texture->job_fingerprint = 0;
+          ++reuploaded_fingerprints_;
         }
       }
-    } else if (huellas_fase_ == kHuellasMirando && huellas_comparadas_ >= kHuellasAComprobar) {
-      huellas_fase_ = kHuellasAplicando;
-      bool prioridad_ok = true;
-      bool nucleo_ok = true;
-      int nucleo = -1;
+    } else if (phase_fingerprints_ == kPeekingFingerprints && compared_fingerprints_ >= kFingerprintsToCheck) {
+      phase_fingerprints_ = kApplyingFingerprints;
+      bool priority_ok = true;
+      bool core_ok = true;
+      int core = -1;
       {
-        std::lock_guard<std::mutex> cerrojo(huellas_mutex_);
-        prioridad_ok = huellas_prioridad_ok_;
-        nucleo_ok = huellas_nucleo_ok_;
-        nucleo = huellas_nucleo_real_;
+        std::lock_guard<std::mutex> mutex_lock(mutex_fingerprints_);
+        priority_ok = priority_fingerprints_ok_;
+        core_ok = core_fingerprints_ok_;
+        core = real_core_fingerprints_;
       }
       REXLOG_INFO("[nativo] C3: hilo de huellas de texturas: {} texturas nuevas hechas por los dos caminos, todas "
                   "iguales (huella cruda y datos; {} sin poder comparar). Pasa a fase APLICANDO: las prepara el hilo y "
                   "se sigue comparando 1 de cada {}. El hilo corre en el nucleo {}{}{}",
-                  huellas_comparadas_, huellas_sin_comparar_, kComprobarHuellaUnaDeCada, nucleo,
-                  nucleo_ok ? "" : " (el kernel NO acepto el nucleo preferido)",
-                  prioridad_ok ? "" : " (el kernel NO acepto la prioridad)");
+                  compared_fingerprints_, fingerprints_without_compare_, kCheckFingerprintEvery, core,
+                  core_ok ? "" : " (el kernel NO acepto el nucleo preferido)",
+                  priority_ok ? "" : " (el kernel NO acepto la prioridad)");
     }
-    huellas_hilo_informe_ += hilo;
-    huellas_anillo_informe_ += hechas_anillo;
-    ns_huellas_hilo_informe_ += ns_hilo;
-    ns_huellas_anillo_informe_ += ns_anillo;
-    ns_espera_huellas_informe_ += ns_espera;
+    thread_fingerprints_report_ += thread_obj;
+    ring_fingerprints_report_ += ring_done;
+    thread_fingerprints_report_ns_ += thread_ns;
+    ring_fingerprints_report_ns_ += ring_ns;
+    fingerprints_wait_report_ns_ += wait_ns;
     // A few times per frame (on each submission with new textures): the fetch_add calls do not show.
-    nfsmw::esperas::g_texturas_huella_hilo.fetch_add(hilo, std::memory_order_relaxed);
-    nfsmw::esperas::g_ns_huella_hilo.fetch_add(ns_hilo, std::memory_order_relaxed);
-    nfsmw::esperas::g_texturas_huella_anillo.fetch_add(hechas_anillo, std::memory_order_relaxed);
-    nfsmw::esperas::g_ns_huella_anillo.fetch_add(ns_anillo, std::memory_order_relaxed);
-    nfsmw::esperas::g_ns_esperando_huellas.fetch_add(ns_espera, std::memory_order_relaxed);
-    if (!huellas_planeadas_pendientes_) {
-      instantaneas_usado_ = 0;
-      lecturas_usadas_ = 0;
-      huellas_planeadas_.clear();
+    nfsmw::waits::g_thread_fingerprint_textures.fetch_add(thread_obj, std::memory_order_relaxed);
+    nfsmw::waits::g_thread_fingerprint_ns.fetch_add(thread_ns, std::memory_order_relaxed);
+    nfsmw::waits::g_ring_fingerprint_textures.fetch_add(ring_done, std::memory_order_relaxed);
+    nfsmw::waits::g_ring_fingerprint_ns.fetch_add(ring_ns, std::memory_order_relaxed);
+    nfsmw::waits::g_fingerprints_waiting_ns.fetch_add(wait_ns, std::memory_order_relaxed);
+    if (!pending_planned_fingerprints_) {
+      used_snapshots_ = 0;
+      used_reads_ = 0;
+      planned_fingerprints_.clear();
     }
-    recogiendo_huellas_ = false;
+    fingerprints_collecting_ = false;
   }
 
   // UsarRanura: everything published is collected in AntesDeEnviar. If anything reaches here (it should
   // not), its data was going to the buffer just closed without waiting for it: it is collected now (before
   // this one is reset) and those textures are uploaded again.
-  void ComprobarHuellasAlCambiarDeBufer() {
-    if (huellas_publicados_ == huellas_recogidos_) {
+  void CheckFingerprintsOnBufferChange() {
+    if (published_fingerprints_ == collected_fingerprints_) {
       return;
     }
-    const uint64_t sin_recoger = huellas_publicados_ - huellas_recogidos_;
-    huellas_sospechosas_ = true;  // whatever is collected now is uploaded again in full
-    RecogerHuellas();
-    ApagarHuellas(fmt::format("DIFERENCIA: {} trabajos del hilo de huellas sin recoger al cambiar de bufer de subida",
-                              sin_recoger));
+    const uint64_t without_collect = published_fingerprints_ - collected_fingerprints_;
+    suspicious_fingerprints_ = true;  // whatever is collected now is uploaded again in full
+    CollectFingerprints();
+    DisableFingerprints(fmt::format("DIFERENCIA: {} trabajos del hilo de huellas sin recoger al cambiar de bufer de subida",
+                              without_collect));
   }
 
-  void PararHuellas() {
-    if (!huellas_hilo_.joinable()) {
+  void StopFingerprints() {
+    if (!thread_fingerprints_.joinable()) {
       return;
     }
     {
-      std::lock_guard<std::mutex> cerrojo(huellas_mutex_);
-      huellas_parar_ = true;
+      std::lock_guard<std::mutex> mutex_lock(mutex_fingerprints_);
+      stop_fingerprints_ = true;
     }
-    huellas_cv_.notify_one();
-    huellas_hilo_.join();  // first finishes the published jobs
+    cv_fingerprints_.notify_one();
+    thread_fingerprints_.join();  // first finishes the published jobs
     REXLOG_INFO("[nativo] C3: hilo de huellas de texturas parado ({} texturas hechas por el hilo, {} por el anillo, {} "
                 "comparadas, {} descartadas, {} vueltas a subir)",
-                huellas_hilo_total_, huellas_anillo_total_, huellas_comparadas_, huellas_descartadas_,
-                huellas_resubidas_);
+                thread_fingerprints_total_, ring_fingerprints_total_, compared_fingerprints_, discarded_fingerprints_,
+                reuploaded_fingerprints_);
   }
 
   // Every 10 s, if there were new textures: what the thread and the ring did. This is also where it is
   // decided whether it pays off: if for 3 reports in a row (with 16 or more jobs) what the thread took off
   // the ring is less than what the ring spent copying snapshots and waiting for it, the ring would do better
   // alone, and it switches off.
-  void InformeHuellas() {
-    if (huellas_fase_ == kHuellasSinDecidir) {
+  void FingerprintsReport() {
+    if (phase_fingerprints_ == kFingerprintsWithoutDecide) {
       return;
     }
-    const auto ahora = std::chrono::steady_clock::now();
-    if (ahora - informe_huellas_ < std::chrono::seconds(10)) {
+    const auto now_time = std::chrono::steady_clock::now();
+    if (now_time - fingerprints_report_ < std::chrono::seconds(10)) {
       return;
     }
-    informe_huellas_ = ahora;
-    bool prioridad_ok = true;
-    int nucleo = -1;
+    fingerprints_report_ = now_time;
+    bool priority_ok = true;
+    int core = -1;
     {
-      std::lock_guard<std::mutex> cerrojo(huellas_mutex_);
-      prioridad_ok = huellas_prioridad_ok_;
-      nucleo = huellas_nucleo_real_;
+      std::lock_guard<std::mutex> mutex_lock(mutex_fingerprints_);
+      priority_ok = priority_fingerprints_ok_;
+      core = real_core_fingerprints_;
     }
-    if (huellas_planeadas_informe_ || huellas_hilo_informe_ || huellas_anillo_informe_ || huellas_sin_sitio_informe_) {
-      static constexpr const char* kFases[] = {"apagada", "MIRANDO", "APLICANDO"};
-      NFSMW_INFORME_ANILLO(
+    if (planned_fingerprints_report_ || thread_fingerprints_report_ || ring_fingerprints_report_ || fingerprints_without_room_report_) {
+      static constexpr const char* kPhases[] = {"apagada", "MIRANDO", "APLICANDO"};
+      NFSMW_RING_REPORT(
           "[nativo] C3 huellas de texturas nuevas (build 185), ultimos 10 s: {} planeadas ({} de comparacion); el hilo "
           "preparo {} en {:.1f} ms (huella {:.1f} ms) y el anillo {} al enviar en {:.1f} ms; el anillo copio {:.1f} MB "
           "de instantaneas en {:.1f} ms y espero al hilo {:.1f} ms en {} veces (peor {:.2f} ms); {} por la ruta de "
           "siempre sin sitio; {} comparadas desde el principio ({} sin poder); hilo en el nucleo {}, prioridad "
           "{:#x}{}; fase {}",
-          huellas_planeadas_informe_, huellas_comparacion_informe_, huellas_hilo_informe_,
-          double(ns_huellas_hilo_informe_) / 1e6, double(ns_huella_cruda_hilo_informe_) / 1e6,
-          huellas_anillo_informe_, double(ns_huellas_anillo_informe_) / 1e6,
-          double(bytes_instantaneas_informe_) / 1048576.0, double(ns_instantaneas_informe_) / 1e6,
-          double(ns_espera_huellas_informe_) / 1e6, esperas_huellas_informe_, double(ns_espera_huellas_peor_) / 1e6,
-          huellas_sin_sitio_informe_, huellas_comparadas_, huellas_sin_comparar_, nucleo, huellas_prioridad_,
-          prioridad_ok ? "" : " (el kernel NO acepto la prioridad)", kFases[std::clamp<int32_t>(huellas_fase_, 0, 2)]);
+          planned_fingerprints_report_, comparison_fingerprints_report_, thread_fingerprints_report_,
+          double(thread_fingerprints_report_ns_) / 1e6, double(thread_raw_fingerprint_report_ns_) / 1e6,
+          ring_fingerprints_report_, double(ring_fingerprints_report_ns_) / 1e6,
+          double(snapshots_report_bytes_) / 1048576.0, double(snapshots_report_ns_) / 1e6,
+          double(fingerprints_wait_report_ns_) / 1e6, fingerprints_waits_report_, double(worst_fingerprints_wait_ns_) / 1e6,
+          fingerprints_without_room_report_, compared_fingerprints_, fingerprints_without_compare_, core, priority_fingerprints_,
+          priority_ok ? "" : " (el kernel NO acepto la prioridad)", kPhases[std::clamp<int32_t>(phase_fingerprints_, 0, 2)]);
     }
-    if (huellas_fase_ == kHuellasAplicando && huellas_hilo_informe_ + huellas_anillo_informe_ >= 16) {
-      const bool compensa = ns_huellas_hilo_informe_ > ns_instantaneas_informe_ + ns_espera_huellas_informe_;
-      informes_sin_compensar_huellas_ = compensa ? 0 : informes_sin_compensar_huellas_ + 1;
-      if (informes_sin_compensar_huellas_ >= 3) {
-        ApagarHuellas(fmt::format("no compensa: en 3 informes seguidos el hilo le quito al anillo menos de lo que el "
+    if (phase_fingerprints_ == kApplyingFingerprints && thread_fingerprints_report_ + ring_fingerprints_report_ >= 16) {
+      const bool compensates = thread_fingerprints_report_ns_ > snapshots_report_ns_ + fingerprints_wait_report_ns_;
+      reports_without_fingerprints_compensate_ = compensates ? 0 : reports_without_fingerprints_compensate_ + 1;
+      if (reports_without_fingerprints_compensate_ >= 3) {
+        DisableFingerprints(fmt::format("no compensa: en 3 informes seguidos el hilo le quito al anillo menos de lo que el "
                                   "anillo gasto copiando y esperandolo (el ultimo: hilo {:.1f} ms, copias {:.1f} ms, "
                                   "espera {:.1f} ms)",
-                                  double(ns_huellas_hilo_informe_) / 1e6, double(ns_instantaneas_informe_) / 1e6,
-                                  double(ns_espera_huellas_informe_) / 1e6));
+                                  double(thread_fingerprints_report_ns_) / 1e6, double(snapshots_report_ns_) / 1e6,
+                                  double(fingerprints_wait_report_ns_) / 1e6));
       }
     }
-    huellas_planeadas_informe_ = 0;
-    huellas_comparacion_informe_ = 0;
-    huellas_hilo_informe_ = 0;
-    huellas_anillo_informe_ = 0;
-    ns_huellas_hilo_informe_ = 0;
-    ns_huella_cruda_hilo_informe_ = 0;
-    ns_huellas_anillo_informe_ = 0;
-    ns_instantaneas_informe_ = 0;
-    bytes_instantaneas_informe_ = 0;
-    ns_espera_huellas_informe_ = 0;
-    ns_espera_huellas_peor_ = 0;
-    esperas_huellas_informe_ = 0;
-    huellas_sin_sitio_informe_ = 0;
+    planned_fingerprints_report_ = 0;
+    comparison_fingerprints_report_ = 0;
+    thread_fingerprints_report_ = 0;
+    ring_fingerprints_report_ = 0;
+    thread_fingerprints_report_ns_ = 0;
+    thread_raw_fingerprint_report_ns_ = 0;
+    ring_fingerprints_report_ns_ = 0;
+    snapshots_report_ns_ = 0;
+    snapshots_report_bytes_ = 0;
+    fingerprints_wait_report_ns_ = 0;
+    worst_fingerprints_wait_ns_ = 0;
+    fingerprints_waits_report_ = 0;
+    fingerprints_without_room_report_ = 0;
   }
 
   // --- Vertex copies on a separate thread (nfsmw_nativo_subidas_hilo) ------------------------------------------
@@ -7058,449 +7058,449 @@ class DibujosVulkanImpl final : public DibujosVulkan {
    * behaviour). The plain wait no longer waits forever: after 2 s it takes the batch mutex and finishes the
    * job. The batch mutex has no timeout because inside it the thread only takes and copies.
    */
-  enum FaseCopias : int32_t { kCopiasSinAyuda = 0, kCopiasMirando = 1, kCopiasAplicando = 2 };
+  enum CopiesPhase : int32_t { kCopiesWithoutHelp = 0, kPeekingCopies = 1, kApplyingCopies = 2 };
 
-  void AvisarOtroHiloCopias(const char* donde) {
-    if (!copias_otro_hilo_avisado_) {
-      copias_otro_hilo_avisado_ = true;
-      REXLOG_ERROR("[nativo] C6: {} desde un hilo que no es el que encola las copias de vertices", donde);
+  void WarnCopiesOtherThread(const char* where) {
+    if (!warned_thread_other_copies_) {
+      warned_thread_other_copies_ = true;
+      REXLOG_ERROR("[nativo] C6: {} desde un hilo que no es el que encola las copias de vertices", where);
     }
   }
 
-  bool EncolarCopia(const TrabajoCopia& trabajo) {
-    if (copias_sin_hilo_) {
+  bool EnqueueCopy(const CopyJob& job) {
+    if (copies_without_thread_) {
       // Thread switched off by a DIFERENCIA (or it could not be created): the copy goes on the ring.
-      ++copias_inf_.en_linea;
-      copias_inf_.bytes_en_linea += uint64_t(trabajo.palabras) * 4;
+      ++inf_copies_.in_line;
+      inf_copies_.in_line_bytes += uint64_t(job.word_data) * 4;
       return false;
     }
-    if (!copias_hilo_.joinable()) {
-      copias_productor_ = std::this_thread::get_id();
-      copias_fase_ = copias_ayuda_pedida_ ? kCopiasMirando : kCopiasSinAyuda;
+    if (!thread_copies_.joinable()) {
+      producer_copies_ = std::this_thread::get_id();
+      phase_copies_ = requested_help_copies_ ? kPeekingCopies : kCopiesWithoutHelp;
 #if REX_PLATFORM_SWITCH
-      const int anillo_nucleo = RexSwitchCurrentCore();  // asked by the ring, which creates the thread
+      const int core_ring = RexSwitchCurrentCore();  // asked by the ring, which creates the thread
 #else
-      const int anillo_nucleo = -1;
+      const int core_ring = -1;
 #endif
       try {
-        copias_hilo_ = std::thread([this, anillo_nucleo] {
+        thread_copies_ = std::thread([this, core_ring] {
           rex::thread::set_current_thread_name("NFSMW copias de vertices");
 #if REX_PLATFORM_SWITCH
           // nfsmw_nativo_subidas_hilo_prioridad (see the cvar).
-          const int32_t prioridad = REXCVAR_GET(nfsmw_nativo_subidas_hilo_prioridad);
-          const bool prioridad_ok = RexSwitchSetCurrentThreadPriorityOk(int(prioridad));
+          const int32_t priority = REXCVAR_GET(nfsmw_nativo_subidas_hilo_prioridad);
+          const bool priority_ok = RexSwitchSetCurrentThreadPriorityOk(int(priority));
           // nfsmw_nativo_subidas_hilo_nucleo (see the cvar).
-          const int32_t pedido = REXCVAR_GET(nfsmw_nativo_subidas_hilo_nucleo);
-          const int nucleo = pedido == -2 ? (anillo_nucleo == 2 ? 1 : 2) : int(pedido);
-          const bool nucleo_ok = nucleo < 0 || RexSwitchSetCurrentThreadCore(nucleo);
+          const int32_t request = REXCVAR_GET(nfsmw_nativo_subidas_hilo_nucleo);
+          const int core = request == -2 ? (core_ring == 2 ? 1 : 2) : int(request);
+          const bool core_ok = core < 0 || RexSwitchSetCurrentThreadCore(core);
           REXLOG_INFO("[nativo] C6: hilo de copias de vertices a prioridad {:#x}{}; nucleo preferido {}{} (el anillo corre "
                       "en el {}), ahora en el {}",
-                      prioridad, prioridad_ok ? "" : " (NO aceptada: se queda con la de su creacion)", nucleo,
-                      nucleo_ok ? "" : " (NO aceptado)", anillo_nucleo, RexSwitchCurrentCore());
+                      priority, priority_ok ? "" : " (NO aceptada: se queda con la de su creacion)", core,
+                      core_ok ? "" : " (NO aceptado)", core_ring, RexSwitchCurrentCore());
 #endif
-          BucleCopias();
+          CopiesLoop();
         });
       } catch (const std::system_error& error) {
-        copias_sin_hilo_ = true;
+        copies_without_thread_ = true;
         REXLOG_ERROR("[nativo] C6: no se pudo crear el hilo de copias de vertices ({}): las copias van en el anillo",
                      error.what());
         return false;
       }
       REXLOG_INFO("[nativo] C6: copias de vertices en un hilo aparte (nfsmw_nativo_subidas_hilo); el anillo las copia "
                   "el mismo al esperarlas (nfsmw_nativo_subidas_ayuda) = {}",
-                  copias_ayuda_pedida_
+                  requested_help_copies_
                       ? fmt::format("SI, en trozos de {}; fase MIRANDO durante las {} primeras esperas con copias "
                                     "pendientes",
-                                    kCopiasPorTrozo, kEsperasCopiasMirando)
+                                    kCopiesPerChunk, kPeekingCopiesWaits)
                       : std::string("no, espera al hilo como antes"));
-    } else if (std::this_thread::get_id() != copias_productor_) {
-      AvisarOtroHiloCopias("EncolarCopia");
+    } else if (std::this_thread::get_id() != producer_copies_) {
+      WarnCopiesOtherThread("EncolarCopia");
     }
-    const size_t escritas = copias_escritas_.load(std::memory_order_relaxed);
-    if (escritas - copias_hechas_.load(std::memory_order_acquire) >= copias_.size()) {
-      ++copias_en_linea_;
-      ++copias_inf_.en_linea;
-      copias_inf_.bytes_en_linea += uint64_t(trabajo.palabras) * 4;
+    const size_t written_items = written_copies_.load(std::memory_order_relaxed);
+    if (written_items - done_copies_.load(std::memory_order_acquire) >= copies_.size()) {
+      ++copies_in_line_;
+      ++inf_copies_.in_line;
+      inf_copies_.in_line_bytes += uint64_t(job.word_data) * 4;
       return false;
     }
-    copias_[escritas & (copias_.size() - 1)] = trabajo;
-    copias_escritas_.store(escritas + 1);
-    ++copias_inf_.encoladas;
-    copias_inf_.bytes_encolados += uint64_t(trabajo.palabras) * 4;
+    copies_[written_items & (copies_.size() - 1)] = job;
+    written_copies_.store(written_items + 1);
+    ++inf_copies_.queued;
+    inf_copies_.queued_bytes += uint64_t(job.word_data) * 4;
     // Wake-up every kCopiasPorAviso copies: waking the thread as soon as it slept woke it on almost every
     // copy, and every wake-up goes through the kernel (1.4 % of the ring and almost all of the copy thread's
     // CPU). Whatever is left without a wake-up is collected by EsperarSubidas.
-    if (((escritas + 1) & (kCopiasPorAviso - 1)) == 0) {
-      DespertarCopias();
+    if (((written_items + 1) & (kCopiesPerWarning - 1)) == 0) {
+      WakeCopies();
     }
     return true;
   }
 
-  void DespertarCopias() {
-    bool avisar;
+  void WakeCopies() {
+    bool warn;
     {
-      std::lock_guard<std::mutex> cerrojo(copias_mutex_);
-      avisar = copias_durmiendo_;
+      std::lock_guard<std::mutex> mutex_lock(mutex_copies_);
+      warn = sleeping_copies_;
     }
-    if (avisar) {
-      copias_cv_.notify_one();
+    if (warn) {
+      cv_copies_.notify_one();
     }
   }
 
   // Fence measurement only (sistema.cpp, AnotarVallaCopias).
-  size_t CopiasPendientes() const override {
-    if (!copias_hilo_.joinable()) {
+  size_t PendingCopies() const override {
+    if (!thread_copies_.joinable()) {
       return 0;
     }
-    const size_t escritas = copias_escritas_.load(std::memory_order_relaxed);
-    const size_t hechas = copias_hechas_.load(std::memory_order_relaxed);
-    return escritas > hechas ? escritas - hechas : 0;
+    const size_t written_items = written_copies_.load(std::memory_order_relaxed);
+    const size_t done = done_copies_.load(std::memory_order_relaxed);
+    return written_items > done ? written_items - done : 0;
   }
 
-  void EsperarSubidas() override {
-    if (!copias_hilo_.joinable()) {
+  void WaitUploads() override {
+    if (!thread_copies_.joinable()) {
       return;
     }
-    const bool productor = std::this_thread::get_id() == copias_productor_;
-    if (!productor) {
-      AvisarOtroHiloCopias("EsperarSubidas");
+    const bool producer = std::this_thread::get_id() == producer_copies_;
+    if (!producer) {
+      WarnCopiesOtherThread("EsperarSubidas");
     }
-    const size_t objetivo = copias_escritas_.load(std::memory_order_relaxed);
-    if (copias_hechas_.load(std::memory_order_acquire) == objetivo) {
-      if (productor) {
-        ComprobarCopias(objetivo);  // what the thread did since the last wait
+    const size_t goal = written_copies_.load(std::memory_order_relaxed);
+    if (done_copies_.load(std::memory_order_acquire) == goal) {
+      if (producer) {
+        CheckCopies(goal);  // what the thread did since the last wait
       }
       return;
     }
-    const auto antes = std::chrono::steady_clock::now();
+    const auto before = std::chrono::steady_clock::now();
     // What the thread had not taken yet on arrival (while observing, what the ring would have copied).
-    copias_inf_.sin_tomar += objetivo - std::min(objetivo, copias_tomadas_.load(std::memory_order_acquire));
-    uint64_t ns_ayudando = 0;
-    uint64_t ayudadas = 0;
-    if (productor && copias_fase_ == kCopiasAplicando) {
+    inf_copies_.without_take += goal - std::min(goal, taken_copies_.load(std::memory_order_acquire));
+    uint64_t helping_ns = 0;
+    uint64_t assisted = 0;
+    if (producer && phase_copies_ == kApplyingCopies) {
       // 1. What the thread has not taken yet, the ring copies in batches: if the thread is running, they
       //    share it.
       uint64_t bytes = 0;
-      while (TomarYCopiar(true, ayudadas, bytes)) {
+      while (TakeAndCopy(true, assisted, bytes)) {
       }
-      const auto tras_ayudar = std::chrono::steady_clock::now();
-      ns_ayudando = uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(tras_ayudar - antes).count());
-      copias_ayudadas_ += ayudadas;
-      copias_bytes_ayudados_ += bytes;
-      copias_ns_ayudando_ += ns_ayudando;
-      copias_inf_.ayudadas += ayudadas;
-      copias_inf_.bytes_ayudados += bytes;
-      copias_inf_.ns_ayudando += ns_ayudando;
-      if (ayudadas) {
-        ++copias_inf_.esperas_con_ayuda;
+      const auto after_help = std::chrono::steady_clock::now();
+      helping_ns = uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(after_help - before).count());
+      assisted_copies_ += assisted;
+      assisted_bytes_copies_ += bytes;
+      helping_ns_copies_ += helping_ns;
+      inf_copies_.assisted += assisted;
+      inf_copies_.assisted_bytes += bytes;
+      inf_copies_.helping_ns += helping_ns;
+      if (assisted) {
+        ++inf_copies_.waits_with_help;
       }
       // 2. What is missing is the batch the thread is working on: wait on its mutex, which lends the thread
       //    the ring's priority until it releases it.
-      if (copias_hechas_.load(std::memory_order_acquire) != objetivo) {
+      if (done_copies_.load(std::memory_order_acquire) != goal) {
         {
-          std::lock_guard<std::mutex> trozo(copias_trozo_mutex_);
-          if (copias_hechas_.load(std::memory_order_acquire) != objetivo) {
-            RepararCopias(objetivo, "con el cerrojo del trozo el hilo no tiene nada entre manos y aun faltan copias");
+          std::lock_guard<std::mutex> chunk(mutex_chunk_copies_);
+          if (done_copies_.load(std::memory_order_acquire) != goal) {
+            RepairCopies(goal, "con el cerrojo del trozo el hilo no tiene nada entre manos y aun faltan copias");
           }
         }
-        const uint64_t ns_trozo = uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                               std::chrono::steady_clock::now() - tras_ayudar)
+        const uint64_t chunk_ns = uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                               std::chrono::steady_clock::now() - after_help)
                                                .count());
-        ++copias_inf_.esperas_trozo;
-        copias_inf_.ns_trozo += ns_trozo;
-        copias_inf_.ns_trozo_peor = std::max(copias_inf_.ns_trozo_peor, ns_trozo);
+        ++inf_copies_.chunk_waits;
+        inf_copies_.chunk_ns += chunk_ns;
+        inf_copies_.worst_chunk_ns = std::max(inf_copies_.worst_chunk_ns, chunk_ns);
       }
     } else {
-      EsperarCopiasComoSiempre(objetivo);
+      WaitCopiesAsAlways(goal);
     }
-    if (productor) {
-      ComprobarCopias(objetivo);
-      if (copias_fase_ == kCopiasMirando && ++copias_esperas_mirando_ >= kEsperasCopiasMirando) {
-        copias_fase_ = kCopiasAplicando;
+    if (producer) {
+      CheckCopies(goal);
+      if (phase_copies_ == kPeekingCopies && ++peeking_waits_copies_ >= kPeekingCopiesWaits) {
+        phase_copies_ = kApplyingCopies;
         REXLOG_INFO("[nativo] C6: copias de vertices: {} esperas con copias pendientes en fase MIRANDO y {} copias "
                     "comprobadas, todas con su marca y los contadores cuadrados. Pasa a fase APLICANDO: el anillo "
                     "copia lo que el hilo no ha tomado y espera el trozo en curso con su cerrojo",
-                    copias_esperas_mirando_, copias_comprobadas_);
+                    peeking_waits_copies_, checked_copies_);
       }
     }
-    ++esperas_copias_;
+    ++copies_waits_;
     const uint64_t ns_total = uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                           std::chrono::steady_clock::now() - antes)
+                                           std::chrono::steady_clock::now() - before)
                                            .count());
     // The waiting time now counts only the wait; what the ring copies is counted separately (as helping).
-    const uint64_t ns_espera = ns_total > ns_ayudando ? ns_total - ns_ayudando : 0;
-    ns_esperando_copias_ += ns_espera;
-    ++copias_inf_.esperas;
-    copias_inf_.ns_espera += ns_espera;
-    copias_inf_.ns_espera_peor = std::max(copias_inf_.ns_espera_peor, ns_espera);
+    const uint64_t wait_ns = ns_total > helping_ns ? ns_total - helping_ns : 0;
+    copies_waiting_ns_ += wait_ns;
+    ++inf_copies_.waits;
+    inf_copies_.wait_ns += wait_ns;
+    inf_copies_.worst_wait_ns = std::max(inf_copies_.worst_wait_ns, wait_ns);
     // And to the "[tiron] anillo" line (stall_waits.h). This is only reached when the ring really
     // waits, a few times per frame: the fetch_add calls do not show.
-    nfsmw::esperas::g_ns_esperando_copias.fetch_add(ns_espera, std::memory_order_relaxed);
-    nfsmw::esperas::g_esperas_copias.fetch_add(1, std::memory_order_relaxed);
-    nfsmw::esperas::g_ns_ayudando_copias.fetch_add(ns_ayudando, std::memory_order_relaxed);
-    nfsmw::esperas::g_copias_ayudadas.fetch_add(ayudadas, std::memory_order_relaxed);
+    nfsmw::waits::g_copies_waiting_ns.fetch_add(wait_ns, std::memory_order_relaxed);
+    nfsmw::waits::g_copies_waits.fetch_add(1, std::memory_order_relaxed);
+    nfsmw::waits::g_copies_helping_ns.fetch_add(helping_ns, std::memory_order_relaxed);
+    nfsmw::waits::g_assisted_copies.fetch_add(assisted, std::memory_order_relaxed);
   }
 
   // The plain wait (observing and no-help phases, or when another thread waits): the ring sleeps until the
   // thread finishes. After 2 s it no longer keeps waiting forever (the earlier hang): it takes the batch
   // mutex, which lends its priority to the thread if it is copying, and if copies are still missing with
   // the thread out of its loop, the ring does them and switches the thread off.
-  void EsperarCopiasComoSiempre(size_t objetivo) {
-    bool a_tiempo = false;
+  void WaitCopiesAsAlways(size_t goal) {
+    bool to_time = false;
     {
-      std::unique_lock<std::mutex> cerrojo(copias_mutex_);
-      if (copias_durmiendo_) {
-        copias_cv_.notify_one();  // a wake-up EncolarCopia skipped (it only wakes every kCopiasPorAviso copies)
+      std::unique_lock<std::mutex> mutex_lock(mutex_copies_);
+      if (sleeping_copies_) {
+        cv_copies_.notify_one();  // a wake-up EncolarCopia skipped (it only wakes every kCopiasPorAviso copies)
       }
-      copias_esperando_ = true;
-      a_tiempo = copias_hechas_cv_.wait_for(cerrojo, std::chrono::seconds(2), [this, objetivo] {
-        return copias_hechas_.load(std::memory_order_acquire) == objetivo;
+      waiting_copies_ = true;
+      to_time = cv_done_copies_.wait_for(mutex_lock, std::chrono::seconds(2), [this, goal] {
+        return done_copies_.load(std::memory_order_acquire) == goal;
       });
-      copias_esperando_ = false;
+      waiting_copies_ = false;
     }
-    ++copias_inf_.esperas_enteras;
-    if (a_tiempo) {
+    ++inf_copies_.ints_waits;
+    if (to_time) {
       return;
     }
     // Should never happen: diagnostic for a hang once seen in the menus.
     REXLOG_ERROR("[nativo] C6: el hilo del anillo lleva 2 s esperando las copias de vertices: objetivo {}, hechas {}, "
                  "tomadas {}, escritas {}, copiadas por el hilo {}",
-                 objetivo, copias_hechas_.load(std::memory_order_acquire),
-                 copias_tomadas_.load(std::memory_order_acquire), copias_escritas_.load(std::memory_order_acquire),
-                 copias_progreso_.load(std::memory_order_relaxed));
-    std::lock_guard<std::mutex> trozo(copias_trozo_mutex_);
-    if (copias_hechas_.load(std::memory_order_acquire) != objetivo) {
-      RepararCopias(objetivo, "2 s esperando al hilo y, con el hilo fuera de su bucle, siguen faltando copias");
+                 goal, done_copies_.load(std::memory_order_acquire),
+                 taken_copies_.load(std::memory_order_acquire), written_copies_.load(std::memory_order_acquire),
+                 progress_copies_.load(std::memory_order_relaxed));
+    std::lock_guard<std::mutex> chunk(mutex_chunk_copies_);
+    if (done_copies_.load(std::memory_order_acquire) != goal) {
+      RepairCopies(goal, "2 s esperando al hilo y, con el hilo fuera de su bucle, siguen faltando copias");
     }
   }
 
   // Takes the next untaken batch (up to kCopiasPorTrozo copies, in order) and copies it. Used by the
   // thread, holding copias_trozo_mutex_, and by the ring when helping. false = nothing was left to take.
-  bool TomarYCopiar(bool anillo, uint64_t& copias, uint64_t& bytes) {
-    const size_t escritas = copias_escritas_.load(std::memory_order_acquire);
-    size_t tomadas = copias_tomadas_.load(std::memory_order_acquire);
+  bool TakeAndCopy(bool ring, uint64_t& copies, uint64_t& bytes) {
+    const size_t written_items = written_copies_.load(std::memory_order_acquire);
+    size_t taken = taken_copies_.load(std::memory_order_acquire);
     size_t n = 0;
     do {
-      if (tomadas >= escritas) {
+      if (taken >= written_items) {
         return false;
       }
-      n = std::min<size_t>(escritas - tomadas, kCopiasPorTrozo);
-    } while (!copias_tomadas_.compare_exchange_weak(tomadas, tomadas + n, std::memory_order_acq_rel,
+      n = std::min<size_t>(written_items - taken, kCopiesPerChunk);
+    } while (!taken_copies_.compare_exchange_weak(taken, taken + n, std::memory_order_acq_rel,
                                                     std::memory_order_acquire));
-    const size_t mascara = copias_.size() - 1;
-    for (size_t i = tomadas; i < tomadas + n; ++i) {
-      const TrabajoCopia& trabajo = copias_[i & mascara];
-      CopiarVertices(trabajo);
-      bytes += uint64_t(trabajo.palabras) * 4;
-      copias_marcas_[i & mascara].store(uint32_t(i + 1), std::memory_order_relaxed);
-      if (!anillo) {
-        copias_progreso_.store(i + 1, std::memory_order_relaxed);  // for the EsperarSubidas diagnostic
+    const size_t mask = copies_.size() - 1;
+    for (size_t i = taken; i < taken + n; ++i) {
+      const CopyJob& job = copies_[i & mask];
+      CopyVertices(job);
+      bytes += uint64_t(job.word_data) * 4;
+      marks_copies_[i & mask].store(uint32_t(i + 1), std::memory_order_relaxed);
+      if (!ring) {
+        progress_copies_.store(i + 1, std::memory_order_relaxed);  // for the EsperarSubidas diagnostic
       }
     }
-    copias += n;
-    copias_hechas_.fetch_add(n, std::memory_order_acq_rel);  // publishes the copies and their marks
+    copies += n;
+    done_copies_.fetch_add(n, std::memory_order_acq_rel);  // publishes the copies and their marks
     return true;
   }
 
-  bool HayCopiasSinTomar() const {
-    return copias_tomadas_.load(std::memory_order_acquire) != copias_escritas_.load(std::memory_order_acquire);
+  bool HasCopiesWithoutTake() const {
+    return taken_copies_.load(std::memory_order_acquire) != written_copies_.load(std::memory_order_acquire);
   }
 
   // The guard, on each wait and with everything finished (the ring does not queue while waiting and the
   // thread has nothing half taken): what was queued since the previous one has its mark and the counters
   // add up. Ring only.
-  void ComprobarCopias(size_t objetivo) {
-    if (objetivo == copias_verificadas_ || copias_sin_hilo_) {
+  void CheckCopies(size_t goal) {
+    if (goal == verified_copies_ || copies_without_thread_) {
       return;
     }
-    const size_t mascara = copias_.size() - 1;
-    const size_t desde =
-        std::max(copias_verificadas_, objetivo > copias_.size() ? objetivo - copias_.size() : size_t(0));
-    size_t sin_marca = 0;
-    size_t primera = 0;
-    for (size_t i = desde; i < objetivo; ++i) {
-      if (copias_marcas_[i & mascara].load(std::memory_order_relaxed) != uint32_t(i + 1)) {
-        if (!sin_marca) {
-          primera = i;
+    const size_t mask = copies_.size() - 1;
+    const size_t from =
+        std::max(verified_copies_, goal > copies_.size() ? goal - copies_.size() : size_t(0));
+    size_t without_mark = 0;
+    size_t is_first = 0;
+    for (size_t i = from; i < goal; ++i) {
+      if (marks_copies_[i & mask].load(std::memory_order_relaxed) != uint32_t(i + 1)) {
+        if (!without_mark) {
+          is_first = i;
         }
-        ++sin_marca;
+        ++without_mark;
       }
     }
-    copias_comprobadas_ += objetivo - desde;
-    copias_inf_.comprobadas += objetivo - desde;
-    const size_t tomadas = copias_tomadas_.load(std::memory_order_acquire);
-    const size_t hechas = copias_hechas_.load(std::memory_order_acquire);
-    if (!sin_marca && tomadas == objetivo && hechas == objetivo) {
-      copias_verificadas_ = objetivo;
+    checked_copies_ += goal - from;
+    inf_copies_.checked += goal - from;
+    const size_t taken = taken_copies_.load(std::memory_order_acquire);
+    const size_t done = done_copies_.load(std::memory_order_acquire);
+    if (!without_mark && taken == goal && done == goal) {
+      verified_copies_ = goal;
       return;
     }
-    const std::string motivo = sin_marca ? fmt::format("{} de {} copias sin su marca (la primera, la {})", sin_marca,
-                                                       objetivo - desde, primera)
+    const std::string reason = without_mark ? fmt::format("{} de {} copias sin su marca (la primera, la {})", without_mark,
+                                                       goal - from, is_first)
                                          : std::string("todas con su marca, pero los contadores no cuadran");
-    std::lock_guard<std::mutex> trozo(copias_trozo_mutex_);  // the thread, out of its copy loop
-    if (copias_fase_ == kCopiasAplicando && tomadas == objetivo && hechas == objetivo) {
+    std::lock_guard<std::mutex> chunk(mutex_chunk_copies_);  // the thread, out of its copy loop
+    if (phase_copies_ == kApplyingCopies && taken == goal && done == goal) {
       // With the counters right, the suspect is the help path: redo whatever is missing and go back to the
       // plain wait.
-      const size_t rehechas = RehacerSinMarca(objetivo);
-      copias_verificadas_ = objetivo;
-      ++copias_diferencias_;
-      copias_fase_ = kCopiasSinAyuda;
+      const size_t redone = RedoWithoutMark(goal);
+      verified_copies_ = goal;
+      ++differences_copies_;
+      phase_copies_ = kCopiesWithoutHelp;
       REXLOG_ERROR("[nativo] C6: copias de vertices: DIFERENCIA: {} ({} encoladas, contadores cuadrados; {} rehechas "
                    "en el anillo antes de enviar). Ayuda del anillo APAGADA para el resto de la sesion: espera al hilo "
                    "como antes",
-                   motivo, objetivo, rehechas);
+                   reason, goal, redone);
       return;
     }
-    RepararCopias(objetivo, motivo);
+    RepairCopies(goal, reason);
   }
 
   // Copies on the ring whatever was queued up to `objetivo` (since the last check, and at most one lap of
   // the queue) that lacks its mark, and marks it. With copias_trozo_mutex_ held. Returns how many.
-  size_t RehacerSinMarca(size_t objetivo) {
-    const size_t mascara = copias_.size() - 1;
-    const size_t desde =
-        std::max(copias_verificadas_, objetivo > copias_.size() ? objetivo - copias_.size() : size_t(0));
-    size_t rehechas = 0;
-    for (size_t i = desde; i < objetivo; ++i) {
-      if (copias_marcas_[i & mascara].load(std::memory_order_relaxed) != uint32_t(i + 1)) {
-        CopiarVertices(copias_[i & mascara]);
-        copias_marcas_[i & mascara].store(uint32_t(i + 1), std::memory_order_relaxed);
-        ++rehechas;
+  size_t RedoWithoutMark(size_t goal) {
+    const size_t mask = copies_.size() - 1;
+    const size_t from =
+        std::max(verified_copies_, goal > copies_.size() ? goal - copies_.size() : size_t(0));
+    size_t redone = 0;
+    for (size_t i = from; i < goal; ++i) {
+      if (marks_copies_[i & mask].load(std::memory_order_relaxed) != uint32_t(i + 1)) {
+        CopyVertices(copies_[i & mask]);
+        marks_copies_[i & mask].store(uint32_t(i + 1), std::memory_order_relaxed);
+        ++redone;
       }
     }
-    return rehechas;
+    return redone;
   }
 
   // Should never happen. With copias_trozo_mutex_ held, i.e. with the thread out of its copy loop and
   // nothing half taken: the ring copies whatever is missing up to `objetivo` (before submitting and before
   // returning the read pointer), the counters are left consistent and the thread is switched off for the
   // session.
-  void RepararCopias(size_t objetivo, const std::string& motivo) {
-    const size_t tomadas = copias_tomadas_.load(std::memory_order_acquire);
-    const size_t hechas = copias_hechas_.load(std::memory_order_acquire);
-    const size_t rehechas = RehacerSinMarca(objetivo);
-    copias_tomadas_.store(objetivo, std::memory_order_release);
-    copias_hechas_.store(objetivo, std::memory_order_release);
-    copias_verificadas_ = objetivo;
-    ++copias_diferencias_;
-    copias_sin_hilo_ = true;
+  void RepairCopies(size_t goal, const std::string& reason) {
+    const size_t taken = taken_copies_.load(std::memory_order_acquire);
+    const size_t done = done_copies_.load(std::memory_order_acquire);
+    const size_t redone = RedoWithoutMark(goal);
+    taken_copies_.store(goal, std::memory_order_release);
+    done_copies_.store(goal, std::memory_order_release);
+    verified_copies_ = goal;
+    ++differences_copies_;
+    copies_without_thread_ = true;
     REXLOG_ERROR("[nativo] C6: copias de vertices: DIFERENCIA: {} (encoladas {}, tomadas {}, hechas {}; {} rehechas en "
                  "el anillo antes de enviar). Hilo de copias APAGADO para el resto de la sesion: las copias van en el "
                  "anillo, como antes de la build 90",
-                 motivo, objetivo, tomadas, hechas, rehechas);
+                 reason, goal, taken, done, redone);
   }
 
-  const char* NombreFaseCopias() const {
-    if (copias_sin_hilo_) {
+  const char* CopiesPhaseName() const {
+    if (copies_without_thread_) {
       return "SIN HILO (copias en el anillo)";
     }
-    return copias_fase_ == kCopiasAplicando ? "APLICANDO" : copias_fase_ == kCopiasMirando ? "MIRANDO" : "SIN AYUDA";
+    return phase_copies_ == kApplyingCopies ? "APLICANDO" : phase_copies_ == kPeekingCopies ? "MIRANDO" : "SIN AYUDA";
   }
 
   // Every 10 s, if there were copies: who did them and how long the ring really waited. Ring only.
-  void InformeCopias() {
-    if (!copias_hilo_.joinable() && !copias_sin_hilo_) {
+  void CopiesReport() {
+    if (!thread_copies_.joinable() && !copies_without_thread_) {
       return;
     }
-    const auto ahora = std::chrono::steady_clock::now();
-    if (ahora - copias_informe_ < std::chrono::seconds(10)) {
+    const auto now_time = std::chrono::steady_clock::now();
+    if (now_time - copies_report_ < std::chrono::seconds(10)) {
       return;
     }
-    copias_informe_ = ahora;
-    const uint64_t hilo_n = copias_hilo_n_.load(std::memory_order_relaxed);
-    const uint64_t hilo_bytes = copias_hilo_bytes_.load(std::memory_order_relaxed);
-    const uint64_t d_hilo_n = hilo_n - copias_hilo_n_previo_;
-    const uint64_t d_hilo_bytes = hilo_bytes - copias_hilo_bytes_previo_;
-    copias_hilo_n_previo_ = hilo_n;
-    copias_hilo_bytes_previo_ = hilo_bytes;
-    const InformeCopiasCifras& c = copias_inf_;
-    if (c.encoladas || c.en_linea || c.esperas) {
-      NFSMW_INFORME_ANILLO(
+    copies_report_ = now_time;
+    const uint64_t n_thread = n_thread_copies_.load(std::memory_order_relaxed);
+    const uint64_t thread_bytes = thread_copies_bytes_.load(std::memory_order_relaxed);
+    const uint64_t d_n_thread = n_thread - n_thread_copies_previous_;
+    const uint64_t d_thread_bytes = thread_bytes - thread_copies_previous_bytes_;
+    n_thread_copies_previous_ = n_thread;
+    thread_copies_previous_bytes_ = thread_bytes;
+    const CopiesReportFigures& c = inf_copies_;
+    if (c.queued || c.in_line || c.waits) {
+      NFSMW_RING_REPORT(
           "[nativo] C6 copias de vertices (build 185), ultimos 10 s: {} encoladas ({:.1f} MB) y {} en el anillo sin "
           "pasar por la cola ({:.1f} MB); el hilo copio {} ({:.1f} MB) y el anillo ayudo con {} ({:.1f} MB, {:.1f} ms) "
           "en {} de {} esperas con copias pendientes ({} sin tomar al llegar); espero el trozo del hilo {} veces "
           "({:.2f} ms, peor {:.2f} ms) y entero {} veces; espera pura {:.1f} ms (peor {:.2f} ms); {} copias "
           "comprobadas, {} diferencias; fase {}",
-          c.encoladas, double(c.bytes_encolados) / 1048576.0, c.en_linea, double(c.bytes_en_linea) / 1048576.0,
-          d_hilo_n, double(d_hilo_bytes) / 1048576.0, c.ayudadas, double(c.bytes_ayudados) / 1048576.0,
-          double(c.ns_ayudando) / 1e6, c.esperas_con_ayuda, c.esperas, c.sin_tomar, c.esperas_trozo,
-          double(c.ns_trozo) / 1e6, double(c.ns_trozo_peor) / 1e6, c.esperas_enteras, double(c.ns_espera) / 1e6,
-          double(c.ns_espera_peor) / 1e6, c.comprobadas, copias_diferencias_, NombreFaseCopias());
+          c.queued, double(c.queued_bytes) / 1048576.0, c.in_line, double(c.in_line_bytes) / 1048576.0,
+          d_n_thread, double(d_thread_bytes) / 1048576.0, c.assisted, double(c.assisted_bytes) / 1048576.0,
+          double(c.helping_ns) / 1e6, c.waits_with_help, c.waits, c.without_take, c.chunk_waits,
+          double(c.chunk_ns) / 1e6, double(c.worst_chunk_ns) / 1e6, c.ints_waits, double(c.wait_ns) / 1e6,
+          double(c.worst_wait_ns) / 1e6, c.checked, differences_copies_, CopiesPhaseName());
     }
-    copias_inf_ = InformeCopiasCifras{};
+    inf_copies_ = CopiesReportFigures{};
   }
 
   // The per-fetch-constant sampler table, every 10 s: hits, and misses by cause.
-  void InformeCacheFetch() {
-    const auto ahora = std::chrono::steady_clock::now();
-    if (ahora - fetch_informe_ < std::chrono::seconds(10)) {
+  void CacheFetchReport() {
+    const auto now_time = std::chrono::steady_clock::now();
+    if (now_time - fetch_report_ < std::chrono::seconds(10)) {
       return;
     }
-    fetch_informe_ = ahora;
-    const std::array<uint64_t, 6> ahora_cifras{samplers_cache_fetch_, fetch_fallos_choque_, fetch_fallos_vacia_,
-                                               fetch_fallos_generacion_, fetch_fallos_caducada_, samplers_cache_};
+    fetch_report_ = now_time;
+    const std::array<uint64_t, 6> figures_now{samplers_cache_fetch_, collision_failures_fetch_, empty_failures_fetch_,
+                                               generation_failures_fetch_, expired_failures_fetch_, samplers_cache_};
     std::array<uint64_t, 6> d{};
     for (size_t i = 0; i < d.size(); ++i) {
-      d[i] = ahora_cifras[i] - fetch_informe_previos_[i];
+      d[i] = figures_now[i] - fetch_report_previous_[i];
     }
-    fetch_informe_previos_ = ahora_cifras;
-    const uint64_t fallos = d[1] + d[2] + d[3] + d[4];
-    if (d[0] + fallos == 0) {
+    fetch_report_previous_ = figures_now;
+    const uint64_t failures = d[1] + d[2] + d[3] + d[4];
+    if (d[0] + failures == 0) {
       return;
     }
-    NFSMW_INFORME_ANILLO(
+    NFSMW_RING_REPORT(
         "[nativo] C6 cache de samplers por fetch (build 192, {} casillas), ultimos 10 s: {} aciertos del registro, {} "
         "busquedas en la tabla con {} aciertos y {} fallos ({:.1f} %): {} choques con otra fetch en su casilla, {} en "
         "casilla vacia, {} por generacion y {} caducadas (toca comprobar la textura)",
-        cache_fetch_.size(), d[5], d[0] + fallos, d[0], fallos,
-        100.0 * double(fallos) / double(std::max<uint64_t>(d[0] + fallos, 1)), d[1], d[2], d[3], d[4]);
+        cache_fetch_.size(), d[5], d[0] + failures, d[0], failures,
+        100.0 * double(failures) / double(std::max<uint64_t>(d[0] + failures, 1)), d[1], d[2], d[3], d[4]);
   }
 
-  void PararCopias() {
-    if (!copias_hilo_.joinable()) {
+  void StopCopies() {
+    if (!thread_copies_.joinable()) {
       return;
     }
     {
-      std::lock_guard<std::mutex> cerrojo(copias_mutex_);
-      copias_parar_ = true;
+      std::lock_guard<std::mutex> mutex_lock(mutex_copies_);
+      stop_copies_ = true;
     }
-    copias_cv_.notify_one();
-    copias_hilo_.join();
+    cv_copies_.notify_one();
+    thread_copies_.join();
     REXLOG_INFO("[nativo] C6: hilo de copias de vertices parado ({} copias en el anillo por cola llena, {} "
                 "esperas del anillo, {:.1f} ms esperando; 26/09 (build 185): el anillo copio {} al esperar ({:.1f} MB, "
                 "{:.1f} ms), {} comprobadas, {} diferencias, fase {})",
-                copias_en_linea_, esperas_copias_, double(ns_esperando_copias_) / 1e6, copias_ayudadas_,
-                double(copias_bytes_ayudados_) / 1048576.0, double(copias_ns_ayudando_) / 1e6, copias_comprobadas_,
-                copias_diferencias_, NombreFaseCopias());
+                copies_in_line_, copies_waits_, double(copies_waiting_ns_) / 1e6, assisted_copies_,
+                double(assisted_bytes_copies_) / 1048576.0, double(helping_ns_copies_) / 1e6, checked_copies_,
+                differences_copies_, CopiesPhaseName());
   }
 
-  void BucleCopias() {
+  void CopiesLoop() {
     for (;;) {
-      if (HayCopiasSinTomar()) {
+      if (HasCopiesWithoutTake()) {
         // Holding copias_trozo_mutex_ from the first batch until there is nothing left to take, and never
         // waiting on anything inside. If the ring waits for the current batch, it waits on this mutex and the
         // thread runs at the ring's priority until it releases it.
-        uint64_t copias = 0;
+        uint64_t copies = 0;
         uint64_t bytes = 0;
         {
-          std::lock_guard<std::mutex> trozo(copias_trozo_mutex_);
-          while (TomarYCopiar(false, copias, bytes)) {
+          std::lock_guard<std::mutex> chunk(mutex_chunk_copies_);
+          while (TakeAndCopy(false, copies, bytes)) {
           }
         }
-        copias_hilo_n_.fetch_add(copias, std::memory_order_relaxed);
-        copias_hilo_bytes_.fetch_add(bytes, std::memory_order_relaxed);
+        n_thread_copies_.fetch_add(copies, std::memory_order_relaxed);
+        thread_copies_bytes_.fetch_add(bytes, std::memory_order_relaxed);
         continue;  // look again: if nothing is left, sleep through the path below
       }
       // Nothing to take (the ring may have taken the last ones). Under the lock: wake the ring if it waits,
       // and sleep until there is more. If the read of copias_escritas_ was stale, the ring signals at its next
       // point that takes the lock.
-      std::unique_lock<std::mutex> cerrojo(copias_mutex_);
-      if (copias_esperando_) {
-        copias_hechas_cv_.notify_one();
+      std::unique_lock<std::mutex> mutex_lock(mutex_copies_);
+      if (waiting_copies_) {
+        cv_done_copies_.notify_one();
       }
-      copias_durmiendo_ = true;
-      copias_cv_.wait(cerrojo, [this] { return copias_parar_ || HayCopiasSinTomar(); });
-      copias_durmiendo_ = false;
+      sleeping_copies_ = true;
+      cv_copies_.wait(mutex_lock, [this] { return stop_copies_ || HasCopiesWithoutTake(); });
+      sleeping_copies_ = false;
       /*
        * The thread used to die on its own. It exited with "if (!HayCopiasSinTomar()) return;", on the
        * assumption that it was only woken without work in order to stop. But the ring takes untaken copies
@@ -7510,7 +7510,7 @@ class DibujosVulkanImpl final : public DibujosVulkan {
        * menu included, and the ring did all the copies (3-4 ms more per frame for the rest of the session).
        * Now it only exits when asked to stop; otherwise it looks again.
        */
-      if (copias_parar_ && !HayCopiasSinTomar()) {
+      if (stop_copies_ && !HasCopiesWithoutTake()) {
         return;  // stop, nothing pending
       }
     }
@@ -7522,535 +7522,535 @@ class DibujosVulkanImpl final : public DibujosVulkan {
   // filter.
   // It is out of line and Dibujar always calls it: that way Dibujar gains no branch and its control flow is still the
   // one in the PGO profile. With a branch inside, GCC would drop the whole profile of the ring's hottest function.
-  [[gnu::noinline]] void CopiaComposicionTratada(const EntradaShader* ps, const uint32_t* r,
+  [[gnu::noinline]] void TreatedCompositionCopy(const ShaderEntry* ps, const uint32_t* r,
                                                  uint32_t bytes_ps) noexcept {
-    if (!ps || !ps->shader || ps->shader->huella != kHuellaComposicion) {
+    if (!ps || !ps->shader || ps->shader->fingerprint != kCompositionFingerprint) {
       return;
     }
-    const int modo = nfsmw::ajustes::TratamientoVisual();
+    const int mode = nfsmw::settings::VisualHandling();
     // One line per mode change, on the first draw of the composite: the values the game sets.
-    static std::atomic<int> modo_anotado{-1};
-    if (modo_anotado.exchange(modo, std::memory_order_relaxed) != modo) {
+    static std::atomic<int> tracked_mode{-1};
+    if (tracked_mode.exchange(mode, std::memory_order_relaxed) != mode) {
       const float* k = reinterpret_cast<const float*>(r + kRegConstantesPs);
       REXLOG_INFO("[nativo] filtro de color {}: composicion con {} bytes de constantes. El juego pone Coeffs0 ({:.3f}, "
                   "{:.3f}, {:.3f}, {:.3f}), Coeffs1 ({:.3f}, {:.3f}, {:.3f}, {:.3f}), Desaturation {:.3f} y vineta {:.3f}",
-                  modo, bytes_ps, k[24], k[25], k[26], k[27], k[28], k[29], k[30], k[31], k[8], k[4]);
+                  mode, bytes_ps, k[24], k[25], k[26], k[27], k[28], k[29], k[30], k[31], k[8], k[4]);
     }
-    if (bytes_ps < kBytesTratamiento) {
+    if (bytes_ps < kHandlingBytes) {
       return;
     }
     VkDeviceSize offset = 0;
-    if (modo == 0 || !Reservar(usar_ubo_ ? std::max<VkDeviceSize>(bytes_ps, kUboBytesPs) : bytes_ps,
-                               usar_ubo_ ? alineacion_ubo_ : 16, offset)) {
+    if (mode == 0 || !Reserve(use_ubo_ ? std::max<VkDeviceSize>(bytes_ps, kUboBytesPs) : bytes_ps,
+                               use_ubo_ ? ubo_alignment_ : 16, offset)) {
       return;
     }
-    std::memcpy(subida_datos_ + offset, r + kRegConstantesPs, bytes_ps);
-    AplicarTratamientoVisual(reinterpret_cast<float*>(subida_datos_ + offset), modo);
+    std::memcpy(data_upload_ + offset, r + kRegConstantesPs, bytes_ps);
+    ApplyVisualTreatment(reinterpret_cast<float*>(data_upload_ + offset), mode);
     constantes_ps_offset_ = offset;
     constantes_ps_generacion_ = UINT64_MAX;
   }
 
-  bool Reservar(VkDeviceSize bytes, VkDeviceSize alineacion, VkDeviceSize& offset) {
-    const VkDeviceSize inicio = (subida_usado_ + alineacion - 1) & ~(alineacion - 1);
-    if (inicio + bytes > kTamanoSubida) {
+  bool Reserve(VkDeviceSize bytes, VkDeviceSize align_bytes, VkDeviceSize& offset) {
+    const VkDeviceSize start = (used_upload_ + align_bytes - 1) & ~(align_bytes - 1);
+    if (start + bytes > kUploadSize) {
       offset = 0;
       return false;  // cannot happen: Dibujar checks the space first
     }
-    offset = inicio;
-    subida_usado_ = inicio + bytes;
+    offset = start;
+    used_upload_ = start + bytes;
     megas_bytes_ += bytes;
     return true;
   }
 
   // Like Reservar, but the offset is a multiple of `multiplo` (the stride: a multiple of 4, not always a
   // power of 2). Dibujar has already asked for space including that extra padding (hueco_base_cero).
-  bool ReservarMultiplo(VkDeviceSize bytes, VkDeviceSize multiplo, VkDeviceSize& offset) {
-    const VkDeviceSize inicio = (subida_usado_ + multiplo - 1) / multiplo * multiplo;
-    if (inicio + bytes > kTamanoSubida) {
+  bool ReserveMultiple(VkDeviceSize bytes, VkDeviceSize multiple, VkDeviceSize& offset) {
+    const VkDeviceSize start = (used_upload_ + multiple - 1) / multiple * multiple;
+    if (start + bytes > kUploadSize) {
       offset = 0;
       return false;  // cannot happen: Dibujar checks the space first
     }
-    offset = inicio;
-    subida_usado_ = inicio + bytes;
+    offset = start;
+    used_upload_ = start + bytes;
     megas_bytes_ += bytes;
     return true;
   }
 
   // The pipelines file (cache/nfsmw_nativo_pipelines.bin): the Vulkan cache and the prewarm list.
-  static std::filesystem::path RutaFicheroPipelines() {
-    return rex::filesystem::GetExecutableFolder() / kCarpetaCache / kFicheroPipelines;
+  static std::filesystem::path PipelinesFilePath() {
+    return rex::filesystem::GetExecutableFolder() / kCacheFolder / kPipelinesFile;
   }
 
-  static void LeerFicheroEntero(const std::filesystem::path& ruta, std::vector<uint8_t>& datos) {
-    std::ifstream fichero(ruta, std::ios::binary | std::ios::ate);
-    const std::streamoff bytes = fichero ? std::streamoff(fichero.tellg()) : 0;
+  static void ReadIntFile(const std::filesystem::path& file_path, std::vector<uint8_t>& payload) {
+    std::ifstream file_name(file_path, std::ios::binary | std::ios::ate);
+    const std::streamoff bytes = file_name ? std::streamoff(file_name.tellg()) : 0;
     if (bytes > 0 && bytes < (std::streamoff(256) << 20)) {
-      datos.resize(size_t(bytes));
-      fichero.seekg(0);
-      if (!fichero.read(reinterpret_cast<char*>(datos.data()), std::streamsize(bytes))) {
-        datos.clear();
+      payload.resize(size_t(bytes));
+      file_name.seekg(0);
+      if (!file_name.read(reinterpret_cast<char*>(payload.data()), std::streamsize(bytes))) {
+        payload.clear();
       }
     }
   }
 
   // Reads the pipelines file and splits it into the cache and the list. If it does not exist yet, the two
   // older files (next to the NRO), which are deleted when the new one is written.
-  void LeerFicheroPipelines(std::vector<uint8_t>& cache, std::vector<uint8_t>& lista) {
-    std::vector<uint8_t> todo;
-    LeerFicheroEntero(RutaFicheroPipelines(), todo);
-    if (!todo.empty()) {
-      uint32_t magia = 0;
+  void ReadPipelinesFile(std::vector<uint8_t>& cache, std::vector<uint8_t>& item_list) {
+    std::vector<uint8_t> all;
+    ReadIntFile(PipelinesFilePath(), all);
+    if (!all.empty()) {
+      uint32_t magic = 0;
       uint32_t version = 0;
-      uint64_t bytes_lista = 0;
+      uint64_t list_bytes = 0;
       uint64_t bytes_cache = 0;
-      if (todo.size() >= kCabeceraFicheroPipelines) {
-        std::memcpy(&magia, todo.data(), 4);
-        std::memcpy(&version, todo.data() + 4, 4);
-        std::memcpy(&bytes_lista, todo.data() + 8, 8);
-        std::memcpy(&bytes_cache, todo.data() + 16, 8);
+      if (all.size() >= kPipelinesFileHeader) {
+        std::memcpy(&magic, all.data(), 4);
+        std::memcpy(&version, all.data() + 4, 4);
+        std::memcpy(&list_bytes, all.data() + 8, 8);
+        std::memcpy(&bytes_cache, all.data() + 16, 8);
       }
-      if (magia != kMagiaFicheroPipelines || version != kVersionFicheroPipelines ||
-          bytes_lista > todo.size() || bytes_cache > todo.size() ||
-          kCabeceraFicheroPipelines + bytes_lista + bytes_cache != todo.size()) {
+      if (magic != kPipelinesFileMagic || version != kPipelinesFileVersion ||
+          list_bytes > all.size() || bytes_cache > all.size() ||
+          kPipelinesFileHeader + list_bytes + bytes_cache != all.size()) {
         REXLOG_WARN("[nativo] C6: fichero de pipelines de otra version o danado: se empieza de cero");
         return;
       }
-      const auto inicio = todo.begin() + kCabeceraFicheroPipelines;
-      lista.assign(inicio, inicio + std::ptrdiff_t(bytes_lista));
-      cache.assign(inicio + std::ptrdiff_t(bytes_lista), todo.end());
+      const auto start = all.begin() + kPipelinesFileHeader;
+      item_list.assign(start, start + std::ptrdiff_t(list_bytes));
+      cache.assign(start + std::ptrdiff_t(list_bytes), all.end());
       return;
     }
-    const std::filesystem::path carpeta = rex::filesystem::GetExecutableFolder();
-    LeerFicheroEntero(carpeta / kFicheroCacheViejo, cache);
-    LeerFicheroEntero(carpeta / kFicheroListaVieja, lista);
-    ficheros_viejos_ = !cache.empty() || !lista.empty();
+    const std::filesystem::path dir_name = rex::filesystem::GetExecutableFolder();
+    ReadIntFile(dir_name / kOldCacheFile, cache);
+    ReadIntFile(dir_name / kOldListFile, item_list);
+    old_files_ = !cache.empty() || !item_list.empty();
   }
 
   // On-disk pipeline cache (derived from the game's shaders: not distributed). If the driver rejects it
   // (another driver or corrupt data), it starts from scratch.
-  void CargarCachePipelines() {
-    const auto& ifn = dispositivo_->vulkan_instance()->functions();
-    const auto crear = reinterpret_cast<FnCrearCachePipelines>(
+  void LoadCachePipelines() {
+    const auto& ifn = vk_device_->vulkan_instance()->functions();
+    const auto create = reinterpret_cast<CreatePipelineCacheFn>(
         ifn.vkGetDeviceProcAddr(device_, "vkCreatePipelineCache"));
-    datos_cache_ = reinterpret_cast<FnDatosCachePipelines>(
+    cache_data_ = reinterpret_cast<PipelineCacheDataFn>(
         ifn.vkGetDeviceProcAddr(device_, "vkGetPipelineCacheData"));
-    destruir_cache_ = reinterpret_cast<FnDestruirCachePipelines>(
+    destroy_cache_ = reinterpret_cast<DestroyPipelineCacheFn>(
         ifn.vkGetDeviceProcAddr(device_, "vkDestroyPipelineCache"));
-    if (!crear || !datos_cache_ || !destruir_cache_) {
+    if (!create || !cache_data_ || !destroy_cache_) {
       REXLOG_WARN("[nativo] C6: sin cache de pipelines (el driver no da sus funciones)");
       return;
     }
-    const std::filesystem::path ruta = RutaFicheroPipelines();
-    std::vector<uint8_t> datos;
-    LeerFicheroPipelines(datos, lista_leida_);
+    const std::filesystem::path file_path = PipelinesFilePath();
+    std::vector<uint8_t> payload;
+    ReadPipelinesFile(payload, read_list_);
     VkPipelineCacheCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
-    info.initialDataSize = datos.size();
-    info.pInitialData = datos.empty() ? nullptr : datos.data();
-    if (crear(device_, &info, nullptr, &cache_pipelines_) != VK_SUCCESS) {
+    info.initialDataSize = payload.size();
+    info.pInitialData = payload.empty() ? nullptr : payload.data();
+    if (create(device_, &info, nullptr, &cache_pipelines_) != VK_SUCCESS) {
       info.initialDataSize = 0;
       info.pInitialData = nullptr;
-      datos.clear();
-      if (crear(device_, &info, nullptr, &cache_pipelines_) != VK_SUCCESS) {
+      payload.clear();
+      if (create(device_, &info, nullptr, &cache_pipelines_) != VK_SUCCESS) {
         cache_pipelines_ = VK_NULL_HANDLE;
       }
     }
-    bytes_cache_guardados_ = datos.size();
-    cache_guardada_ = std::chrono::steady_clock::now();
+    saved_cache_bytes_ = payload.size();
+    saved_cache_ = std::chrono::steady_clock::now();
     REXLOG_INFO("[nativo] C6: cache de pipelines {} ({} KB leidos de {}{})",
                 cache_pipelines_ != VK_NULL_HANDLE ? "activa" : "no disponible",
-                datos.size() >> 10, ruta.string(), ficheros_viejos_ ? ", de los dos ficheros de antes" : "");
+                payload.size() >> 10, file_path.string(), old_files_ ? ", de los dos ficheros de antes" : "");
     // The writer thread always saves both parts; it starts from what is on disk.
-    escrito_cache_ = std::move(datos);
-    if (ficheros_viejos_) {
+    cache_written_ = std::move(payload);
+    if (old_files_) {
       // they came from the two older files: moved to the new one on the first save even if nothing changed
-      bytes_cache_guardados_ = 0;
-      pipelines_sin_guardar_ = 1;
-      lista_sin_guardar_ = 1;
+      saved_cache_bytes_ = 0;
+      pipelines_without_save_ = 1;
+      list_without_save_ = 1;
     }
-    CargarListaPipelines();  // the prewarm list
+    LoadPipelinesList();  // the prewarm list
   }
 
-  void GuardarCachePipelines() {
-    cache_guardada_ = std::chrono::steady_clock::now();
+  void SaveCachePipelines() {
+    saved_cache_ = std::chrono::steady_clock::now();
     // The prewarm list is saved even if the cache does not grow (a new pipeline whose shaders were already
     // in it does not make it grow). The cache, as usual: only if it has new entries.
-    std::vector<uint8_t> lista;
-    if (lista_sin_guardar_) {
-      lista_sin_guardar_ = 0;
-      lista = SerializarListaPipelines();
+    std::vector<uint8_t> item_list;
+    if (list_without_save_) {
+      list_without_save_ = 0;
+      item_list = SerializePipelinesList();
     }
-    std::vector<uint8_t> datos;
-    if (pipelines_sin_guardar_) {
-      pipelines_sin_guardar_ = 0;
+    std::vector<uint8_t> payload;
+    if (pipelines_without_save_) {
+      pipelines_without_save_ = 0;
       size_t bytes = 0;
       // without new entries it is not rewritten (the SD card is slow on the Switch)
       if (cache_pipelines_ != VK_NULL_HANDLE &&
-          datos_cache_(device_, cache_pipelines_, &bytes, nullptr) == VK_SUCCESS && bytes &&
-          bytes != bytes_cache_guardados_) {
-        datos.resize(bytes);
-        const VkResult resultado = datos_cache_(device_, cache_pipelines_, &bytes, datos.data());
-        if ((resultado != VK_SUCCESS && resultado != VK_INCOMPLETE) || !bytes) {
-          datos.clear();
+          cache_data_(device_, cache_pipelines_, &bytes, nullptr) == VK_SUCCESS && bytes &&
+          bytes != saved_cache_bytes_) {
+        payload.resize(bytes);
+        const VkResult result = cache_data_(device_, cache_pipelines_, &bytes, payload.data());
+        if ((result != VK_SUCCESS && result != VK_INCOMPLETE) || !bytes) {
+          payload.clear();
         } else {
-          datos.resize(bytes);
-          bytes_cache_guardados_ = bytes;
+          payload.resize(bytes);
+          saved_cache_bytes_ = bytes;
         }
       }
     }
-    if (datos.empty() && lista.empty()) {
+    if (payload.empty() && item_list.empty()) {
       return;
     }
     // The file is written on its own thread: on the Switch, writing about 2 MB to the SD card from the ring
     // thread stalled it on every save. If the previous one has not been written yet, this one replaces it.
-    std::lock_guard<std::mutex> cerrojo(escritor_mutex_);
-    if (!escritor_cache_.joinable()) {
-      escritor_cache_ = std::thread([this] {
+    std::lock_guard<std::mutex> mutex_lock(mutex_writer_);
+    if (!cache_writer_.joinable()) {
+      cache_writer_ = std::thread([this] {
         rex::thread::set_current_thread_name("NFSMW cache de pipelines");
-        EscritorCacheMain();
+        MainCacheWriter();
       });
     }
-    if (!datos.empty()) {  // only the list, if the cache did not grow
-      escritor_datos_ = std::move(datos);
+    if (!payload.empty()) {  // only the list, if the cache did not grow
+      data_writer_ = std::move(payload);
     }
-    if (!lista.empty()) {
-      escritor_lista_ = std::move(lista);
+    if (!item_list.empty()) {
+      list_writer_ = std::move(item_list);
     }
-    escritor_pendiente_ = true;
-    escritor_aviso_.notify_one();
+    pending_writer_ = true;
+    warning_writer_.notify_one();
   }
 
   // Pipeline cache writer thread. Sleeping or continuing is decided with the lock held.
-  void EscritorCacheMain() {
-    std::vector<uint8_t> datos;
-    std::vector<uint8_t> lista;  // the prewarm one
+  void MainCacheWriter() {
+    std::vector<uint8_t> payload;
+    std::vector<uint8_t> item_list;  // the prewarm one
     for (;;) {
       {
-        std::unique_lock<std::mutex> cerrojo(escritor_mutex_);
-        escritor_aviso_.wait(cerrojo, [this] { return escritor_pendiente_ || escritor_parar_; });
-        if (!escritor_pendiente_) {
+        std::unique_lock<std::mutex> mutex_lock(mutex_writer_);
+        warning_writer_.wait(mutex_lock, [this] { return pending_writer_ || stop_writer_; });
+        if (!pending_writer_) {
           return;  // stop, nothing pending
         }
-        datos = std::move(escritor_datos_);
-        escritor_datos_ = {};
-        lista = std::move(escritor_lista_);
-        escritor_lista_ = {};
-        escritor_pendiente_ = false;
+        payload = std::move(data_writer_);
+        data_writer_ = {};
+        item_list = std::move(list_writer_);
+        list_writer_ = {};
+        pending_writer_ = false;
       }
       // A single file with both parts. Only one may arrive (the cache did not grow, or the list did not
       // change): the other is the last one written.
-      if (!datos.empty()) {
-        escrito_cache_ = std::move(datos);
+      if (!payload.empty()) {
+        cache_written_ = std::move(payload);
       }
-      if (!lista.empty()) {
-        escrito_lista_ = std::move(lista);
+      if (!item_list.empty()) {
+        list_written_ = std::move(item_list);
       }
-      EscribirFicheroPipelines();
+      WritePipelinesFile();
     }
   }
 
   // cache/nfsmw_nativo_pipelines.bin with the list and the cache, written to a temporary file that is then
   // renamed. Writer thread only. The first time it is written, the two older files are deleted if present.
-  void EscribirFicheroPipelines() {
-    const auto antes = std::chrono::steady_clock::now();
-    const std::filesystem::path ruta = RutaFicheroPipelines();
+  void WritePipelinesFile() {
+    const auto before = std::chrono::steady_clock::now();
+    const std::filesystem::path file_path = PipelinesFilePath();
     std::error_code error;
-    std::filesystem::create_directories(ruta.parent_path(), error);
-    std::filesystem::path temporal = ruta;
+    std::filesystem::create_directories(file_path.parent_path(), error);
+    std::filesystem::path temporal = file_path;
     temporal += ".tmp";
     {
-      const uint32_t magia = kMagiaFicheroPipelines;
-      const uint32_t version = kVersionFicheroPipelines;
-      const uint64_t bytes_lista = escrito_lista_.size();
-      const uint64_t bytes_cache = escrito_cache_.size();
-      std::ofstream fichero(temporal, std::ios::binary | std::ios::trunc);
-      if (!fichero || !fichero.write(reinterpret_cast<const char*>(&magia), 4) ||
-          !fichero.write(reinterpret_cast<const char*>(&version), 4) ||
-          !fichero.write(reinterpret_cast<const char*>(&bytes_lista), 8) ||
-          !fichero.write(reinterpret_cast<const char*>(&bytes_cache), 8) ||
-          !fichero.write(reinterpret_cast<const char*>(escrito_lista_.data()), std::streamsize(bytes_lista)) ||
-          !fichero.write(reinterpret_cast<const char*>(escrito_cache_.data()), std::streamsize(bytes_cache))) {
+      const uint32_t magic = kPipelinesFileMagic;
+      const uint32_t version = kPipelinesFileVersion;
+      const uint64_t list_bytes = list_written_.size();
+      const uint64_t bytes_cache = cache_written_.size();
+      std::ofstream file_name(temporal, std::ios::binary | std::ios::trunc);
+      if (!file_name || !file_name.write(reinterpret_cast<const char*>(&magic), 4) ||
+          !file_name.write(reinterpret_cast<const char*>(&version), 4) ||
+          !file_name.write(reinterpret_cast<const char*>(&list_bytes), 8) ||
+          !file_name.write(reinterpret_cast<const char*>(&bytes_cache), 8) ||
+          !file_name.write(reinterpret_cast<const char*>(list_written_.data()), std::streamsize(list_bytes)) ||
+          !file_name.write(reinterpret_cast<const char*>(cache_written_.data()), std::streamsize(bytes_cache))) {
         return;
       }
     }
     error.clear();
-    std::filesystem::rename(temporal, ruta, error);
+    std::filesystem::rename(temporal, file_path, error);
     if (error) {
-      std::filesystem::remove(ruta, error);
-      std::filesystem::rename(temporal, ruta, error);
+      std::filesystem::remove(file_path, error);
+      std::filesystem::rename(temporal, file_path, error);
     }
-    if (!error && ficheros_viejos_) {
-      const std::filesystem::path carpeta = rex::filesystem::GetExecutableFolder();
-      std::error_code sin_importancia;
-      std::filesystem::remove(carpeta / kFicheroCacheViejo, sin_importancia);
-      std::filesystem::remove(carpeta / kFicheroListaVieja, sin_importancia);
-      ficheros_viejos_ = false;
+    if (!error && old_files_) {
+      const std::filesystem::path dir_name = rex::filesystem::GetExecutableFolder();
+      std::error_code without_importance;
+      std::filesystem::remove(dir_name / kOldCacheFile, without_importance);
+      std::filesystem::remove(dir_name / kOldListFile, without_importance);
+      old_files_ = false;
     }
-    if (guardados_cache_++ < 8) {
+    if (cache_saved_++ < 8) {
       REXLOG_INFO("[nativo] C6: pipelines guardados ({} KB de cache y {} en la lista del precalentado, en {} ms, desde "
                   "su hilo{})",
-                  escrito_cache_.size() >> 10,
-                  escrito_lista_.size() >= kCabeceraLista
-                      ? (escrito_lista_.size() - kCabeceraLista) / sizeof(RegistroPipeline)
+                  cache_written_.size() >> 10,
+                  list_written_.size() >= kListHeader
+                      ? (list_written_.size() - kListHeader) / sizeof(PipelineRecord)
                       : 0,
-                  std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - antes)
+                  std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - before)
                       .count(),
                   error ? ", no se pudo renombrar" : "");
     }
   }
 
-  void PararEscritorCache() {
+  void StopCacheWriter() {
     {
-      std::lock_guard<std::mutex> cerrojo(escritor_mutex_);
-      escritor_parar_ = true;
-      escritor_aviso_.notify_one();
+      std::lock_guard<std::mutex> mutex_lock(mutex_writer_);
+      stop_writer_ = true;
+      warning_writer_.notify_one();
     }
-    if (escritor_cache_.joinable()) {
-      escritor_cache_.join();
+    if (cache_writer_.joinable()) {
+      cache_writer_.join();
     }
   }
 
   // One upload buffer per work slot of the render target code: the previous frame's may still be in use
   // on the GPU while the other is filled.
-  bool CrearSubida() {
-    for (BuferSubida& s : subidas_) {
-      const bool creado = CrearBuferSubida();
-      s = {subida_, subida_memoria_, subida_tamano_real_, subida_datos_, subida_direccion_};
-      subida_ = VK_NULL_HANDLE;
-      subida_memoria_ = VK_NULL_HANDLE;
-      subida_datos_ = nullptr;
-      if (!creado) {
+  bool CreateUpload() {
+    for (UploadBuffer& s : uploads_) {
+      const bool was_created = CreateUploadBuffer();
+      s = {upload_, memory_upload_, real_size_upload_, data_upload_, address_upload_};
+      upload_ = VK_NULL_HANDLE;
+      memory_upload_ = VK_NULL_HANDLE;
+      data_upload_ = nullptr;
+      if (!was_created) {
         return false;
       }
     }
-    const auto& tipos = dispositivo_->memory_types();
+    const auto& types = vk_device_->memory_types();
     REXLOG_INFO("[nativo] C6: bufer de subida en el tipo de memoria {} ({}, {}; nfsmw_nativo_subida_memoria = {})",
-                subida_tipo_, ((tipos.host_cached >> subida_tipo_) & 1) ? "con cache de CPU" : "sin cache de CPU",
-                subida_coherente_ ? "coherente, sin publicar" : "se publica antes de enviar",
+                type_upload_, ((types.host_cached >> type_upload_) & 1) ? "con cache de CPU" : "sin cache de CPU",
+                coherent_upload_ ? "coherente, sin publicar" : "se publica antes de enviar",
                 REXCVAR_GET(nfsmw_nativo_subida_memoria));
-    MedirMemoriaSubida();
-    CrearCompartidasAparte();
-    UsarRanura(0);
+    MeasureUploadMemory();
+    CreateSharedSeparately();
+    UseSlot(0);
     return true;
   }
 
   // A small CPU-cached buffer per slot, only for the shared constants. If anything fails, it continues as
   // before (in the upload buffer) and says so in the log.
-  void CrearCompartidasAparte() {
-    compartidas_aparte_ = false;
+  void CreateSharedSeparately() {
+    separately_shared_ = false;
     if (!REXCVAR_GET(nfsmw_nativo_compartidas_cache)) {
       REXLOG_INFO("[nativo] C6: constantes compartidas en el bufer de subida (nfsmw_nativo_compartidas_cache = false)");
       return;
     }
-    const auto& tipos = dispositivo_->memory_types();
-    for (BuferSubida& c : compartidas_bufs_) {
+    const auto& types = vk_device_->memory_types();
+    for (UploadBuffer& c : bufs_shared_) {
       VkBufferCreateInfo info{};
       info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-      info.size = kTamanoCompartidas;
+      info.size = kSharedSize;
       info.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
       info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-      if (dfn_.vkCreateBuffer(device_, &info, nullptr, &c.bufer) != VK_SUCCESS) {
+      if (dfn_.vkCreateBuffer(device_, &info, nullptr, &c.buf) != VK_SUCCESS) {
         REXLOG_WARN("[nativo] C6: no se pudo crear el bufer de constantes compartidas; van en el de subida");
         return;
       }
-      VkMemoryRequirements requisitos;
-      dfn_.vkGetBufferMemoryRequirements(device_, c.bufer, &requisitos);
-      uint32_t tipo = 0;
-      if (!rex::bit_scan_forward(requisitos.memoryTypeBits & tipos.host_visible & tipos.host_cached, &tipo)) {
+      VkMemoryRequirements requirements;
+      dfn_.vkGetBufferMemoryRequirements(device_, c.buf, &requirements);
+      uint32_t type = 0;
+      if (!rex::bit_scan_forward(requirements.memoryTypeBits & types.host_visible & types.host_cached, &type)) {
         REXLOG_WARN("[nativo] C6: no hay memoria visible con cache de CPU; las constantes compartidas van en el de subida");
         return;
       }
-      VkMemoryAllocateInfo reserva{};
-      reserva.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-      reserva.allocationSize = requisitos.size;
-      reserva.memoryTypeIndex = tipo;
-      if (dfn_.vkAllocateMemory(device_, &reserva, nullptr, &c.memoria) != VK_SUCCESS ||
-          dfn_.vkBindBufferMemory(device_, c.bufer, c.memoria, 0) != VK_SUCCESS) {
+      VkMemoryAllocateInfo reservation{};
+      reservation.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+      reservation.allocationSize = requirements.size;
+      reservation.memoryTypeIndex = type;
+      if (dfn_.vkAllocateMemory(device_, &reservation, nullptr, &c.mem) != VK_SUCCESS ||
+          dfn_.vkBindBufferMemory(device_, c.buf, c.mem, 0) != VK_SUCCESS) {
         REXLOG_WARN("[nativo] C6: no se pudo reservar el bufer de constantes compartidas; van en el de subida");
         return;
       }
-      void* mapeado = nullptr;
-      if (dfn_.vkMapMemory(device_, c.memoria, 0, VK_WHOLE_SIZE, 0, &mapeado) != VK_SUCCESS) {
+      void* mapped = nullptr;
+      if (dfn_.vkMapMemory(device_, c.mem, 0, VK_WHOLE_SIZE, 0, &mapped) != VK_SUCCESS) {
         REXLOG_WARN("[nativo] C6: no se pudo mapear el bufer de constantes compartidas; van en el de subida");
         return;
       }
-      c.datos = static_cast<uint8_t*>(mapeado);
-      c.tamano_real = requisitos.size;
-      compartidas_tipo_ = tipo;
+      c.payload = static_cast<uint8_t*>(mapped);
+      c.real_size = requirements.size;
+      type_shared_ = type;
     }
-    compartidas_coherente_ = (tipos.host_coherent >> compartidas_tipo_) & 0x1;
-    compartidas_aparte_ = true;
+    coherent_shared_ = (types.host_coherent >> type_shared_) & 0x1;
+    separately_shared_ = true;
     REXLOG_INFO("[nativo] C6: constantes compartidas aparte, en el tipo de memoria {} (con cache de CPU, {}), {} MB "
                 "por ranura",
-                compartidas_tipo_, compartidas_coherente_ ? "coherente" : "se publica antes de enviar",
-                kTamanoCompartidas >> 20);
+                type_shared_, coherent_shared_ ? "coherente" : "se publica antes de enviar",
+                kSharedSize >> 20);
   }
 
-  bool CrearBuferSubida() {
+  bool CreateUploadBuffer() {
     VkBufferCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    info.size = kTamanoSubida;
+    info.size = kUploadSize;
     // UNIFORM_BUFFER because it is also bound as a dynamic UBO (constants through UBOs, set 4).
     info.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
                  VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
                  VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
     info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    if (dfn_.vkCreateBuffer(device_, &info, nullptr, &subida_) != VK_SUCCESS) {
+    if (dfn_.vkCreateBuffer(device_, &info, nullptr, &upload_) != VK_SUCCESS) {
       return false;
     }
-    VkMemoryRequirements requisitos;
-    dfn_.vkGetBufferMemoryRequirements(device_, subida_, &requisitos);
+    VkMemoryRequirements requirements;
+    dfn_.vkGetBufferMemoryRequirements(device_, upload_, &requirements);
     // nfsmw_nativo_subida_memoria: with 1 or 2, a host-visible type with or without CPU caching is looked
     // for; if there is none, the SDK's.
-    const auto& tipos = dispositivo_->memory_types();
-    subida_tipo_ = UINT32_MAX;
-    const int32_t preferencia = REXCVAR_GET(nfsmw_nativo_subida_memoria);
-    if (preferencia == 1 || preferencia == 2) {
-      const uint32_t visibles = requisitos.memoryTypeBits & tipos.host_visible;
-      uint32_t tipo = 0;
-      if (rex::bit_scan_forward(visibles & (preferencia == 1 ? tipos.host_cached : ~tipos.host_cached), &tipo)) {
-        subida_tipo_ = tipo;
+    const auto& types = vk_device_->memory_types();
+    type_upload_ = UINT32_MAX;
+    const int32_t preference = REXCVAR_GET(nfsmw_nativo_subida_memoria);
+    if (preference == 1 || preference == 2) {
+      const uint32_t visible = requirements.memoryTypeBits & types.host_visible;
+      uint32_t type = 0;
+      if (rex::bit_scan_forward(visible & (preference == 1 ? types.host_cached : ~types.host_cached), &type)) {
+        type_upload_ = type;
       }
     }
-    if (subida_tipo_ == UINT32_MAX) {
-      subida_tipo_ = rex::ui::vulkan::util::ChooseMemoryType(tipos, requisitos.memoryTypeBits,
+    if (type_upload_ == UINT32_MAX) {
+      type_upload_ = rex::ui::vulkan::util::ChooseMemoryType(types, requirements.memoryTypeBits,
                                                              rex::ui::vulkan::util::MemoryPurpose::kUpload);
     }
-    if (subida_tipo_ == UINT32_MAX) {
+    if (type_upload_ == UINT32_MAX) {
       return false;
     }
-    subida_coherente_ = (dispositivo_->memory_types().host_coherent >> subida_tipo_) & 0x1;
-    VkMemoryAllocateFlagsInfo banderas{};
-    banderas.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO;
-    banderas.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
-    VkMemoryAllocateInfo reserva{};
-    reserva.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    reserva.pNext = &banderas;
-    reserva.allocationSize = requisitos.size;
-    reserva.memoryTypeIndex = subida_tipo_;
-    if (dfn_.vkAllocateMemory(device_, &reserva, nullptr, &subida_memoria_) != VK_SUCCESS) {
+    coherent_upload_ = (vk_device_->memory_types().host_coherent >> type_upload_) & 0x1;
+    VkMemoryAllocateFlagsInfo flag_bits{};
+    flag_bits.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO;
+    flag_bits.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
+    VkMemoryAllocateInfo reservation{};
+    reservation.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    reservation.pNext = &flag_bits;
+    reservation.allocationSize = requirements.size;
+    reservation.memoryTypeIndex = type_upload_;
+    if (dfn_.vkAllocateMemory(device_, &reservation, nullptr, &memory_upload_) != VK_SUCCESS) {
       return false;
     }
-    subida_tamano_real_ = requisitos.size;
-    if (dfn_.vkBindBufferMemory(device_, subida_, subida_memoria_, 0) != VK_SUCCESS) {
+    real_size_upload_ = requirements.size;
+    if (dfn_.vkBindBufferMemory(device_, upload_, memory_upload_, 0) != VK_SUCCESS) {
       return false;
     }
-    void* mapeado = nullptr;
-    if (dfn_.vkMapMemory(device_, subida_memoria_, 0, VK_WHOLE_SIZE, 0, &mapeado) != VK_SUCCESS) {
+    void* mapped = nullptr;
+    if (dfn_.vkMapMemory(device_, memory_upload_, 0, VK_WHOLE_SIZE, 0, &mapped) != VK_SUCCESS) {
       return false;
     }
-    subida_datos_ = static_cast<uint8_t*>(mapeado);
-    VkBufferDeviceAddressInfo direccion{};
-    direccion.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
-    direccion.buffer = subida_;
-    subida_direccion_ = direccion_bufer_(device_, &direccion);
-    return subida_direccion_ != 0;
+    data_upload_ = static_cast<uint8_t*>(mapped);
+    VkBufferDeviceAddressInfo address{};
+    address.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
+    address.buffer = upload_;
+    address_upload_ = buffer_address_(device_, &address);
+    return address_upload_ != 0;
   }
 
   // For the nfsmw_nativo_subida_memoria A/B test: CPU write MB/s into each host-visible memory type and the
   // cost of publishing those 8 MB (vkFlushMappedMemoryRanges; in NVK for Tegra, armDCacheClean). Once.
-  void MedirMemoriaSubida() {
+  void MeasureUploadMemory() {
     if (!REXCVAR_GET(nfsmw_nativo_diag_memoria_subida)) {
       return;
     }
     constexpr VkDeviceSize kBytes = VkDeviceSize(8) << 20;
-    std::vector<uint8_t> origen(static_cast<size_t>(kBytes));
-    for (size_t i = 0; i < origen.size(); ++i) {
-      origen[i] = uint8_t((i * 131) ^ (i >> 11));
+    std::vector<uint8_t> src(static_cast<size_t>(kBytes));
+    for (size_t i = 0; i < src.size(); ++i) {
+      src[i] = uint8_t((i * 131) ^ (i >> 11));
     }
-    const auto& tipos = dispositivo_->memory_types();
-    std::string informe;
-    for (uint32_t tipo = 0; tipo < 32; ++tipo) {
-      if (!((tipos.host_visible >> tipo) & 1)) {
+    const auto& types = vk_device_->memory_types();
+    std::string report;
+    for (uint32_t type = 0; type < 32; ++type) {
+      if (!((types.host_visible >> type) & 1)) {
         continue;
       }
-      VkMemoryAllocateInfo reserva{};
-      reserva.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-      reserva.allocationSize = kBytes;
-      reserva.memoryTypeIndex = tipo;
-      VkDeviceMemory memoria = VK_NULL_HANDLE;
-      if (dfn_.vkAllocateMemory(device_, &reserva, nullptr, &memoria) != VK_SUCCESS) {
+      VkMemoryAllocateInfo reservation{};
+      reservation.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+      reservation.allocationSize = kBytes;
+      reservation.memoryTypeIndex = type;
+      VkDeviceMemory mem = VK_NULL_HANDLE;
+      if (dfn_.vkAllocateMemory(device_, &reservation, nullptr, &mem) != VK_SUCCESS) {
         continue;
       }
-      void* mapeado = nullptr;
-      if (dfn_.vkMapMemory(device_, memoria, 0, VK_WHOLE_SIZE, 0, &mapeado) == VK_SUCCESS) {
-        using Reloj = std::chrono::steady_clock;
-        std::memcpy(mapeado, origen.data(), size_t(kBytes));  // first pass: pages and caches
-        const auto antes = Reloj::now();
-        std::memcpy(mapeado, origen.data(), size_t(kBytes));
-        const auto copiado = Reloj::now();
-        const bool coherente = (tipos.host_coherent >> tipo) & 1;
+      void* mapped = nullptr;
+      if (dfn_.vkMapMemory(device_, mem, 0, VK_WHOLE_SIZE, 0, &mapped) == VK_SUCCESS) {
+        using Clock = std::chrono::steady_clock;
+        std::memcpy(mapped, src.data(), size_t(kBytes));  // first pass: pages and caches
+        const auto before = Clock::now();
+        std::memcpy(mapped, src.data(), size_t(kBytes));
+        const auto copied = Clock::now();
+        const bool coherente = (types.host_coherent >> type) & 1;
         if (!coherente) {
-          VkMappedMemoryRange rango{};
-          rango.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
-          rango.memory = memoria;
-          rango.size = VK_WHOLE_SIZE;
-          dfn_.vkFlushMappedMemoryRanges(device_, 1, &rango);
+          VkMappedMemoryRange range_info{};
+          range_info.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+          range_info.memory = mem;
+          range_info.size = VK_WHOLE_SIZE;
+          dfn_.vkFlushMappedMemoryRanges(device_, 1, &range_info);
         }
-        const auto publicado = Reloj::now();
-        const double segundos = std::chrono::duration<double>(copiado - antes).count();
-        informe += fmt::format(
-            "{}tipo {} ({}{}): {:.0f} MB/s{}", informe.empty() ? "" : "; ", tipo,
-            ((tipos.host_cached >> tipo) & 1) ? "con cache de CPU" : "sin cache de CPU", coherente ? ", coherente" : "",
-            segundos > 0 ? 8.0 / segundos : 0.0,
+        const auto published = Clock::now();
+        const double secs = std::chrono::duration<double>(copied - before).count();
+        report += fmt::format(
+            "{}tipo {} ({}{}): {:.0f} MB/s{}", report.empty() ? "" : "; ", type,
+            ((types.host_cached >> type) & 1) ? "con cache de CPU" : "sin cache de CPU", coherente ? ", coherente" : "",
+            secs > 0 ? 8.0 / secs : 0.0,
             coherente ? std::string()
                       : fmt::format(", publicar {:.2f} ms",
-                                    std::chrono::duration<double, std::milli>(publicado - copiado).count()));
-        dfn_.vkUnmapMemory(device_, memoria);
+                                    std::chrono::duration<double, std::milli>(published - copied).count()));
+        dfn_.vkUnmapMemory(device_, mem);
       }
-      dfn_.vkFreeMemory(device_, memoria, nullptr);
+      dfn_.vkFreeMemory(device_, mem, nullptr);
     }
     REXLOG_INFO("[nativo] C6: escritura desde la CPU por tipo de memoria (8 MB): {}",
-                informe.empty() ? std::string("sin tipos medibles") : informe);
+                report.empty() ? std::string("sin tipos medibles") : report);
   }
 
-  bool CrearDescriptores() {
-    static constexpr VkDescriptorType kTipos[4] = {
+  bool CreateDescriptors() {
+    static constexpr VkDescriptorType kTypes[4] = {
         VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
         VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_DESCRIPTOR_TYPE_SAMPLER};
-    const VkDescriptorBindingFlags banderas_enlace =
+    const VkDescriptorBindingFlags binding_flags =
         VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT |
         VK_DESCRIPTOR_BINDING_UPDATE_UNUSED_WHILE_PENDING_BIT;
     for (uint32_t i = 0; i < 4; ++i) {
-      VkDescriptorSetLayoutBinding enlace{};
-      enlace.binding = 0;
-      enlace.descriptorType = kTipos[i];
-      enlace.descriptorCount = kCapacidadMonton[i];
-      enlace.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-      VkDescriptorSetLayoutBindingFlagsCreateInfo banderas{};
-      banderas.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
-      banderas.bindingCount = 1;
-      banderas.pBindingFlags = &banderas_enlace;
+      VkDescriptorSetLayoutBinding bind_index{};
+      bind_index.binding = 0;
+      bind_index.descriptorType = kTypes[i];
+      bind_index.descriptorCount = kHeapCapacity[i];
+      bind_index.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+      VkDescriptorSetLayoutBindingFlagsCreateInfo flag_bits{};
+      flag_bits.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
+      flag_bits.bindingCount = 1;
+      flag_bits.pBindingFlags = &binding_flags;
       VkDescriptorSetLayoutCreateInfo info{};
       info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-      info.pNext = &banderas;
+      info.pNext = &flag_bits;
       info.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
       info.bindingCount = 1;
-      info.pBindings = &enlace;
+      info.pBindings = &bind_index;
       if (dfn_.vkCreateDescriptorSetLayout(device_, &info, nullptr, &layouts_[i]) != VK_SUCCESS) {
         return false;
       }
-      montones_[i].capacidad = kCapacidadMonton[i];
+      heaps_[i].cap_bytes = kHeapCapacity[i];
     }
-    const VkDescriptorPoolSize tamanos[2] = {
+    const VkDescriptorPoolSize sizes[2] = {
         {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
-         kCapacidadMonton[0] + kCapacidadMonton[1] + kCapacidadMonton[2]},
-        {VK_DESCRIPTOR_TYPE_SAMPLER, kCapacidadMonton[3]}};
+         kHeapCapacity[0] + kHeapCapacity[1] + kHeapCapacity[2]},
+        {VK_DESCRIPTOR_TYPE_SAMPLER, kHeapCapacity[3]}};
     VkDescriptorPoolCreateInfo info_pool{};
     info_pool.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     info_pool.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
     info_pool.maxSets = 4;
     info_pool.poolSizeCount = 2;
-    info_pool.pPoolSizes = tamanos;
+    info_pool.pPoolSizes = sizes;
     if (dfn_.vkCreateDescriptorPool(device_, &info_pool, nullptr, &pool_) != VK_SUCCESS) {
       return false;
     }
-    VkDescriptorSetAllocateInfo reserva{};
-    reserva.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    reserva.descriptorPool = pool_;
-    reserva.descriptorSetCount = 4;
-    reserva.pSetLayouts = layouts_.data();
-    if (dfn_.vkAllocateDescriptorSets(device_, &reserva, sets_.data()) != VK_SUCCESS) {
+    VkDescriptorSetAllocateInfo reservation{};
+    reservation.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    reservation.descriptorPool = pool_;
+    reservation.descriptorSetCount = 4;
+    reservation.pSetLayouts = layouts_.data();
+    if (dfn_.vkAllocateDescriptorSets(device_, &reservation, sets_.data()) != VK_SUCCESS) {
       return false;
     }
     // --- Set 4, the constants through dynamic UBOs ------------------------------------------------------
@@ -8058,80 +8058,80 @@ class DibujosVulkanImpl final : public DibujosVulkan {
     // then bound with offsets 0). With an older library it is unnecessary and harmless. No
     // UPDATE_AFTER_BIND: dynamic descriptors do not support it. CrearSubida runs first, so the buffers
     // already exist.
-    usar_ubo_ = REXCVAR_GET(nfsmw_nativo_constantes_ubo);
-    cache_entre_fotogramas_ = REXCVAR_GET(nfsmw_nativo_cache_texturas_entre_fotogramas);
+    use_ubo_ = REXCVAR_GET(nfsmw_nativo_constantes_ubo);
+    cache_between_frames_ = REXCVAR_GET(nfsmw_nativo_cache_texturas_entre_fotogramas);
     REXLOG_INFO("[nativo] C6: caches de texturas entre fotogramas (nfsmw_nativo_cache_texturas_entre_fotogramas) = {}",
-                cache_entre_fotogramas_ ? "SI" : "no");
+                cache_between_frames_ ? "SI" : "no");
     mipmaps_ = REXCVAR_GET(nfsmw_nativo_mipmaps);
     REXLOG_INFO("[nativo] C3: niveles de mip de las texturas (nfsmw_nativo_mipmaps) = {}", mipmaps_ ? "SI" : "no");
-    texturas_mb_max_ = REXCVAR_GET(nfsmw_nativo_texturas_mb_max);
-    prueba_sin_memoria_cada_ = REXCVAR_GET(nfsmw_nativo_prueba_sin_memoria_cada);
-    if (prueba_sin_memoria_cada_ > 0) {
+    textures_max_mb_ = REXCVAR_GET(nfsmw_nativo_texturas_mb_max);
+    test_without_memory_every_ = REXCVAR_GET(nfsmw_nativo_prueba_sin_memoria_cada);
+    if (test_without_memory_every_ > 0) {
       REXLOG_WARN("[nativo] C3: PRUEBA activa: se fingira falta de memoria cada {} reservas de textura",
-                  prueba_sin_memoria_cada_);
+                  test_without_memory_every_);
     }
-    REXLOG_INFO("[nativo] C3: limite de la cache de texturas (nfsmw_nativo_texturas_mb_max) = {} MB{}", texturas_mb_max_,
-                texturas_mb_max_ > 0 ? "" : " (sin limite)");
+    REXLOG_INFO("[nativo] C3: limite de la cache de texturas (nfsmw_nativo_texturas_mb_max) = {} MB{}", textures_max_mb_,
+                textures_max_mb_ > 0 ? "" : " (sin limite)");
     diag_mips_ = REXCVAR_GET(nfsmw_nativo_diag_mips);
     if (diag_mips_) {
       REXLOG_INFO("[nativo] C3: diagnostico de mips (nfsmw_nativo_diag_mips) = SI");
     }
-    alineacion_ubo_ = std::max<VkDeviceSize>(16, dispositivo_->properties().minUniformBufferOffsetAlignment);
+    ubo_alignment_ = std::max<VkDeviceSize>(16, vk_device_->properties().minUniformBufferOffsetAlignment);
     alternar_ubo_s_ = REXCVAR_GET(nfsmw_nativo_constantes_ubo_alternar_s);
     REXLOG_INFO("[nativo] C6: constantes por UBO dinamico (nfsmw_nativo_constantes_ubo) = {}; alternar cada {} s; "
                 "alineacion {} bytes",
-                usar_ubo_ ? "SI" : "no", alternar_ubo_s_, alineacion_ubo_);
-    std::array<VkDescriptorSetLayoutBinding, 3> enlaces_ubo{};
+                use_ubo_ ? "SI" : "no", alternar_ubo_s_, ubo_alignment_);
+    std::array<VkDescriptorSetLayoutBinding, 3> ubo_bindings{};
     for (uint32_t b = 0; b < 3; ++b) {
-      enlaces_ubo[b].binding = b;
-      enlaces_ubo[b].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-      enlaces_ubo[b].descriptorCount = 1;
-      enlaces_ubo[b].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+      ubo_bindings[b].binding = b;
+      ubo_bindings[b].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+      ubo_bindings[b].descriptorCount = 1;
+      ubo_bindings[b].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     }
     VkDescriptorSetLayoutCreateInfo info_ubo{};
     info_ubo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     info_ubo.bindingCount = 3;
-    info_ubo.pBindings = enlaces_ubo.data();
+    info_ubo.pBindings = ubo_bindings.data();
     if (dfn_.vkCreateDescriptorSetLayout(device_, &info_ubo, nullptr, &layout_ubo_) != VK_SUCCESS) {
       return false;
     }
-    const VkDescriptorPoolSize tamano_ubo{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 3 * uint32_t(sets_ubo_.size())};
+    const VkDescriptorPoolSize ubo_size{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 3 * uint32_t(sets_ubo_.size())};
     VkDescriptorPoolCreateInfo info_pool_ubo{};
     info_pool_ubo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     info_pool_ubo.maxSets = uint32_t(sets_ubo_.size());
     info_pool_ubo.poolSizeCount = 1;
-    info_pool_ubo.pPoolSizes = &tamano_ubo;
+    info_pool_ubo.pPoolSizes = &ubo_size;
     if (dfn_.vkCreateDescriptorPool(device_, &info_pool_ubo, nullptr, &pool_ubo_) != VK_SUCCESS) {
       return false;
     }
-    std::array<VkDescriptorSetLayout, kRanurasDeTrabajo> layouts_ubo;
+    std::array<VkDescriptorSetLayout, kJobSlots> layouts_ubo;
     layouts_ubo.fill(layout_ubo_);
-    VkDescriptorSetAllocateInfo reserva_ubo{};
-    reserva_ubo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    reserva_ubo.descriptorPool = pool_ubo_;
-    reserva_ubo.descriptorSetCount = uint32_t(sets_ubo_.size());
-    reserva_ubo.pSetLayouts = layouts_ubo.data();
-    if (dfn_.vkAllocateDescriptorSets(device_, &reserva_ubo, sets_ubo_.data()) != VK_SUCCESS) {
+    VkDescriptorSetAllocateInfo ubo_reserve{};
+    ubo_reserve.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    ubo_reserve.descriptorPool = pool_ubo_;
+    ubo_reserve.descriptorSetCount = uint32_t(sets_ubo_.size());
+    ubo_reserve.pSetLayouts = layouts_ubo.data();
+    if (dfn_.vkAllocateDescriptorSets(device_, &ubo_reserve, sets_ubo_.data()) != VK_SUCCESS) {
       return false;
     }
     for (size_t ranura = 0; ranura < sets_ubo_.size(); ++ranura) {
-      const VkDescriptorBufferInfo bloques[3] = {{subidas_[ranura].bufer, 0, kUboBytesVs},
-                                                 {subidas_[ranura].bufer, 0, kUboBytesPs},
-                                                 {compartidas_aparte_ ? compartidas_bufs_[ranura].bufer
-                                                                      : subidas_[ranura].bufer,
-                                                  0, kUboBytesCompartidas}};
-      std::array<VkWriteDescriptorSet, 3> escrituras_ubo{};
+      const VkDescriptorBufferInfo blocks[3] = {{uploads_[ranura].buf, 0, kUboBytesVs},
+                                                 {uploads_[ranura].buf, 0, kUboBytesPs},
+                                                 {separately_shared_ ? bufs_shared_[ranura].buf
+                                                                      : uploads_[ranura].buf,
+                                                  0, kSharedUboBytes}};
+      std::array<VkWriteDescriptorSet, 3> ubo_writes{};
       for (uint32_t b = 0; b < 3; ++b) {
-        escrituras_ubo[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        escrituras_ubo[b].dstSet = sets_ubo_[ranura];
-        escrituras_ubo[b].dstBinding = b;
-        escrituras_ubo[b].descriptorCount = 1;
-        escrituras_ubo[b].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-        escrituras_ubo[b].pBufferInfo = &bloques[b];
+        ubo_writes[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        ubo_writes[b].dstSet = sets_ubo_[ranura];
+        ubo_writes[b].dstBinding = b;
+        ubo_writes[b].descriptorCount = 1;
+        ubo_writes[b].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+        ubo_writes[b].pBufferInfo = &blocks[b];
       }
-      dfn_.vkUpdateDescriptorSets(device_, 3, escrituras_ubo.data(), 0, nullptr);
+      dfn_.vkUpdateDescriptorSets(device_, 3, ubo_writes.data(), 0, nullptr);
     }
-    const VkPushConstantRange rango{VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+    const VkPushConstantRange range_info{VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                                     24};
     VkPipelineLayoutCreateInfo info_layout{};
     info_layout.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -8140,15 +8140,15 @@ class DibujosVulkanImpl final : public DibujosVulkan {
     info_layout.setLayoutCount = 5;
     info_layout.pSetLayouts = layouts_pipeline.data();
     info_layout.pushConstantRangeCount = 1;
-    info_layout.pPushConstantRanges = &rango;
+    info_layout.pPushConstantRanges = &range_info;
     return dfn_.vkCreatePipelineLayout(device_, &info_layout, nullptr, &layout_pipeline_) ==
            VK_SUCCESS;
   }
 
   // Slot 0 of each heap: a transparent black texture and a basic sampler, as the emulation does for an
   // invalid fetch constant.
-  bool CrearVacias() {
-    const std::array<std::pair<VkImageViewType, uint32_t>, 3> tipos = {
+  bool CreateEmpty() {
+    const std::array<std::pair<VkImageViewType, uint32_t>, 3> types = {
         {{VK_IMAGE_VIEW_TYPE_2D, 1}, {VK_IMAGE_VIEW_TYPE_3D, 1}, {VK_IMAGE_VIEW_TYPE_CUBE, 6}}};
     for (uint32_t i = 0; i < 3; ++i) {
       VkImageCreateInfo info{};
@@ -8158,378 +8158,378 @@ class DibujosVulkanImpl final : public DibujosVulkan {
       info.format = VK_FORMAT_R8G8B8A8_UNORM;
       info.extent = {1, 1, 1};
       info.mipLevels = 1;
-      info.arrayLayers = tipos[i].second;
+      info.arrayLayers = types[i].second;
       info.samples = VK_SAMPLE_COUNT_1_BIT;
       info.tiling = VK_IMAGE_TILING_OPTIMAL;
       info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
       info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
       info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
       if (!rex::ui::vulkan::util::CreateDedicatedAllocationImage(
-              dispositivo_, info, rex::ui::vulkan::util::MemoryPurpose::kDeviceLocal,
-              vacias_[i].imagen, vacias_[i].memoria)) {
+              vk_device_, info, rex::ui::vulkan::util::MemoryPurpose::kDeviceLocal,
+              empty_[i].img, empty_[i].mem)) {
         return false;
       }
-      VkImageViewCreateInfo vista{};
-      vista.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-      vista.image = vacias_[i].imagen;
-      vista.viewType = tipos[i].first;
-      vista.format = VK_FORMAT_R8G8B8A8_UNORM;
-      vista.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, tipos[i].second};
-      if (dfn_.vkCreateImageView(device_, &vista, nullptr, &vacias_[i].vista) != VK_SUCCESS) {
+      VkImageViewCreateInfo view{};
+      view.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+      view.image = empty_[i].img;
+      view.viewType = types[i].first;
+      view.format = VK_FORMAT_R8G8B8A8_UNORM;
+      view.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, types[i].second};
+      if (dfn_.vkCreateImageView(device_, &view, nullptr, &empty_[i].view) != VK_SUCCESS) {
         return false;
       }
-      vacias_[i].ancho = vacias_[i].alto = 1;
-      vacias_[i].formato = VK_FORMAT_R8G8B8A8_UNORM;
-      EscribirImagen(i, 0, vacias_[i].vista);
+      empty_[i].width_px = empty_[i].height_px = 1;
+      empty_[i].format_id = VK_FORMAT_R8G8B8A8_UNORM;
+      WriteImage(i, 0, empty_[i].view);
     }
     VkSamplerCreateInfo sampler{};
     sampler.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
     sampler.addressModeU = sampler.addressModeV = sampler.addressModeW =
         VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     sampler.maxLod = VK_LOD_CLAMP_NONE;
-    if (dfn_.vkCreateSampler(device_, &sampler, nullptr, &sampler_vacio_) != VK_SUCCESS) {
+    if (dfn_.vkCreateSampler(device_, &sampler, nullptr, &empty_sampler_) != VK_SUCCESS) {
       return false;
     }
-    EscribirSampler(0, sampler_vacio_);
+    WriteSampler(0, empty_sampler_);
     return true;
   }
 
   // The empty ones are initialized on the first submission: GENERAL and cleared to zero.
-  bool PrepararVacias() {
-    if (vacias_preparadas_) {
+  bool PrepareEmpty() {
+    if (prepared_empty_) {
       return true;
     }
-    const VkCommandBuffer subida = contexto_->ComandosSubida();
-    if (!subida) {
+    const VkCommandBuffer upload = contexto_->UploadCommands();
+    if (!upload) {
       return false;
     }
     for (uint32_t i = 0; i < 3; ++i) {
-      const uint32_t capas = i == 2 ? 6 : 1;
-      Barrera(subida, vacias_[i].imagen, capas);
-      VkClearColorValue cero{};
+      const uint32_t layer_count = i == 2 ? 6 : 1;
+      Barrier(upload, empty_[i].img, layer_count);
+      VkClearColorValue zero{};
       if (REXCVAR_GET(nfsmw_nativo_diag_vacias_grises)) {
-        cero.float32[0] = cero.float32[1] = cero.float32[2] = 0.5f;
-        cero.float32[3] = 1.0f;
+        zero.float32[0] = zero.float32[1] = zero.float32[2] = 0.5f;
+        zero.float32[3] = 1.0f;
       }
-      const VkImageSubresourceRange rango{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, capas};
-      dfn_.vkCmdClearColorImage(subida, vacias_[i].imagen, VK_IMAGE_LAYOUT_GENERAL, &cero, 1,
-                                &rango);
-      vacias_[i].preparada = true;
+      const VkImageSubresourceRange range_info{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, layer_count};
+      dfn_.vkCmdClearColorImage(upload, empty_[i].img, VK_IMAGE_LAYOUT_GENERAL, &zero, 1,
+                                &range_info);
+      empty_[i].prepared = true;
     }
-    vacias_preparadas_ = true;
+    prepared_empty_ = true;
     return true;
   }
 
-  void Barrera(VkCommandBuffer cmd, VkImage imagen, uint32_t capas) {
-    VkImageMemoryBarrier barrera{};
-    barrera.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrera.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    barrera.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-    barrera.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrera.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrera.image = imagen;
-    barrera.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, VK_REMAINING_MIP_LEVELS, 0, capas};  // and mips
-    barrera.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+  void Barrier(VkCommandBuffer cmd, VkImage img, uint32_t layer_count) {
+    VkImageMemoryBarrier barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = img;
+    barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, VK_REMAINING_MIP_LEVELS, 0, layer_count};  // and mips
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     dfn_.vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                               VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1,
-                              &barrera);
+                              &barrier);
   }
 
-  void EscribirImagen(uint32_t monton, uint32_t ranura, VkImageView vista) {
-    VkDescriptorImageInfo imagen{};
-    imagen.imageView = vista;
-    imagen.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-    VkWriteDescriptorSet escritura{};
-    escritura.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    escritura.dstSet = sets_[monton];
-    escritura.dstBinding = 0;
-    escritura.dstArrayElement = ranura;
-    escritura.descriptorCount = 1;
-    escritura.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-    escritura.pImageInfo = &imagen;
-    dfn_.vkUpdateDescriptorSets(device_, 1, &escritura, 0, nullptr);
+  void WriteImage(uint32_t heap, uint32_t ranura, VkImageView view) {
+    VkDescriptorImageInfo img{};
+    img.imageView = view;
+    img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    VkWriteDescriptorSet write_op{};
+    write_op.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write_op.dstSet = sets_[heap];
+    write_op.dstBinding = 0;
+    write_op.dstArrayElement = ranura;
+    write_op.descriptorCount = 1;
+    write_op.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+    write_op.pImageInfo = &img;
+    dfn_.vkUpdateDescriptorSets(device_, 1, &write_op, 0, nullptr);
   }
 
-  void EscribirSampler(uint32_t ranura, VkSampler sampler) {
-    VkDescriptorImageInfo imagen{};
-    imagen.sampler = sampler;
-    VkWriteDescriptorSet escritura{};
-    escritura.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    escritura.dstSet = sets_[3];
-    escritura.dstBinding = 0;
-    escritura.dstArrayElement = ranura;
-    escritura.descriptorCount = 1;
-    escritura.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
-    escritura.pImageInfo = &imagen;
-    dfn_.vkUpdateDescriptorSets(device_, 1, &escritura, 0, nullptr);
+  void WriteSampler(uint32_t ranura, VkSampler sampler) {
+    VkDescriptorImageInfo img{};
+    img.sampler = sampler;
+    VkWriteDescriptorSet write_op{};
+    write_op.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write_op.dstSet = sets_[3];
+    write_op.dstBinding = 0;
+    write_op.dstArrayElement = ranura;
+    write_op.descriptorCount = 1;
+    write_op.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+    write_op.pImageInfo = &img;
+    dfn_.vkUpdateDescriptorSets(device_, 1, &write_op, 0, nullptr);
   }
 
-  uint32_t ReservarRanura(uint32_t monton) {
-    auto& m = montones_[monton];
-    if (!m.libres.empty()) {
-      const uint32_t ranura = m.libres.back();
-      m.libres.pop_back();
+  uint32_t ReserveSlot(uint32_t heap) {
+    auto& m = heaps_[heap];
+    if (!m.free_items.empty()) {
+      const uint32_t ranura = m.free_items.back();
+      m.free_items.pop_back();
       return ranura;
     }
-    return m.siguiente < m.capacidad ? m.siguiente++ : 0;
+    return m.next < m.cap_bytes ? m.next++ : 0;
   }
 
   // The draw's vertex input, recomputed only when the patched VS changes.
-  const EntradaVertices* EntradaDe(const PeticionDibujo& p) {
-    if (entrada_generacion_ == p.generacion_vs && entrada_vs_ == p.vs) {
-      if (entrada_valida_) {
-        ++entradas_reutilizadas_;
-        return entrada_actual_;
+  const VertexInput* EntryFor(const DrawRequest& p) {
+    if (generation_entry_ == p.generacion_vs && vs_entry_ == p.vs) {
+      if (valid_entry_) {
+        ++reused_entries_;
+        return current_entry_;
       }
       // The same input that already failed: no recomputation and no warning.
-      ++rechazados_;
-      ++causas_[entrada_causa_];
+      ++rejected_;
+      ++causes_[cause_entry_];
       return nullptr;
     }
-    entrada_generacion_ = p.generacion_vs;
-    entrada_vs_ = p.vs;
-    entrada_valida_ = false;
+    generation_entry_ = p.generacion_vs;
+    vs_entry_ = p.vs;
+    valid_entry_ = false;
     // Cache: the same VS with the same patched fetches gives the same input.
-    const uint64_t clave_entrada = ClaveEntrada(p);
-    if (clave_entrada) {
-      if (const auto it = entradas_cache_.find(clave_entrada); it != entradas_cache_.end()) {
-        entrada_actual_ = &it->second;
-        entrada_valida_ = true;
-        entrada_causa_ = 0;
-        ++entradas_cache_aciertos_;
-        return entrada_actual_;
+    const uint64_t entry_key = EntryKey(p);
+    if (entry_key) {
+      if (const auto it = cache_entries_.find(entry_key); it != cache_entries_.end()) {
+        current_entry_ = &it->second;
+        valid_entry_ = true;
+        cause_entry_ = 0;
+        ++hits_cache_entries_;
+        return current_entry_;
       }
     }
-    entrada_ = EntradaVertices{};
-    const uint64_t rechazados_antes = rechazados_;
-    const auto antes_entrada = std::chrono::steady_clock::now();
-    const EntradaVertices* entrada = CalcularEntrada(p);
-    ns_entradas_ += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                 std::chrono::steady_clock::now() - antes_entrada)
+    entry_ = VertexInput{};
+    const uint64_t rejected_before = rejected_;
+    const auto before_entry = std::chrono::steady_clock::now();
+    const VertexInput* entry = ComputeEntry(p);
+    entries_ns_ += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                 std::chrono::steady_clock::now() - before_entry)
                                  .count());
-    ++entradas_calculadas_;
-    entrada_causa_ = rechazados_ != rechazados_antes ? ultima_causa_ : 0;
-    entrada_actual_ = &entrada_;
-    if (entrada && clave_entrada && entradas_cache_.size() < 4096) {
-      entradas_cache_.emplace(clave_entrada, entrada_);
+    ++computed_entries_;
+    cause_entry_ = rejected_ != rejected_before ? last_cause_ : 0;
+    current_entry_ = &entry_;
+    if (entry && entry_key && cache_entries_.size() < 4096) {
+      cache_entries_.emplace(entry_key, entry_);
     }
-    return entrada;
+    return entry;
   }
 
   // Key of the input cache: everything CalcularEntrada reads from the elements and from both microcodes
   // (instruction, usage and index; original and patched words of each fetch), seeded with the VS. 0 = do
   // not cache.
-  uint64_t ClaveEntrada(const PeticionDibujo& p) const {
-    const EntradaShader& vs = *p.vs;
-    const auto& parcheado = p.vs_microcodigo;
-    if (parcheado.size() != vs.microcodigo.size() || vs.elementos.size() > 32) {
+  uint64_t EntryKey(const DrawRequest& p) const {
+    const ShaderEntry& vs = *p.vs;
+    const auto& patched = p.microcode_vs;
+    if (patched.size() != vs.ucode.size() || vs.elements.size() > 32) {
       return 0;
     }
-    std::array<uint32_t, 32 * 6> palabras;
+    std::array<uint32_t, 32 * 6> word_data;
     size_t n = 0;
-    for (const ElementoVertice& elemento : vs.elementos) {
-      const size_t i = size_t(elemento.instruccion) * 3;
-      if (i + 2 >= parcheado.size()) {
+    for (const VertexElement& element : vs.elements) {
+      const size_t i = size_t(element.instruction) * 3;
+      if (i + 2 >= patched.size()) {
         return 0;
       }
-      palabras[n++] = (uint32_t(elemento.instruccion) << 16) | (uint32_t(elemento.uso) << 8) |
-                      elemento.indice_uso;
-      palabras[n++] = vs.microcodigo[i];
-      palabras[n++] = vs.microcodigo[i + 1];
-      palabras[n++] = parcheado[i];
-      palabras[n++] = parcheado[i + 1];
-      palabras[n++] = parcheado[i + 2];
+      word_data[n++] = (uint32_t(element.instruction) << 16) | (uint32_t(element.use) << 8) |
+                      element.use_index;
+      word_data[n++] = vs.ucode[i];
+      word_data[n++] = vs.ucode[i + 1];
+      word_data[n++] = patched[i];
+      word_data[n++] = patched[i + 1];
+      word_data[n++] = patched[i + 2];
     }
-    const uint64_t clave =
-        XXH3_64bits_withSeed(palabras.data(), n * sizeof(uint32_t), uint64_t(uintptr_t(p.vs)));
-    return clave ? clave : 1;
+    const uint64_t key =
+        XXH3_64bits_withSeed(word_data.data(), n * sizeof(uint32_t), uint64_t(uintptr_t(p.vs)));
+    return key ? key : 1;
   }
 
-  const EntradaVertices* CalcularEntrada(const PeticionDibujo& p) {
-    const EntradaShader& vs = *p.vs;
-    entrada_.remapeos.fill(kRemapeoIdentidad);
-    const auto& parcheado = p.vs_microcodigo;
-    if (parcheado.size() != vs.microcodigo.size()) {
-      Rechazar(20, "el VS del anillo no tiene la longitud del contenedor");
+  const VertexInput* ComputeEntry(const DrawRequest& p) {
+    const ShaderEntry& vs = *p.vs;
+    entry_.remaps.fill(kIdentityRemap);
+    const auto& patched = p.microcode_vs;
+    if (patched.size() != vs.ucode.size()) {
+      Reject(20, "el VS del anillo no tiene la longitud del contenedor");
       return nullptr;
     }
-    uint32_t ubicaciones_usadas = 0;
-    for (const ElementoVertice& elemento : vs.elementos) {
-      const uint32_t registro = elemento.registro;  // AirborneNX: masked in the microcode copy
-      const uint32_t original = elemento.swizzle;  // AirborneNX: the microcode copy has it masked
+    uint32_t used_locations = 0;
+    for (const VertexElement& element : vs.elements) {
+      const uint32_t reg_index = element.reg_index;  // AirborneNX: masked in the microcode copy
+      const uint32_t original = element.swizzle;  // AirborneNX: the microcode copy has it masked
       size_t q = SIZE_MAX;
-      for (const ElementoVertice& otro : vs.elementos) {
-        const size_t i = size_t(otro.instruccion) * 3;
-        if (((parcheado[i] >> 12) & 0x3F) != registro || (parcheado[i] & 0x1F) != 0) {
+      for (const VertexElement& other_one : vs.elements) {
+        const size_t i = size_t(other_one.instruction) * 3;
+        if (((patched[i] >> 12) & 0x3F) != reg_index || (patched[i] & 0x1F) != 0) {
           continue;
         }
         if (q == SIZE_MAX) {
           q = i;
         }
-        if (MascaraEscrita(parcheado[i + 1] & 0xFFF) == MascaraEscrita(original)) {
+        if (WrittenMask(patched[i + 1] & 0xFFF) == WrittenMask(original)) {
           q = i;  // the one that writes the same components
           break;
         }
       }
       if (q == SIZE_MAX) {
-        if (avisados_vs_.size() < 16 && avisados_vs_.insert(vs.numero).second) {
-          std::string detalle;
-          for (const ElementoVertice& otro : vs.elementos) {
-            const size_t i = size_t(otro.instruccion) * 3;
-            detalle += fmt::format(" {}{}@{}: original r{} op{}, parcheado r{} op{} {:08X} {:08X} {:08X};",
-                                   NombreUso(otro.uso), otro.indice_uso, otro.instruccion,
-                                   uint32_t(otro.registro), vs.microcodigo[i] & 0x1F,
-                                   (parcheado[i] >> 12) & 0x3F, parcheado[i] & 0x1F, parcheado[i],
-                                   parcheado[i + 1], parcheado[i + 2]);
+        if (vs_warned_.size() < 16 && vs_warned_.insert(vs.number).second) {
+          std::string detail;
+          for (const VertexElement& other_one : vs.elements) {
+            const size_t i = size_t(other_one.instruction) * 3;
+            detail += fmt::format(" {}{}@{}: original r{} op{}, parcheado r{} op{} {:08X} {:08X} {:08X};",
+                                   UseName(other_one.use), other_one.use_index, other_one.instruction,
+                                   uint32_t(other_one.reg_index), vs.ucode[i] & 0x1F,
+                                   (patched[i] >> 12) & 0x3F, patched[i] & 0x1F, patched[i],
+                                   patched[i + 1], patched[i + 2]);
           }
-          REXLOG_WARN("[nativo] C6 diag: VS n{} sin fetch para {}{} (registro r{}):{}", vs.numero,
-                      NombreUso(elemento.uso), elemento.indice_uso, registro, detalle);
+          REXLOG_WARN("[nativo] C6 diag: VS n{} sin fetch para {}{} (registro r{}):{}", vs.number,
+                      UseName(element.use), element.use_index, reg_index, detail);
         }
-        Rechazar(21, "fetch de vertices no encontrado en el VS parcheado");
+        Reject(21, "fetch de vertices no encontrado en el VS parcheado");
         return nullptr;
       }
-      const uint32_t d0 = parcheado[q], d1 = parcheado[q + 1], d2 = parcheado[q + 2];
+      const uint32_t d0 = patched[q], d1 = patched[q + 1], d2 = patched[q + 2];
       const uint32_t ranura = ((d0 >> 20) & 0x1F) * 3 + ((d0 >> 25) & 0x3);
-      const uint32_t formato = (d1 >> 16) & 0x3F;
-      const uint32_t zancada = (d2 & 0xFF) * 4;
+      const uint32_t format_id = (d1 >> 16) & 0x3F;
+      const uint32_t stride_bytes = (d2 & 0xFF) * 4;
       const int32_t offset = (int32_t(d2 << 1) >> 9) * 4;
-      const int32_t ubicacion = UbicacionDeUso(elemento.uso, elemento.indice_uso);
-      if (ubicacion < 0 || ((ubicaciones_usadas >> ubicacion) & 0x1)) {
-        Avisar(22, "elemento de vertices sin ubicacion libre en el shader: se omite");
+      const int32_t loc_index = UseLocation(element.use, element.use_index);
+      if (loc_index < 0 || ((used_locations >> loc_index) & 0x1)) {
+        Warn(22, "elemento de vertices sin ubicacion libre en el shader: se omite");
         continue;
       }
-      const uint32_t codigo = CodigoRemapeo(original, d1 & 0xFFF);
-      if (codigo != kRemapeoIdentidad && avisos_swizzle_ < 24) {
-        ++avisos_swizzle_;
+      const uint32_t code = RemapCode(original, d1 & 0xFFF);
+      if (code != kIdentityRemap && swizzle_warnings_ < 24) {
+        ++swizzle_warnings_;
         REXLOG_INFO("[nativo] C6: VS n{} {}{} (formato {}): swizzle original {:03X}, parcheado {:03X}, "
                     "remapeo {:03X}",
-                    vs.numero, NombreUso(elemento.uso), elemento.indice_uso, formato, original,
-                    d1 & 0xFFF, codigo);
+                    vs.number, UseName(element.use), element.use_index, format_id, original,
+                    d1 & 0xFFF, code);
       }
       bool r11g11b10 = false;
-      const VkFormat vk = FormatoAtributo(formato, EntradaEntera(elemento.uso), (d1 >> 12) & 0x1,
+      const VkFormat vk = AttributeFormat(format_id, IntEntry(element.use), (d1 >> 12) & 0x1,
                                           (d1 >> 13) & 0x1, false, r11g11b10);
       if (vk == VK_FORMAT_UNDEFINED) {
-        Rechazar(300 + formato, "formato de vertice todavia no soportado");
+        Reject(300 + format_id, "formato de vertice todavia no soportado");
         return nullptr;
       }
       if (r11g11b10) {
-        entrada_.especializacion |= 0x1;
+        entry_.specialization |= 0x1;
       }
-      uint32_t enlace = 0;
-      while (enlace < entrada_.enlaces.size() && entrada_.enlaces[enlace].ranura != ranura) {
-        ++enlace;
+      uint32_t bind_index = 0;
+      while (bind_index < entry_.bindings.size() && entry_.bindings[bind_index].ranura != ranura) {
+        ++bind_index;
       }
-      if (enlace == entrada_.enlaces.size()) {
-        entrada_.enlaces.push_back({ranura, zancada});
-      } else if (!entrada_.enlaces[enlace].zancada) {
-        entrada_.enlaces[enlace].zancada = zancada;
+      if (bind_index == entry_.bindings.size()) {
+        entry_.bindings.push_back({ranura, stride_bytes});
+      } else if (!entry_.bindings[bind_index].stride_bytes) {
+        entry_.bindings[bind_index].stride_bytes = stride_bytes;
       }
       if (offset < 0) {
-        Rechazar(24, "offset de vertice negativo");
+        Reject(24, "offset de vertice negativo");
         return nullptr;
       }
-      entrada_.atributos.push_back({uint32_t(ubicacion), enlace, vk, uint32_t(offset)});
-      entrada_.remapeos[ubicacion] = codigo;
-      ubicaciones_usadas |= uint32_t(1) << ubicacion;
+      entry_.attributes.push_back({uint32_t(loc_index), bind_index, vk, uint32_t(offset)});
+      entry_.remaps[loc_index] = code;
+      used_locations |= uint32_t(1) << loc_index;
     }
-    for (const EnlaceVertices& enlace : entrada_.enlaces) {
-      if (!enlace.zancada) {
-        Rechazar(25, "stream de vertices sin zancada");
+    for (const VertexBinding& bind_index : entry_.bindings) {
+      if (!bind_index.stride_bytes) {
+        Reject(25, "stream de vertices sin zancada");
         return nullptr;
       }
     }
-    uint64_t huella = XXH3_64bits(entrada_.atributos.data(),
-                                  entrada_.atributos.size() * sizeof(AtributoVertices));
-    huella = XXH3_64bits_withSeed(entrada_.enlaces.data(),
-                                  entrada_.enlaces.size() * sizeof(EnlaceVertices), huella);
-    entrada_.huella = huella ^ entrada_.especializacion;
-    entrada_valida_ = true;
-    return &entrada_;
+    uint64_t fingerprint = XXH3_64bits(entry_.attributes.data(),
+                                  entry_.attributes.size() * sizeof(VertexAttribute));
+    fingerprint = XXH3_64bits_withSeed(entry_.bindings.data(),
+                                  entry_.bindings.size() * sizeof(VertexBinding), fingerprint);
+    entry_.fingerprint = fingerprint ^ entry_.specialization;
+    valid_entry_ = true;
+    return &entry_;
   }
 
   // Texture of a fetch constant: heap slot and, if it has to be uploaded, it is left in texturas_a_subir_
   // with its data already prepared. Base level of 2D textures and cubemaps.
-  void PrepararTextura(const uint32_t* f, uint32_t& ranura, uint32_t& monton,
-                       VkDeviceSize& bytes_subida, bool& muestreo_puntual, uint64_t& valido_hasta,
-                       uint32_t& ancho_host_out, uint32_t& alto_host_out, float& escala_out) {
+  void PrepareTexture(const uint32_t* f, uint32_t& ranura, uint32_t& heap,
+                       VkDeviceSize& upload_bytes, bool& point_sampling, uint64_t& valid_until,
+                       uint32_t& host_width_out, uint32_t& host_height_out, float& scale_out) {
     ranura = 0;
-    monton = 0;
+    heap = 0;
     // AirborneNX: exp_adjust of the fetch constant (dword 3, bits 13-18, signed): samples are multiplied by
     // 2^exp_adjust. Resolved textures add their own resolve bias below.
-    escala_out = std::ldexp(1.0f, int32_t(f[3] << 13) >> 26);
-    ancho_host_out = 0;  // 0 = unknown (1/size is not written)
-    alto_host_out = 0;
-    muestreo_puntual = false;
-    valido_hasta = fotograma_;  // by default, this frame only
+    scale_out = std::ldexp(1.0f, int32_t(f[3] << 13) >> 26);
+    host_width_out = 0;  // 0 = unknown (1/size is not written)
+    host_height_out = 0;
+    point_sampling = false;
+    valid_until = frame_;  // by default, this frame only
     if ((f[0] & 0x3) != uint32_t(xenos::FetchConstantType::kTexture)) {
       return;
     }
     const uint32_t dimension = (f[5] >> 9) & 0x3;
-    const bool cubo = dimension == uint32_t(xenos::DataDimension::kCube);
-    const bool volumen = dimension == uint32_t(xenos::DataDimension::k3D);
-    if (dimension != uint32_t(xenos::DataDimension::k2DOrStacked) && !cubo && !volumen) {
-      Avisar(30, "texturas 1D todavia no soportadas: se usa una vacia");
+    const bool cube = dimension == uint32_t(xenos::DataDimension::kCube);
+    const bool volume = dimension == uint32_t(xenos::DataDimension::k3D);
+    if (dimension != uint32_t(xenos::DataDimension::k2DOrStacked) && !cube && !volume) {
+      Warn(30, "texturas 1D todavia no soportadas: se usa una vacia");
       return;
     }
-    monton = cubo ? 2 : volumen ? 1 : 0;
-    const uint32_t capas = cubo ? 6 : 1;
+    heap = cube ? 2 : volume ? 1 : 0;
+    const uint32_t layer_count = cube ? 6 : 1;
     // AirborneNX: gamma (3 in every RGB sign) is handled below with sRGB formats; signed and biased are not.
     if (((f[0] >> 2) & 0xFF) && ((f[0] >> 2) & 0x3F) != 0x3F) {
-      Avisar(31, "texturas con signo o gamma: se leen sin signo");
+      Warn(31, "texturas con signo o gamma: se leen sin signo");
     }
     const uint32_t swizzle = (f[3] >> 1) & 0xFFF;
     const uint32_t base = (f[1] >> 12) << 12;
-    if (!cubo && !volumen) {
-      if (const ImagenNativa* resuelta = contexto_->TexturaResuelta(base & 0x1FFFFFFF)) {
+    if (!cube && !volume) {
+      if (const NativeImage* resolved = contexto_->ResolvedTexture(base & 0x1FFFFFFF)) {
         // AirborneNX: the guest texture's own size (size_2d: 13 + 13 bits).
-        const uint32_t ancho_guest = (f[2] & 0x1FFF) + 1, alto_guest = ((f[2] >> 13) & 0x1FFF) + 1;
-        if (!EsProfundidad(resuelta->formato) && !resuelta->ancho_guest &&
-            (ancho_guest != resuelta->ancho || alto_guest != resuelta->alto)) {
-          contexto_->AnotarTamanoTextura(base & 0x1FFFFFFF, ancho_guest, alto_guest);
+        const uint32_t guest_width = (f[2] & 0x1FFF) + 1, guest_height = ((f[2] >> 13) & 0x1FFF) + 1;
+        if (!IsDepth(resolved->format_id) && !resolved->guest_width &&
+            (guest_width != resolved->width_px || guest_height != resolved->height_px)) {
+          contexto_->TrackTextureSize(base & 0x1FFFFFFF, guest_width, guest_height);
         }
         // Without this the shadows flicker.
         // With nfsmw_nativo_inv_tamano_tex the shader takes 1/size from the shared constants, and this path
         // used to return without reporting the size: 0 was written and the tfetch offsets (the taps of the
         // shadow map's PCF filter) all landed on the same texel. The filtering disappeared and the edge
         // shimmered as the camera moved. Resolved textures report their size like any other.
-        ancho_host_out = resuelta->ancho;
-        alto_host_out = resuelta->alto;
-        escala_out *= resuelta->escala;
+        host_width_out = resolved->width_px;
+        host_height_out = resolved->height_px;
+        scale_out *= resolved->scale;
         // One trace per size, to check in the log that the 1/size constant of resolved textures is no longer
         // 0 (that was the cause of the shadow flicker).
-        if (avisos_invtam_resuelta_.insert(uint64_t(resuelta->ancho) << 32 | resuelta->alto).second) {
+        if (resolved_invsize_warnings_.insert(uint64_t(resolved->width_px) << 32 | resolved->height_px).second) {
           REXLOG_INFO("[nativo] C3: textura resuelta {}x{}: 1/tamano = {:.6f}, {:.6f}",
-                      resuelta->ancho, resuelta->alto, 1.0f / float(resuelta->ancho),
-                      1.0f / float(resuelta->alto));
+                      resolved->width_px, resolved->height_px, 1.0f / float(resolved->width_px),
+                      1.0f / float(resolved->height_px));
         }
-        if (EsProfundidad(resuelta->formato)) {
+        if (IsDepth(resolved->format_id)) {
           // Depth copy (k_24_8): depth comes out in R and the fetch constant's swizzle distributes it. No
           // filtering: it is read as is.
-          ranura = RanuraVista(resuelta->imagen, resuelta->formato, swizzle, kSwizzleRRRR);
-          muestreo_puntual = true;
+          ranura = ViewSlot(resolved->img, resolved->format_id, swizzle, kSwizzleRRRR);
+          point_sampling = true;
           // This used to be UINT64_MAX, and that is what forced the cross-frame cache off.
           // A resolved texture is a render target the game rewrites every frame. Saying its descriptor slot is
           // valid "until the generation changes" meant that, with the CPU two frames ahead (3 work slots), an
           // old view was reused: that was the smeared race leaderboard that kept
           // nfsmw_nativo_cache_texturas_entre_fotogramas at false for a while. The other paths are already tied
           // to textura.siguiente and relax nothing; these two were the only ones without a horizon.
-          valido_hasta = fotograma_;
+          valid_until = frame_;
           return;
         }
         // The emulation writes the copy to memory with copy_dest_swap and loads it as a texture: the fetch
         // constant's swizzle (ZYXW for 8888) undoes that swap. Here the copy is image to image and does not
         // swap channels, so the swap goes into the host channels (without this, Mia came out blue).
-        ranura = RanuraVista(resuelta->imagen, resuelta->formato, swizzle,
-                             resuelta->intercambio_rb ? kSwizzleBGRA : kSwizzleRGBA);
-        valido_hasta = fotograma_;  // see the long comment on the depth copy
+        ranura = ViewSlot(resolved->img, resolved->format_id, swizzle,
+                             resolved->rb_swap ? kSwizzleBGRA : kSwizzleRGBA);
+        valid_until = frame_;  // see the long comment on the depth copy
         return;
       }
     }
-    const uint32_t formato = f[1] & 0x3F;
-    FormatoTextura tf;
-    if (!FormatoTexturaDe(formato, tf)) {
-      Avisar(400 + formato, "formato de textura todavia no soportado: se usa una vacia");
+    const uint32_t format_id = f[1] & 0x3F;
+    TextureFormat tf;
+    if (!TextureFormatOf(format_id, tf)) {
+      Warn(400 + format_id, "formato de textura todavia no soportado: se usa una vacia");
       return;
     }
     // AirborneNX: gamma textures (sign_x/y/z = 3, TextureSign::kGamma) are linearized by the Xenos when
@@ -8537,86 +8537,86 @@ class DibujosVulkanImpl final : public DibujosVulkan {
     // approximation the emulation uses by default. They are already separate cache entries: the sign bits
     // are part of the key.
     if (((f[0] >> 2) & 0x3F) == 0x3F) {
-      const VkFormat srgb = FormatoSrgb(tf.formato);
+      const VkFormat srgb = SrgbFormat(tf.format_id);
       if (srgb != VK_FORMAT_UNDEFINED) {
-        tf.formato = srgb;
+        tf.format_id = srgb;
       } else {
-        Avisar(39, "textura gamma en un formato sin variante sRGB: se lee sin linealizar");
+        Warn(39, "textura gamma en un formato sin variante sRGB: se lee sin linealizar");
       }
     }
     // size_2d: 13 + 13 bits; size_3d: 11 + 11 + 10 bits (xenos.h:1222-1233).
-    const uint32_t ancho = volumen ? (f[2] & 0x7FF) + 1 : (f[2] & 0x1FFF) + 1;
-    const uint32_t alto = volumen ? ((f[2] >> 11) & 0x7FF) + 1 : ((f[2] >> 13) & 0x1FFF) + 1;
-    const uint32_t fondo = volumen ? ((f[2] >> 22) & 0x3FF) + 1 : 0;
-    if (volumen && tf.bloque > 1) {
-      Avisar(38, "textura 3D comprimida: se usa una vacia");
+    const uint32_t width_px = volume ? (f[2] & 0x7FF) + 1 : (f[2] & 0x1FFF) + 1;
+    const uint32_t height_px = volume ? ((f[2] >> 11) & 0x7FF) + 1 : ((f[2] >> 13) & 0x1FFF) + 1;
+    const uint32_t background = volume ? ((f[2] >> 22) & 0x3FF) + 1 : 0;
+    if (volume && tf.block > 1) {
+      Warn(38, "textura 3D comprimida: se usa una vacia");
       return;
     }
-    const uint32_t bloques_x = (ancho + tf.bloque - 1) / tf.bloque;
-    const uint32_t bloques_y = (alto + tf.bloque - 1) / tf.bloque;
-    const uint32_t pitch_bloques = std::max<uint32_t>((((f[0] >> 22) & 0x1FF) << 5) / tf.bloque, 1);
+    const uint32_t blocks_x = (width_px + tf.block - 1) / tf.block;
+    const uint32_t blocks_y = (height_px + tf.block - 1) / tf.block;
+    const uint32_t blocks_pitch = std::max<uint32_t>((((f[0] >> 22) & 0x1FF) << 5) / tf.block, 1);
     // The faces of a cubemap are consecutive: each takes its base level with rows and columns aligned to
     // 32 blocks and the total to 4 KB (GetGuestTextureLayout, pipeline/texture/util.cpp:311-337).
-    const uint64_t zancada_cara =
-        (uint64_t((pitch_bloques + 31) & ~uint32_t(31)) * tf.bytes *
-             ((bloques_y + 31) & ~uint32_t(31)) +
+    const uint64_t face_stride =
+        (uint64_t((blocks_pitch + 31) & ~uint32_t(31)) * tf.bytes *
+             ((blocks_y + 31) & ~uint32_t(31)) +
          4095) &
         ~uint64_t(4095);
-    const uint32_t claves[5] = {f[0] & 0xFFC003FC, f[1], f[2], (f[4] >> 2) & 0xFF, f[5] >> 9};
-    const uint64_t clave = XXH3_64bits(claves, sizeof(claves));
+    const uint32_t keys[5] = {f[0] & 0xFFC003FC, f[1], f[2], (f[4] >> 2) & 0xFF, f[5] >> 9};
+    const uint64_t key = XXH3_64bits(keys, sizeof(keys));
 
     // Mip levels with the rules of GetSubresourcesFromFetchConstant (pipeline/texture/util.cpp:67-97): no
     // mip address means no mips; the maximum is clamped to the size; if the base is missing or the minimum
     // is above 0, the base is not read. 3D textures still use only the base.
-    const bool mosaico_textura = (f[0] >> 31) & 0x1;
+    const bool texture_tile = (f[0] >> 31) & 0x1;
     const uint64_t dir_base = uint64_t(base) & 0x1FFFFFFF;
     const uint64_t dir_mips = uint64_t((f[5] >> 12) & 0x1FFFF) << 12;
-    const uint32_t nivel_empaquetado =
-        mipmaps_ && !volumen && ((f[5] >> 11) & 0x1) ? NivelEmpaquetado(ancho, alto) : UINT32_MAX;
-    uint32_t nivel_max = 0;
-    bool leer_base = true;
-    if (mipmaps_ && !volumen && dir_mips != 0) {
-      const uint32_t tam_max = Log2Suelo(std::max(ancho, alto));
-      uint32_t nivel_min = std::min((f[4] >> 2) & 0xFu, tam_max);
-      nivel_max = std::max(std::min((f[4] >> 6) & 0xFu, tam_max), nivel_min);
-      if (nivel_max != 0) {
+    const uint32_t packed_level =
+        mipmaps_ && !volume && ((f[5] >> 11) & 0x1) ? PackedLevel(width_px, height_px) : UINT32_MAX;
+    uint32_t level_max = 0;
+    bool read_base = true;
+    if (mipmaps_ && !volume && dir_mips != 0) {
+      const uint32_t size_max = Log2Floor(std::max(width_px, height_px));
+      uint32_t level_min = std::min((f[4] >> 2) & 0xFu, size_max);
+      level_max = std::max(std::min((f[4] >> 6) & 0xFu, size_max), level_min);
+      if (level_max != 0) {
         if (dir_base == 0) {
-          nivel_min = std::max(nivel_min, 1u);
+          level_min = std::max(level_min, 1u);
         }
-        leer_base = nivel_min == 0;
+        read_base = level_min == 0;
       }
     }
     // Mip regions from dir_mips (GetGuestTextureLayout): each level stored with rows of 32 blocks computed
     // from the size rounded up to a power of 2 (and aligned to 256 bytes if the texture is linear) and
     // layers aligned to 4 KB; the levels of the packed tail share the region of the first of them.
     struct RegionMip {
-      uint64_t desplazamiento = 0;
-      uint64_t fila_bytes = 0;
-      uint64_t zancada = 0;
-      uint32_t pitch_bloques = 0;
+      uint64_t byte_offset = 0;
+      uint64_t row_bytes = 0;
+      uint64_t stride_bytes = 0;
+      uint32_t blocks_pitch = 0;
     };
-    std::array<RegionMip, 16> regiones{};
+    std::array<RegionMip, 16> regions{};
     uint64_t extension_mips = 0;
-    if (nivel_max != 0) {
-      const uint32_t ultima = nivel_empaquetado == 0 ? 0 : std::min(nivel_max, nivel_empaquetado);
-      for (uint32_t s = nivel_empaquetado == 0 ? 0 : 1; s <= ultima; ++s) {
-        RegionMip& region = regiones[s];
-        const uint32_t fila_texels = std::max(std::bit_ceil(ancho) >> s, 1u);
-        const uint32_t filas_texels = std::max(std::bit_ceil(alto) >> s, 1u);
-        region.pitch_bloques = ((fila_texels + tf.bloque - 1) / tf.bloque + 31) & ~31u;
-        region.fila_bytes = uint64_t(region.pitch_bloques) * tf.bytes;
-        if (!mosaico_textura) {
-          region.fila_bytes = (region.fila_bytes + 255) & ~uint64_t(255);
+    if (level_max != 0) {
+      const uint32_t last_level = packed_level == 0 ? 0 : std::min(level_max, packed_level);
+      for (uint32_t s = packed_level == 0 ? 0 : 1; s <= last_level; ++s) {
+        RegionMip& region = regions[s];
+        const uint32_t texels_row = std::max(std::bit_ceil(width_px) >> s, 1u);
+        const uint32_t texels_rows = std::max(std::bit_ceil(height_px) >> s, 1u);
+        region.blocks_pitch = ((texels_row + tf.block - 1) / tf.block + 31) & ~31u;
+        region.row_bytes = uint64_t(region.blocks_pitch) * tf.bytes;
+        if (!texture_tile) {
+          region.row_bytes = (region.row_bytes + 255) & ~uint64_t(255);
         }
-        const uint64_t filas_bloques = uint64_t(((filas_texels + tf.bloque - 1) / tf.bloque + 31) & ~31u);
-        region.zancada = (region.fila_bytes * filas_bloques + 4095) & ~uint64_t(4095);
-        region.desplazamiento = extension_mips;
-        extension_mips += region.zancada * capas;
+        const uint64_t blocks_rows = uint64_t(((texels_rows + tf.block - 1) / tf.block + 31) & ~31u);
+        region.stride_bytes = (region.row_bytes * blocks_rows + 4095) & ~uint64_t(4095);
+        region.byte_offset = extension_mips;
+        extension_mips += region.stride_bytes * layer_count;
       }
-      if (dir_mips + extension_mips > kMemoriaFisica) {
-        nivel_max = 0;  // the mips would go past memory: base only
+      if (dir_mips + extension_mips > kPhysicalMemory) {
+        level_max = 0;  // the mips would go past memory: base only
         extension_mips = 0;
-        leer_base = true;
+        read_base = true;
       }
     }
     // With the packed tail starting at level 0 (short side of 16 texels or less), the base does not start
@@ -8624,257 +8624,257 @@ class DibujosVulkanImpl final : public DibujosVulkan {
     // offset to level 0).
     uint32_t base_ox = 0;
     uint32_t base_oy = 0;
-    if (nivel_empaquetado == 0) {
-      DesplazamientoEmpaquetado(ancho, alto, tf.bloque, 0, base_ox, base_oy);
+    if (packed_level == 0) {
+      PackedOffset(width_px, height_px, tf.block, 0, base_ox, base_oy);
     }
 
-    if (cubo && copiar_imagen_) {
+    if (cube && copy_image_) {
       // The game's dynamic cubemap: C2 resolves its faces one by one to those same addresses. They are
       // copied to the cubemap's layers in the upload command buffer, which runs before the work one, so they
       // lag one frame behind.
-      std::array<const ImagenNativa*, 6> caras{};
-      bool resueltas = true;
-      for (uint32_t c = 0; c < 6 && resueltas; ++c) {
-        caras[c] = contexto_->TexturaResuelta(
-            uint32_t((uint64_t(base) + c * zancada_cara) & 0x1FFFFFFF));
-        resueltas = caras[c] && caras[c]->formato == VK_FORMAT_R8G8B8A8_UNORM &&
-                    caras[c]->ancho >= ancho && caras[c]->alto >= alto;
+      std::array<const NativeImage*, 6> faces{};
+      bool resolved_list = true;
+      for (uint32_t c = 0; c < 6 && resolved_list; ++c) {
+        faces[c] = contexto_->ResolvedTexture(
+            uint32_t((uint64_t(base) + c * face_stride) & 0x1FFFFFFF));
+        resolved_list = faces[c] && faces[c]->format_id == VK_FORMAT_R8G8B8A8_UNORM &&
+                    faces[c]->width_px >= width_px && faces[c]->height_px >= height_px;
       }
-      if (resueltas) {
-        const uint64_t clave_resuelto = clave ^ 0x9E3779B97F4A7C15ull;
-        Textura& textura = texturas_[clave_resuelto];
-        if (textura.imagen.imagen == VK_NULL_HANDLE) {
-          if (!CrearTextura(textura.imagen, VK_FORMAT_R8G8B8A8_UNORM, ancho, alto, capas)) {
-            texturas_.erase(clave_resuelto);
-            Avisar(32, "no se pudo crear una textura");
+      if (resolved_list) {
+        const uint64_t resolved_key = key ^ 0x9E3779B97F4A7C15ull;
+        Texture& texture = textures_[resolved_key];
+        if (texture.img.img == VK_NULL_HANDLE) {
+          if (!CreateTexture(texture.img, VK_FORMAT_R8G8B8A8_UNORM, width_px, height_px, layer_count)) {
+            textures_.erase(resolved_key);
+            Warn(32, "no se pudo crear una textura");
             return;
           }
-          textura.capas = capas;
-          textura.bytes = uint64_t(ancho) * alto * 4 * capas;
-          bytes_texturas_ += textura.bytes;
+          texture.layer_count = layer_count;
+          texture.bytes = uint64_t(width_px) * height_px * 4 * layer_count;
+          textures_bytes_ += texture.bytes;
           REXLOG_INFO("[nativo] C3: cubo {:08X} {}x{} con sus caras resueltas por C2 (fetch {:08X} "
                       "{:08X} {:08X} {:08X} {:08X} {:08X})",
-                      base, ancho, alto, f[0], f[1], f[2], f[3], f[4], f[5]);
+                      base, width_px, height_px, f[0], f[1], f[2], f[3], f[4], f[5]);
         }
-        if (textura.fotograma != fotograma_) {
-          const VkCommandBuffer subida = contexto_->ComandosSubida();
-          if (!subida) {
+        if (texture.frame != frame_) {
+          const VkCommandBuffer upload = contexto_->UploadCommands();
+          if (!upload) {
             return;
           }
-          textura.fotograma = fotograma_;
-          if (!textura.imagen.preparada) {
-            Barrera(subida, textura.imagen.imagen, capas);
-            textura.imagen.preparada = true;
+          texture.frame = frame_;
+          if (!texture.img.prepared) {
+            Barrier(upload, texture.img.img, layer_count);
+            texture.img.prepared = true;
           }
           for (uint32_t c = 0; c < 6; ++c) {
-            VkImageCopy copia{};
-            copia.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-            copia.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, c, 1};
-            copia.extent = {ancho, alto, 1};
-            copiar_imagen_(subida, caras[c]->imagen, VK_IMAGE_LAYOUT_GENERAL, textura.imagen.imagen,
-                           VK_IMAGE_LAYOUT_GENERAL, 1, &copia);
+            VkImageCopy copy_info{};
+            copy_info.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            copy_info.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, c, 1};
+            copy_info.extent = {width_px, height_px, 1};
+            copy_image_(upload, faces[c]->img, VK_IMAGE_LAYOUT_GENERAL, texture.img.img,
+                           VK_IMAGE_LAYOUT_GENERAL, 1, &copy_info);
           }
           // Rear-view mirror diagnostic: how many times the faces are copied to the cubemap per submission.
-          ++cubos_refrescados_;
-          const auto ahora = std::chrono::steady_clock::now();
-          if (ahora - informe_cubos_ >= std::chrono::seconds(10)) {
+          ++refreshed_cubes_;
+          const auto now_time = std::chrono::steady_clock::now();
+          if (now_time - cubes_report_ >= std::chrono::seconds(10)) {
             // It used to be the last periodic line the ring wrote itself; it now goes to the report thread.
-            NFSMW_INFORME_ANILLO("[nativo] C3 cubos con caras de C2: {} refrescos en {} trabajos",
-                                 cubos_refrescados_ - cubos_refrescados_previos_,
-                                 fotograma_ - fotograma_informe_cubos_);
-            informe_cubos_ = ahora;
-            cubos_refrescados_previos_ = cubos_refrescados_;
-            fotograma_informe_cubos_ = fotograma_;
+            NFSMW_RING_REPORT("[nativo] C3 cubos con caras de C2: {} refrescos en {} trabajos",
+                                 refreshed_cubes_ - refreshed_cubes_previous_,
+                                 frame_ - cubes_report_frame_);
+            cubes_report_ = now_time;
+            refreshed_cubes_previous_ = refreshed_cubes_;
+            cubes_report_frame_ = frame_;
           }
         }
-        ranura = RanuraVista(textura.imagen.imagen, VK_FORMAT_R8G8B8A8_UNORM, swizzle,
-                             caras[0]->intercambio_rb ? kSwizzleBGRA : kSwizzleRGBA, monton);
+        ranura = ViewSlot(texture.img.img, VK_FORMAT_R8G8B8A8_UNORM, swizzle,
+                             faces[0]->rb_swap ? kSwizzleBGRA : kSwizzleRGBA, heap);
         // The cubemap with the resolved faces must also report its size, or its 1/size stays at 0 and the
         // tfetch offsets are lost (see the branch above).
-        ancho_host_out = textura.imagen.ancho;
-        alto_host_out = textura.imagen.alto;
+        host_width_out = texture.img.width_px;
+        host_height_out = texture.img.height_px;
         return;
       }
     }
 
-    Textura& textura = texturas_[clave];
-    if (textura.imagen.imagen == VK_NULL_HANDLE) {
+    Texture& texture = textures_[key];
+    if (texture.img.img == VK_NULL_HANDLE) {
       // BC in Vulkan: the size is in whole blocks.
-      const uint32_t ancho_host = tf.bloque > 1 ? (ancho + 3) & ~uint32_t(3) : ancho;
-      const uint32_t alto_host = tf.bloque > 1 ? (alto + 3) & ~uint32_t(3) : alto;
+      const uint32_t host_width = tf.block > 1 ? (width_px + 3) & ~uint32_t(3) : width_px;
+      const uint32_t host_height = tf.block > 1 ? (height_px + 3) & ~uint32_t(3) : height_px;
       // With its mip levels (those that fit in the host size).
-      const uint32_t niveles = std::min(nivel_max + 1, Log2Suelo(std::max(ancho_host, alto_host)) + 1);
+      const uint32_t levels = std::min(level_max + 1, Log2Floor(std::max(host_width, host_height)) + 1);
       /*
        * The vkBindImageMemory goes to the bind thread if possible (nfsmw_nativo_texturas_enlace_hilo) and,
        * otherwise, CrearTextura as usual. What the ring spends creating is timed, without its wait for the
        * thread (that is counted separately), for the [tiron] anillo line and the 10 s report.
        */
-      const auto antes_crear = std::chrono::steady_clock::now();
-      const uint64_t espera_antes_crear = ns_espera_enlaces_total_;
-      midiendo_creacion_ = true;
-      const bool creada = CrearTexturaEnHilo(textura, tf.formato, ancho_host, alto_host, capas, fondo, niveles) ||
-                          CrearTextura(textura.imagen, tf.formato, ancho_host, alto_host, capas, fondo, niveles);
-      midiendo_creacion_ = false;
+      const auto before_create = std::chrono::steady_clock::now();
+      const uint64_t wait_before_create = bindings_wait_total_ns_;
+      creation_measuring_ = true;
+      const bool created_one = CreateTextureInThread(texture, tf.format_id, host_width, host_height, layer_count, background, levels) ||
+                          CreateTexture(texture.img, tf.format_id, host_width, host_height, layer_count, background, levels);
+      creation_measuring_ = false;
       {
         const uint64_t ns = uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                         std::chrono::steady_clock::now() - antes_crear)
+                                         std::chrono::steady_clock::now() - before_create)
                                          .count());
-        const uint64_t espera = ns_espera_enlaces_total_ - espera_antes_crear;
-        const uint64_t propio = ns > espera ? ns - espera : 0;
-        nfsmw::esperas::g_ns_crear_texturas.fetch_add(propio, std::memory_order_relaxed);
-        ns_crear_informe_ += propio;
+        const uint64_t wait_stats = bindings_wait_total_ns_ - wait_before_create;
+        const uint64_t own = ns > wait_stats ? ns - wait_stats : 0;
+        nfsmw::waits::g_textures_create_ns.fetch_add(own, std::memory_order_relaxed);
+        create_report_ns_ += own;
       }
-      if (!creada) {
-        texturas_.erase(clave);
-        Avisar(32, "no se pudo crear una textura");
+      if (!created_one) {
+        textures_.erase(key);
+        Warn(32, "no se pudo crear una textura");
         return;
       }
-      textura.capas = capas;
-      textura.fondo = fondo;
-      textura.niveles = niveles;
-      niveles_mip_subidos_ += niveles - 1;
+      texture.layer_count = layer_count;
+      texture.background = background;
+      texture.levels = levels;
+      uploaded_mip_levels_ += levels - 1;
       // Measurement only: the shape without the address, to count, once its first hash is known, whether it
       // repeats the content of a live one (AnotarContenidoTextura). If this image is being recreated, the
       // previous one stops counting. The words are the key's without the base and mip addresses and without
       // bit 11 of f[1], which the sampler sets: format, byte order, tiling, pitch, size, mip limits, dimension
       // and packed tail.
-      if (DiagReutilizar()) {
-        QuitarContenidoTextura(textura, clave);
-        const uint32_t forma[5] = {claves[0], f[1] & 0x7FF, claves[2], claves[3], (f[5] >> 9) & 0x7};
-        textura.forma_contenido = XXH3_64bits(forma, sizeof(forma));
-        textura.direccion = base;
-        textura.contenido_por_medir = true;
+      if (DiagReuse()) {
+        RemoveTextureContent(texture, key);
+        const uint32_t shape[5] = {keys[0], f[1] & 0x7FF, keys[2], keys[3], (f[5] >> 9) & 0x7};
+        texture.content_shape = XXH3_64bits(shape, sizeof(shape));
+        texture.address = base;
+        texture.content_per_measure = true;
       }
-      for (uint32_t n = 0; n < niveles; ++n) {
-        textura.bytes += uint64_t((std::max(ancho_host >> n, 1u) + tf.bloque - 1) / tf.bloque) *
-                         ((std::max(alto_host >> n, 1u) + tf.bloque - 1) / tf.bloque) * tf.bytes * capas *
-                         (fondo ? fondo : 1);
+      for (uint32_t n = 0; n < levels; ++n) {
+        texture.bytes += uint64_t((std::max(host_width >> n, 1u) + tf.block - 1) / tf.block) *
+                         ((std::max(host_height >> n, 1u) + tf.block - 1) / tf.block) * tf.bytes * layer_count *
+                         (background ? background : 1);
       }
-      bytes_texturas_ += textura.bytes;
+      textures_bytes_ += texture.bytes;
       // Diagnostic: why the cache grows on the console. A new texture at an address that already had another
       // points to world zones reloaded at the same place; with the same address, format and size but a
       // different key, to key fields that change (mip limits, byte order...).
       {
-        ++texturas_creadas_;
-        nfsmw::esperas::g_texturas_creadas.fetch_add(1, std::memory_order_relaxed);
-        const uint64_t forma = XXH3_64bits_withSeed(&base, sizeof(base), (uint64_t(formato) << 40) ^
-                                                                              (uint64_t(ancho) << 20) ^ alto);
-        if (creadas_por_direccion_[base]++ > 0) {
-          ++creadas_en_direccion_vista_;
+        ++created_textures_;
+        nfsmw::waits::g_created_textures.fetch_add(1, std::memory_order_relaxed);
+        const uint64_t shape = XXH3_64bits_withSeed(&base, sizeof(base), (uint64_t(format_id) << 40) ^
+                                                                              (uint64_t(width_px) << 20) ^ height_px);
+        if (created_per_address_[base]++ > 0) {
+          ++created_in_view_address_;
         }
-        const auto [it_forma, nueva_forma] = clave_por_forma_.try_emplace(forma, clave);
-        if (!nueva_forma && it_forma->second != clave) {
-          ++creadas_misma_forma_otra_clave_;
-          it_forma->second = clave;
+        const auto [it_shape, new_shape] = key_per_shape_.try_emplace(shape, key);
+        if (!new_shape && it_shape->second != key) {
+          ++key_other_shape_same_created_;
+          it_shape->second = key;
           /*
            * In the main menu, ~100 textures per frame once came back with the same address, format and size and
            * a different key, and were created again every frame. This shows which key words change (the first
            * 40 times).
            */
-          const auto [it_palabras, nuevas] = palabras_por_forma_.try_emplace(forma);
+          const auto [it_words, added_items] = words_per_shape_.try_emplace(shape);
           /*
            * Key guard. The same five words cannot produce a different key: if one does, the key was not computed
            * from what its words say (as when XXH3 read claves[4] before it was written; see docs/toolchain.md).
            */
-          if (!nuevas && std::equal(std::begin(claves), std::end(claves), it_palabras->second.begin())) {
-            const uint64_t veces = ++claves_incoherentes_;
-            if (veces == 1 || veces == 10 || veces == 100 || veces == 1000 || veces % 10000 == 0) {
+          if (!added_items && std::equal(std::begin(keys), std::end(keys), it_words->second.begin())) {
+            const uint64_t times = ++inconsistent_keys_;
+            if (times == 1 || times == 10 || times == 100 || times == 1000 || times % 10000 == 0) {
               REXLOG_ERROR("[nativo] C3 clave de textura INCOHERENTE ({} veces): {:08X} {}x{} formato {} con las "
                            "mismas cinco palabras que la vez anterior y otra clave; la clave no sale de sus palabras",
-                           veces, base, ancho, alto, formato);
+                           times, base, width_px, height_px, format_id);
             }
           }
-          if (!nuevas && avisos_otra_clave_ < 40) {
-            ++avisos_otra_clave_;
-            const auto& antes = it_palabras->second;
+          if (!added_items && key_other_warnings_ < 40) {
+            ++key_other_warnings_;
+            const auto& before = it_words->second;
             REXLOG_INFO("[nativo] C3 misma textura con otra clave: {:08X} {}x{} formato {} | antes {:08X} {:08X} "
                         "{:08X} {:02X} {:06X} | ahora {:08X} {:08X} {:08X} {:02X} {:06X} | cambian {:08X} {:08X} "
                         "{:08X} {:02X} {:06X}",
-                        base, ancho, alto, formato, antes[0], antes[1], antes[2], antes[3], antes[4], claves[0],
-                        claves[1], claves[2], claves[3], claves[4], antes[0] ^ claves[0], antes[1] ^ claves[1],
-                        antes[2] ^ claves[2], antes[3] ^ claves[3], antes[4] ^ claves[4]);
+                        base, width_px, height_px, format_id, before[0], before[1], before[2], before[3], before[4], keys[0],
+                        keys[1], keys[2], keys[3], keys[4], before[0] ^ keys[0], before[1] ^ keys[1],
+                        before[2] ^ keys[2], before[3] ^ keys[3], before[4] ^ keys[4]);
           }
-          std::copy(std::begin(claves), std::end(claves), it_palabras->second.begin());
-        } else if (nueva_forma) {
-          auto& palabras = palabras_por_forma_[forma];
-          std::copy(std::begin(claves), std::end(claves), palabras.begin());
+          std::copy(std::begin(keys), std::end(keys), it_words->second.begin());
+        } else if (new_shape) {
+          auto& word_data = words_per_shape_[shape];
+          std::copy(std::begin(keys), std::end(keys), word_data.begin());
         }
         // From 256 to 1024. This line and the GPU memory line after it were the two longest stutters of the
         // "volcado de diagnostico" group: 147.6 ms and 107.5 ms of frame time on their own. With 1024 they
         // still appear once or twice per session, which is enough to see whether the duplicate key counter
         // spikes.
-        if (texturas_creadas_ % 1024 == 0) {
+        if (created_textures_ % 1024 == 0) {
           REXLOG_INFO("[nativo] C3 diag cache: {} texturas creadas ({} en la cache, {} MB): {} en una direccion que ya "
                       "tuvo otra textura; {} con la misma direccion, formato y tamano que otra pero distinta clave",
-                      texturas_creadas_, texturas_.size(), bytes_texturas_ >> 20, creadas_en_direccion_vista_,
-                      creadas_misma_forma_otra_clave_);
-          AnotarMemoriaDeLaGpu();
+                      created_textures_, textures_.size(), textures_bytes_ >> 20, created_in_view_address_,
+                      key_other_shape_same_created_);
+          TrackGpuMemory();
         }
       }
-      if (texturas_.size() <= 48) {
+      if (textures_.size() <= 48) {
         REXLOG_INFO("[nativo] C3: textura {:08X} {}x{} formato {} {} orden {} pitch {} "
                     "swizzle {:03X} signos {:02X}{}; niveles {} (mips en {:08X}, empaquetados desde {})",
-                    base, ancho, alto, formato, ((f[0] >> 31) & 0x1) ? "en mosaico" : "lineal",
+                    base, width_px, height_px, format_id, ((f[0] >> 31) & 0x1) ? "en mosaico" : "lineal",
                     (f[1] >> 6) & 0x3, ((f[0] >> 22) & 0x1FF) << 5, swizzle, (f[0] >> 2) & 0xFF,
-                    cubo ? " (cubo)" : volumen ? " (3D)" : "", niveles, dir_mips,
-                    nivel_empaquetado == UINT32_MAX ? std::string("ninguno") : std::to_string(nivel_empaquetado));
+                    cube ? " (cubo)" : volume ? " (3D)" : "", levels, dir_mips,
+                    packed_level == UINT32_MAX ? std::string("ninguno") : std::to_string(packed_level));
       }
     }
-    ranura = RanuraVista(textura.imagen.imagen, tf.formato, swizzle, tf.swizzle_host, monton);
-    ancho_host_out = textura.imagen.ancho;  // the host's, which is what the shader sees
-    alto_host_out = textura.imagen.alto;
-    if (textura.fotograma == fotograma_) {
+    ranura = ViewSlot(texture.img.img, tf.format_id, swizzle, tf.swizzle_host, heap);
+    host_width_out = texture.img.width_px;  // the host's, which is what the shader sees
+    host_height_out = texture.img.height_px;
+    if (texture.frame == frame_) {
       // Valid until the frame before the next check (if it changed now, only this frame)
-      valido_hasta = std::max<uint64_t>(fotograma_, textura.siguiente ? textura.siguiente - 1 : 0);
+      valid_until = std::max<uint64_t>(frame_, texture.next ? texture.next - 1 : 0);
       return;  // already checked this frame
     }
     // Textures that do not change are checked less and less often (down to every 32 frames); those that
     // change (videos) go back to being checked every frame.
-    if (textura.imagen.preparada && fotograma_ < textura.siguiente) {
-      valido_hasta = textura.siguiente - 1;
+    if (texture.img.prepared && frame_ < texture.next) {
+      valid_until = texture.next - 1;
       return;
     }
-    textura.fotograma = fotograma_;
+    texture.frame = frame_;
     // If its hash thread job is still uncollected (a buffer-full submission happened in the middle of its
     // draw), its huella_cruda is not valid yet: it is collected before checking, as if the ring had done
     // it.
-    if (textura.huella_trabajo == kTrabajoHuellaPublicado) {
-      RecogerHuellas();
+    if (texture.job_fingerprint == kPublishedFingerprintJob) {
+      CollectFingerprints();
     }
     // What it costs from here to the end (check, untile, prepare the upload).
-    struct CronometroTextura {
-      std::chrono::steady_clock::time_point inicio = std::chrono::steady_clock::now();
-      ~CronometroTextura() {
-        nfsmw::esperas::g_ns_texturas.fetch_add(
-            uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - inicio)
+    struct TextureStopwatch {
+      std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+      ~TextureStopwatch() {
+        nfsmw::waits::g_textures_ns.fetch_add(
+            uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start)
                          .count()),
             std::memory_order_relaxed);
       }
-    } cronometro_textura;
+    } texture_stopwatch;
     // 2D and cubemaps: before untiling, XXH3 of the guest bytes. If they have not changed there is nothing
     // to do (untiling and comparing every texture every frame took 62 of the 66 us of each menu draw).
-    if (!volumen) {
-      const uint32_t log2_bloque = tf.bytes >= 16 ? 4 : tf.bytes >= 8 ? 3 : tf.bytes >= 4 ? 2
+    if (!volume) {
+      const uint32_t block_log2 = tf.bytes >= 16 ? 4 : tf.bytes >= 8 ? 3 : tf.bytes >= 4 ? 2
                                                                 : tf.bytes >= 2 ? 1 : 0;
       // Extent of a layer: tiled, GetTiledAddressUpperBound2D (pipeline/texture/util.cpp:461-486); linear,
       // up to the last block. Includes the packed base offset (base_ox, base_oy; 0 for the rest).
-      const uint32_t bloques_x_leidos = bloques_x + base_ox;
-      const uint32_t bloques_y_leidos = bloques_y + base_oy;
+      const uint32_t read_blocks_x = blocks_x + base_ox;
+      const uint32_t read_blocks_y = blocks_y + base_oy;
       const uint64_t extension_capa =
           ((f[0] >> 31) & 0x1)
               ? uint64_t(std::max<int64_t>(
-                    DesplazamientoMosaico2D(int32_t((bloques_x_leidos - 1) & ~31u),
-                                            int32_t((bloques_y_leidos - 1) & ~31u), pitch_bloques,
-                                            log2_bloque),
+                    Tile2dOffset(int32_t((read_blocks_x - 1) & ~31u),
+                                            int32_t((read_blocks_y - 1) & ~31u), blocks_pitch,
+                                            block_log2),
                     0)) +
-                    (log2_bloque == 0   ? 0xA00u
-                     : log2_bloque == 1 ? 0xC00u
-                                        : (0x400u << log2_bloque))
-              : uint64_t(std::max(pitch_bloques, bloques_x_leidos)) * tf.bytes * (bloques_y_leidos - 1) +
-                    uint64_t(bloques_x_leidos) * tf.bytes;
-      const uint64_t inicio_crudo = uint64_t(base) & 0x1FFFFFFF;
-      const uint64_t extension = (capas - 1) * zancada_cara + extension_capa;
-      if (inicio_crudo + extension <= kMemoriaFisica) {
+                    (block_log2 == 0   ? 0xA00u
+                     : block_log2 == 1 ? 0xC00u
+                                        : (0x400u << block_log2))
+              : uint64_t(std::max(blocks_pitch, read_blocks_x)) * tf.bytes * (read_blocks_y - 1) +
+                    uint64_t(read_blocks_x) * tf.bytes;
+      const uint64_t raw_start = uint64_t(base) & 0x1FFFFFFF;
+      const uint64_t extension = (layer_count - 1) * face_stride + extension_capa;
+      if (raw_start + extension <= kPhysicalMemory) {
         /*
          * Per-frame check budget.
          * During race stutters both game threads wait for room in the ring (20-50 ms) while the ring neither
@@ -8899,80 +8899,80 @@ class DibujosVulkanImpl final : public DibujosVulkan {
          * texture is still full (N = the cvar), so a change the sample misses is caught at most N rechecks
          * later. A single disagreement turns sampling off for the rest of the session, with a warning.
          */
-        if (muestreo_huellas_ < 0) {
+        if (fingerprints_sampling_ < 0) {
           const int32_t cada = REXCVAR_GET(nfsmw_nativo_huellas_muestreo);
-          muestreo_huellas_ = cada >= 2 ? std::min<int32_t>(cada, 64) : 0;
+          fingerprints_sampling_ = cada >= 2 ? std::min<int32_t>(cada, 64) : 0;
           REXLOG_INFO("[nativo] C3: recomprobacion de texturas estables por muestreo (nfsmw_nativo_huellas_muestreo) "
                       "= {}",
-                      muestreo_huellas_ ? fmt::format("SI, 1 de cada {} completa; las {} primeras con las dos huellas",
-                                                      muestreo_huellas_, kMuestrasAComprobar)
+                      fingerprints_sampling_ ? fmt::format("SI, 1 de cada {} completa; las {} primeras con las dos huellas",
+                                                      fingerprints_sampling_, kSamplesToCheck)
                                         : std::string("no, siempre la huella completa"));
         }
-        const uint64_t bytes_completa = extension + extension_mips;
-        const uint64_t bytes_de_muestra = BytesMuestra(extension) + BytesMuestra(extension_mips);
-        const bool con_muestra = muestreo_huellas_ > 0 && textura.imagen.preparada && textura.intervalo >= 4 &&
-                                 bytes_de_muestra * 2 <= bytes_completa;
-        const bool muestra_util = con_muestra && textura.intervalo >= 8 && textura.muestra_valida;
-        const bool solo_muestra = muestra_util && muestras_comprobadas_ >= kMuestrasAComprobar &&
-                                  textura.muestras_seguidas + 1u < uint32_t(muestreo_huellas_);
-        const uint64_t bytes_muestra = con_muestra ? bytes_de_muestra : 0;
+        const uint64_t complete_bytes = extension + extension_mips;
+        const uint64_t bytes_of_sample = SampleBytes(extension) + SampleBytes(extension_mips);
+        const bool with_sample = fingerprints_sampling_ > 0 && texture.img.prepared && texture.interval >= 4 &&
+                                 bytes_of_sample * 2 <= complete_bytes;
+        const bool usable_sample = with_sample && texture.interval >= 8 && texture.valid_sample;
+        const bool only_sample = usable_sample && checked_samples_ >= kSamplesToCheck &&
+                                  texture.consecutive_samples + 1u < uint32_t(fingerprints_sampling_);
+        const uint64_t sample_bytes = with_sample ? bytes_of_sample : 0;
         // What will actually be read, which is what counts against the budget.
-        const uint64_t bytes_huella = solo_muestra ? bytes_muestra : bytes_completa + bytes_muestra;
-        if (fotograma_huellas_ != fotograma_) {
-          fotograma_huellas_ = fotograma_;
-          bytes_huella_fotograma_ = 0;
+        const uint64_t fingerprint_bytes = only_sample ? sample_bytes : complete_bytes + sample_bytes;
+        if (fingerprints_frame_ != frame_) {
+          fingerprints_frame_ = frame_;
+          frame_fingerprint_bytes_ = 0;
         }
-        if (presupuesto_huellas_ < 0) {
-          presupuesto_huellas_ = std::max(REXCVAR_GET(nfsmw_nativo_huellas_kb_fotograma), 0);
+        if (fingerprints_budget_ < 0) {
+          fingerprints_budget_ = std::max(REXCVAR_GET(nfsmw_nativo_huellas_kb_fotograma), 0);
           REXLOG_INFO("[nativo] C3: presupuesto de comprobaciones de texturas = {} KB por fotograma{}",
-                      presupuesto_huellas_, presupuesto_huellas_ ? "" : " (sin limite)");
+                      fingerprints_budget_, fingerprints_budget_ ? "" : " (sin limite)");
         }
-        if (presupuesto_huellas_ && textura.imagen.preparada && textura.intervalo >= 8 &&
-            textura.aplazamientos < kAplazamientoMax && bytes_huella_fotograma_ > 0 &&
-            bytes_huella_fotograma_ + bytes_huella > uint64_t(presupuesto_huellas_) * 1024) {
-          ++textura.aplazamientos;
-          textura.siguiente = fotograma_ + 1 + (clave & 1);
-          valido_hasta = textura.siguiente - 1;
-          nfsmw::esperas::g_huellas_aplazadas.fetch_add(1, std::memory_order_relaxed);
+        if (fingerprints_budget_ && texture.img.prepared && texture.interval >= 8 &&
+            texture.deferrals < kDeferralMax && frame_fingerprint_bytes_ > 0 &&
+            frame_fingerprint_bytes_ + fingerprint_bytes > uint64_t(fingerprints_budget_) * 1024) {
+          ++texture.deferrals;
+          texture.next = frame_ + 1 + (key & 1);
+          valid_until = texture.next - 1;
+          nfsmw::waits::g_deferred_fingerprints.fetch_add(1, std::memory_order_relaxed);
           return;
         }
-        textura.aplazamientos = 0;
-        bytes_huella_fotograma_ += bytes_huella;
-        nfsmw::esperas::g_bytes_huella.fetch_add(bytes_huella, std::memory_order_relaxed);
-        const auto inicio_huella_cruda = std::chrono::steady_clock::now();
-        const uint8_t* const crudo_base = memoria_->TranslatePhysical(uint32_t(inicio_crudo));
-        const uint8_t* const crudo_mips = extension_mips ? memoria_->TranslatePhysical(uint32_t(dir_mips)) : nullptr;
+        texture.deferrals = 0;
+        frame_fingerprint_bytes_ += fingerprint_bytes;
+        nfsmw::waits::g_fingerprint_bytes.fetch_add(fingerprint_bytes, std::memory_order_relaxed);
+        const auto raw_fingerprint_start = std::chrono::steady_clock::now();
+        const uint8_t* const base_raw = mem_->TranslatePhysical(uint32_t(raw_start));
+        const uint8_t* const mips_raw = extension_mips ? mem_->TranslatePhysical(uint32_t(dir_mips)) : nullptr;
         // The sample goes before the full hash. If the full one matches, the sample is of that same content,
         // and it is the one stored.
-        uint64_t muestra = 0;
-        if (con_muestra) {
-          muestra = HuellaMuestra(crudo_base, extension, 0);
+        uint64_t sample = 0;
+        if (with_sample) {
+          sample = SampleFingerprint(base_raw, extension, 0);
           if (extension_mips) {
-            muestra = HuellaMuestra(crudo_mips, extension_mips, muestra);
+            sample = SampleFingerprint(mips_raw, extension_mips, sample);
           }
-          bytes_muestra_ += bytes_muestra;
-          InformeMuestreo(inicio_huella_cruda);
+          sample_bytes_ += sample_bytes;
+          SamplingReport(raw_fingerprint_start);
         }
-        const bool muestra_igual = muestra_util && muestra == textura.huella_muestra;
-        if (solo_muestra && muestra_igual) {
-          nfsmw::esperas::g_ns_huella_cruda.fetch_add(
+        const bool equal_sample = usable_sample && sample == texture.sample_fingerprint;
+        if (only_sample && equal_sample) {
+          nfsmw::waits::g_raw_fingerprint_ns.fetch_add(
               uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() -
-                                                                            inicio_huella_cruda)
+                                                                            raw_fingerprint_start)
                            .count()),
               std::memory_order_relaxed);
-          ++textura.muestras_seguidas;
-          ++muestras_aciertos_;
-          bytes_ahorrados_muestra_ += bytes_completa - bytes_muestra;
-          textura.intervalo = std::min<uint32_t>(textura.intervalo * 2, 32);
-          textura.siguiente = fotograma_ + textura.intervalo + (textura.intervalo == 32 ? (clave >> 7) & 7 : 0);
-          valido_hasta = textura.siguiente - 1;
+          ++texture.consecutive_samples;
+          ++hits_samples_;
+          sample_saved_bytes_ += complete_bytes - sample_bytes;
+          texture.interval = std::min<uint32_t>(texture.interval * 2, 32);
+          texture.next = frame_ + texture.interval + (texture.interval == 32 ? (key >> 7) & 7 : 0);
+          valid_until = texture.next - 1;
           return;
         }
-        if (solo_muestra) {
+        if (only_sample) {
           // The sample changed: now the full hash, which was not in this frame's budget.
-          ++muestras_distintas_;
-          bytes_huella_fotograma_ += bytes_completa;
-          nfsmw::esperas::g_bytes_huella.fetch_add(bytes_completa, std::memory_order_relaxed);
+          ++distinct_samples_;
+          frame_fingerprint_bytes_ += complete_bytes;
+          nfsmw::waits::g_fingerprint_bytes.fetch_add(complete_bytes, std::memory_order_relaxed);
         }
         /*
          * New texture -> hash thread (nfsmw_nativo_texturas_huella_hilo; see PlanearHuella).
@@ -8980,132 +8980,132 @@ class DibujosVulkanImpl final : public DibujosVulkan {
          * reading from a copy of the bytes this hash covers. If any read falls outside them, or LeerNivel
          * would go past memory, the texture continues on the usual path.
          */
-        if (!textura.imagen.preparada && huellas_fase_ != kHuellasApagado && !diag_mips_ && mosaico_rapido_ >= 0) {
-          std::array<size_t, 16> desplazamientos{};
-          std::array<size_t, 16> capa_nivel{};
+        if (!texture.img.prepared && phase_fingerprints_ != kFingerprintsDisabled && !diag_mips_ && fast_tile_ >= 0) {
+          std::array<size_t, 16> offsets{};
+          std::array<size_t, 16> level_layer{};
           size_t bytes_plan = 0;
-          for (uint32_t n = 0; n < textura.niveles; ++n) {
-            const uint32_t bx_n = (std::max(textura.imagen.ancho >> n, 1u) + tf.bloque - 1) / tf.bloque;
-            const uint32_t by_n = (std::max(textura.imagen.alto >> n, 1u) + tf.bloque - 1) / tf.bloque;
-            desplazamientos[n] = bytes_plan;
-            capa_nivel[n] = size_t(bx_n) * by_n * tf.bytes;
-            bytes_plan += capa_nivel[n] * capas;
+          for (uint32_t n = 0; n < texture.levels; ++n) {
+            const uint32_t bx_n = (std::max(texture.img.width_px >> n, 1u) + tf.block - 1) / tf.block;
+            const uint32_t by_n = (std::max(texture.img.height_px >> n, 1u) + tf.block - 1) / tf.block;
+            offsets[n] = bytes_plan;
+            level_layer[n] = size_t(bx_n) * by_n * tf.bytes;
+            bytes_plan += level_layer[n] * layer_count;
           }
-          const uint32_t bx_base = (textura.imagen.ancho + tf.bloque - 1) / tf.bloque;
-          const uint64_t mips_en_copia = (extension + 63) & ~uint64_t(63);  // where the copy of the mips starts
-          uint32_t n_lecturas = 0;
+          const uint32_t bx_base = (texture.img.width_px + tf.block - 1) / tf.block;
+          const uint64_t mips_in_copy = (extension + 63) & ~uint64_t(63);  // where the copy of the mips starts
+          uint32_t n_reads = 0;
           bool plan_ok = true;
-          for (uint32_t c = 0; plan_ok && c < (leer_base ? capas : 0u); ++c) {
-            plan_ok = PlanearLecturaHuella(lecturas_plan_, n_lecturas, dir_base + c * zancada_cara, mosaico_textura,
-                                           pitch_bloques, uint64_t(std::max(pitch_bloques, bloques_x)) * tf.bytes, tf,
-                                           base_ox, base_oy, bloques_x, bloques_y, bx_base, capa_nivel[0] * c,
-                                           inicio_crudo, extension, 0);
+          for (uint32_t c = 0; plan_ok && c < (read_base ? layer_count : 0u); ++c) {
+            plan_ok = PlanFingerprintRead(plan_reads_, n_reads, dir_base + c * face_stride, texture_tile,
+                                           blocks_pitch, uint64_t(std::max(blocks_pitch, blocks_x)) * tf.bytes, tf,
+                                           base_ox, base_oy, blocks_x, blocks_y, bx_base, level_layer[0] * c,
+                                           raw_start, extension, 0);
           }
-          for (uint32_t n = 1; plan_ok && n < textura.niveles; ++n) {
-            const uint32_t s = nivel_empaquetado == 0 ? 0 : std::min(n, nivel_empaquetado);
+          for (uint32_t n = 1; plan_ok && n < texture.levels; ++n) {
+            const uint32_t s = packed_level == 0 ? 0 : std::min(n, packed_level);
             uint32_t ox = 0;
             uint32_t oy = 0;
-            if (n >= nivel_empaquetado) {
-              DesplazamientoEmpaquetado(ancho, alto, tf.bloque, n, ox, oy);
+            if (n >= packed_level) {
+              PackedOffset(width_px, height_px, tf.block, n, ox, oy);
             }
-            const uint32_t bx_invitado = (std::max(ancho >> n, 1u) + tf.bloque - 1) / tf.bloque;
-            const uint32_t by_invitado = (std::max(alto >> n, 1u) + tf.bloque - 1) / tf.bloque;
-            const uint32_t bx_host = (std::max(textura.imagen.ancho >> n, 1u) + tf.bloque - 1) / tf.bloque;
-            const uint32_t by_host = (std::max(textura.imagen.alto >> n, 1u) + tf.bloque - 1) / tf.bloque;
-            for (uint32_t c = 0; plan_ok && c < capas; ++c) {
-              plan_ok = PlanearLecturaHuella(lecturas_plan_, n_lecturas,
-                                             dir_mips + regiones[s].desplazamiento + c * regiones[s].zancada,
-                                             mosaico_textura, regiones[s].pitch_bloques, regiones[s].fila_bytes, tf,
-                                             ox, oy, std::min(bx_invitado, bx_host), std::min(by_invitado, by_host),
-                                             bx_host, desplazamientos[n] + capa_nivel[n] * c, dir_mips, extension_mips,
-                                             mips_en_copia);
+            const uint32_t guest_bx = (std::max(width_px >> n, 1u) + tf.block - 1) / tf.block;
+            const uint32_t guest_by = (std::max(height_px >> n, 1u) + tf.block - 1) / tf.block;
+            const uint32_t bx_host = (std::max(texture.img.width_px >> n, 1u) + tf.block - 1) / tf.block;
+            const uint32_t by_host = (std::max(texture.img.height_px >> n, 1u) + tf.block - 1) / tf.block;
+            for (uint32_t c = 0; plan_ok && c < layer_count; ++c) {
+              plan_ok = PlanFingerprintRead(plan_reads_, n_reads,
+                                             dir_mips + regions[s].byte_offset + c * regions[s].stride_bytes,
+                                             texture_tile, regions[s].blocks_pitch, regions[s].row_bytes, tf,
+                                             ox, oy, std::min(guest_bx, bx_host), std::min(guest_by, by_host),
+                                             bx_host, offsets[n] + level_layer[n] * c, dir_mips, extension_mips,
+                                             mips_in_copy);
             }
           }
-          if (plan_ok && PlanearHuella(textura, clave, n_lecturas, crudo_base, extension, crudo_mips, extension_mips,
-                                       tf, (f[1] >> 6) & 0x3, bytes_plan, desplazamientos, base, ancho, alto,
-                                       formato, bytes_subida)) {
+          if (plan_ok && PlanFingerprint(texture, key, n_reads, base_raw, extension, mips_raw, extension_mips,
+                                       tf, (f[1] >> 6) & 0x3, bytes_plan, offsets, base, width_px, height_px,
+                                       format_id, upload_bytes)) {
             return;  // applying phase: the thread prepares it; the tail of this function is already done
           }
         }
-        uint64_t huella_cruda = XXH3_64bits(crudo_base, size_t(extension));
+        uint64_t raw_fingerprint = XXH3_64bits(base_raw, size_t(extension));
         if (extension_mips) {  // and the bytes of all the mips
-          huella_cruda = XXH3_64bits_withSeed(crudo_mips, size_t(extension_mips), huella_cruda);
+          raw_fingerprint = XXH3_64bits_withSeed(mips_raw, size_t(extension_mips), raw_fingerprint);
         }
-        nfsmw::esperas::g_ns_huella_cruda.fetch_add(
+        nfsmw::waits::g_raw_fingerprint_ns.fetch_add(
             uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() -
-                                                                          inicio_huella_cruda)
+                                                                          raw_fingerprint_start)
                          .count()),
             std::memory_order_relaxed);
-        const bool completa_igual = textura.imagen.preparada && huella_cruda == textura.huella_cruda;
-        if (muestra_util && !solo_muestra) {
+        const bool equal_complete = texture.img.prepared && raw_fingerprint == texture.raw_fingerprint;
+        if (usable_sample && !only_sample) {
           // The guard. This stable recheck computed both hashes.
-          ++muestras_comprobadas_;
-          ++muestras_con_las_dos_;
-          if (muestra_igual && !completa_igual) {
+          ++checked_samples_;
+          ++samples_with_two_;
+          if (equal_sample && !equal_complete) {
             REXLOG_ERROR("[nativo] C3: la MUESTRA de la textura {:08X} {}x{} formato {} ({} KB de base y {} KB de "
                          "mips) no ha visto un cambio que la huella completa si. Se APAGA el muestreo de huellas "
                          "(tras {} recomprobaciones con las dos).",
-                         uint32_t(inicio_crudo), ancho, alto, formato, extension >> 10, extension_mips >> 10,
-                         muestras_comprobadas_);
-            muestreo_huellas_ = 0;
-          } else if (muestras_comprobadas_ == kMuestrasAComprobar) {
+                         uint32_t(raw_start), width_px, height_px, format_id, extension >> 10, extension_mips >> 10,
+                         checked_samples_);
+            fingerprints_sampling_ = 0;
+          } else if (checked_samples_ == kSamplesToCheck) {
             REXLOG_INFO("[nativo] C3: muestreo de huellas: {} recomprobaciones con las dos huellas, ningun "
                         "desacuerdo. Sigue el muestreo, con 1 de cada {} completa.",
-                        muestras_comprobadas_, muestreo_huellas_);
+                        checked_samples_, fingerprints_sampling_);
           }
         }
-        if (completa_igual) {
+        if (equal_complete) {
           // The sample of this content, for the stable rechecks.
-          if (con_muestra && muestreo_huellas_ > 0) {
-            textura.huella_muestra = muestra;
-            textura.muestra_valida = true;
+          if (with_sample && fingerprints_sampling_ > 0) {
+            texture.sample_fingerprint = sample;
+            texture.valid_sample = true;
           }
-          textura.muestras_seguidas = 0;
-          textura.intervalo = std::min<uint32_t>(textura.intervalo * 2, 32);
+          texture.consecutive_samples = 0;
+          texture.interval = std::min<uint32_t>(texture.interval * 2, 32);
           // At the maximum interval, from 32 to 39 depending on the texture, so they do not coincide.
-          textura.siguiente = fotograma_ + textura.intervalo + (textura.intervalo == 32 ? (clave >> 7) & 7 : 0);
-          valido_hasta = textura.siguiente - 1;
+          texture.next = frame_ + texture.interval + (texture.interval == 32 ? (key >> 7) & 7 : 0);
+          valid_until = texture.next - 1;
           return;
         }
-        textura.muestra_valida = false;  // the content changed; the sample is no longer valid
-        textura.muestras_seguidas = 0;
-        textura.huella_cruda = huella_cruda;
-        AnotarContenidoTextura(textura, clave);  // measurement only: nfsmw_nativo_diag_reutilizar
+        texture.valid_sample = false;  // the content changed; the sample is no longer valid
+        texture.consecutive_samples = 0;
+        texture.raw_fingerprint = raw_fingerprint;
+        TrackTextureContent(texture, key);  // measurement only: nfsmw_nativo_diag_reutilizar
       }
     }
     // Base level of each layer, untiled and in host byte order.
-    const uint32_t bloques_x_host = (textura.imagen.ancho + tf.bloque - 1) / tf.bloque;
-    const uint32_t bloques_y_host = (textura.imagen.alto + tf.bloque - 1) / tf.bloque;
-    const size_t bytes_capa = size_t(bloques_x_host) * bloques_y_host * tf.bytes;
-    std::vector<uint8_t>& datos = temporal_;
+    const uint32_t host_blocks_x = (texture.img.width_px + tf.block - 1) / tf.block;
+    const uint32_t host_blocks_y = (texture.img.height_px + tf.block - 1) / tf.block;
+    const size_t bytes_capa = size_t(host_blocks_x) * host_blocks_y * tf.bytes;
+    std::vector<uint8_t>& payload = temporal_;
     // All levels back to back, each one layer after layer (SubirTextura copies them one by one).
-    std::array<size_t, 16> bytes_capa_nivel{};
-    size_t bytes_datos = 0;
-    for (uint32_t n = 0; n < textura.niveles; ++n) {
-      const uint32_t bx_host = (std::max(textura.imagen.ancho >> n, 1u) + tf.bloque - 1) / tf.bloque;
-      const uint32_t by_host = (std::max(textura.imagen.alto >> n, 1u) + tf.bloque - 1) / tf.bloque;
-      textura.desplazamiento_nivel[n] = uint32_t(bytes_datos);
-      bytes_capa_nivel[n] = size_t(bx_host) * by_host * tf.bytes;
-      bytes_datos += bytes_capa_nivel[n] * capas * (fondo ? fondo : 1);
+    std::array<size_t, 16> level_layer_bytes{};
+    size_t data_bytes = 0;
+    for (uint32_t n = 0; n < texture.levels; ++n) {
+      const uint32_t bx_host = (std::max(texture.img.width_px >> n, 1u) + tf.block - 1) / tf.block;
+      const uint32_t by_host = (std::max(texture.img.height_px >> n, 1u) + tf.block - 1) / tf.block;
+      texture.level_offset[n] = uint32_t(data_bytes);
+      level_layer_bytes[n] = size_t(bx_host) * by_host * tf.bytes;
+      data_bytes += level_layer_bytes[n] * layer_count * (background ? background : 1);
     }
-    datos.assign(bytes_datos, 0);
-    const bool mosaico = (f[0] >> 31) & 0x1;
-    if (volumen && !LeerVolumen(f, tf, bloques_x, bloques_y, fondo, bloques_x_host,
-                                bloques_y_host, pitch_bloques, mosaico, datos)) {
-      Avisar(33, "textura fuera de la memoria");
-      if (!textura.imagen.preparada) {
+    payload.assign(data_bytes, 0);
+    const bool tile = (f[0] >> 31) & 0x1;
+    if (volume && !ReadVolume(f, tf, blocks_x, blocks_y, background, host_blocks_x,
+                                host_blocks_y, blocks_pitch, tile, payload)) {
+      Warn(33, "textura fuera de la memoria");
+      if (!texture.img.prepared) {
         ranura = 0;  // the image remains uninitialized
       }
       return;
     }
     // Base level: not read if not needed (minimum level 1; it stays zeroed and the sampler never goes below
     // 1).
-    for (uint32_t c = 0; c < (volumen || !leer_base ? 0u : capas); ++c) {
-      const uint64_t direccion = dir_base + c * zancada_cara;
-      if (!LeerNivel(direccion, mosaico, pitch_bloques, uint64_t(std::max(pitch_bloques, bloques_x)) * tf.bytes, tf,
-                     base_ox, base_oy, bloques_x, bloques_y, bloques_x_host, datos.data() + bytes_capa * c)) {
-        Avisar(33, "textura fuera de la memoria");
-        if (!textura.imagen.preparada) {
+    for (uint32_t c = 0; c < (volume || !read_base ? 0u : layer_count); ++c) {
+      const uint64_t address = dir_base + c * face_stride;
+      if (!ReadLevel(address, tile, blocks_pitch, uint64_t(std::max(blocks_pitch, blocks_x)) * tf.bytes, tf,
+                     base_ox, base_oy, blocks_x, blocks_y, host_blocks_x, payload.data() + bytes_capa * c)) {
+        Warn(33, "textura fuera de la memoria");
+        if (!texture.img.prepared) {
           ranura = 0;  // the image remains uninitialized
         }
         return;
@@ -9113,89 +9113,89 @@ class DibujosVulkanImpl final : public DibujosVulkan {
     }
     // Mip levels. Those in the packed tail share a region and are located with DesplazamientoEmpaquetado;
     // the rest, each in its own.
-    for (uint32_t n = 1; n < textura.niveles; ++n) {
-      const uint32_t s = nivel_empaquetado == 0 ? 0 : std::min(n, nivel_empaquetado);
+    for (uint32_t n = 1; n < texture.levels; ++n) {
+      const uint32_t s = packed_level == 0 ? 0 : std::min(n, packed_level);
       uint32_t ox = 0;
       uint32_t oy = 0;
-      if (n >= nivel_empaquetado) {
-        DesplazamientoEmpaquetado(ancho, alto, tf.bloque, n, ox, oy);
+      if (n >= packed_level) {
+        PackedOffset(width_px, height_px, tf.block, n, ox, oy);
       }
-      const uint32_t bx_invitado = (std::max(ancho >> n, 1u) + tf.bloque - 1) / tf.bloque;
-      const uint32_t by_invitado = (std::max(alto >> n, 1u) + tf.bloque - 1) / tf.bloque;
-      const uint32_t bx_host = (std::max(textura.imagen.ancho >> n, 1u) + tf.bloque - 1) / tf.bloque;
-      const uint32_t by_host = (std::max(textura.imagen.alto >> n, 1u) + tf.bloque - 1) / tf.bloque;
-      for (uint32_t c = 0; c < capas; ++c) {
-        const uint64_t direccion = dir_mips + regiones[s].desplazamiento + c * regiones[s].zancada;
-        if (!LeerNivel(direccion, mosaico, regiones[s].pitch_bloques, regiones[s].fila_bytes, tf, ox, oy,
-                       std::min(bx_invitado, bx_host), std::min(by_invitado, by_host), bx_host,
-                       datos.data() + textura.desplazamiento_nivel[n] + bytes_capa_nivel[n] * c)) {
-          Avisar(39, "nivel de mip fuera de la memoria: se queda a cero");
+      const uint32_t guest_bx = (std::max(width_px >> n, 1u) + tf.block - 1) / tf.block;
+      const uint32_t guest_by = (std::max(height_px >> n, 1u) + tf.block - 1) / tf.block;
+      const uint32_t bx_host = (std::max(texture.img.width_px >> n, 1u) + tf.block - 1) / tf.block;
+      const uint32_t by_host = (std::max(texture.img.height_px >> n, 1u) + tf.block - 1) / tf.block;
+      for (uint32_t c = 0; c < layer_count; ++c) {
+        const uint64_t address = dir_mips + regions[s].byte_offset + c * regions[s].stride_bytes;
+        if (!ReadLevel(address, tile, regions[s].blocks_pitch, regions[s].row_bytes, tf, ox, oy,
+                       std::min(guest_bx, bx_host), std::min(guest_by, by_host), bx_host,
+                       payload.data() + texture.level_offset[n] + level_layer_bytes[n] * c)) {
+          Warn(39, "nivel de mip fuera de la memoria: se queda a cero");
           break;
         }
       }
     }
     const auto orden = static_cast<xenos::Endian>((f[1] >> 6) & 0x3);
     // In one go (CambiarOrdenBytes), with the same guard as the fast untiling.
-    if (mosaico_rapido_ > 0 && orden != xenos::Endian::kNone && (tf.unidad_orden == 2 || tf.unidad_orden == 4)) {
+    if (fast_tile_ > 0 && orden != xenos::Endian::kNone && (tf.order_unit == 2 || tf.order_unit == 4)) {
       // The first 200, then 1 in 64. Checking every texture, this guard never got to switch itself off (there
       // were only 1,024 textures) and cost 2.1 ms per MB on every new texture.
-      ++ordenes_vistos_;
-      const bool comprobar = ordenes_vistos_ <= kNivelesAComprobar || ordenes_vistos_ % kComprobarUnaDeCada == 0;
-      if (comprobar) {
-        comprobacion_mosaico_ = datos;
+      ++seen_commands_;
+      const bool run_check = seen_commands_ <= kLevelsToCheck || seen_commands_ % kCheckEvery == 0;
+      if (run_check) {
+        tile_check_ = payload;
       }
-      CambiarOrdenBytes(datos.data(), datos.size(), tf.unidad_orden, uint32_t(orden));
-      if (comprobar) {
-        ++ordenes_comprobados_;
-        OrdenDeSiempre(comprobacion_mosaico_, tf.unidad_orden, orden);
-        if (comprobacion_mosaico_ != datos) {
+      ChangeOrderBytes(payload.data(), payload.size(), tf.order_unit, uint32_t(orden));
+      if (run_check) {
+        ++checked_commands_;
+        AlwaysOrder(tile_check_, tf.order_unit, orden);
+        if (tile_check_ != payload) {
           REXLOG_ERROR("[nativo] C3: el cambio de orden rapido NO coincide (unidad {}, orden {}, {} bytes). Se "
                        "APAGAN el orden y el desenmosaicado rapidos.",
-                       tf.unidad_orden, uint32_t(orden), datos.size());
-          datos.swap(comprobacion_mosaico_);
-          mosaico_rapido_ = 0;
-        } else if (ordenes_comprobados_ == kNivelesAComprobar) {
+                       tf.order_unit, uint32_t(orden), payload.size());
+          payload.swap(tile_check_);
+          fast_tile_ = 0;
+        } else if (checked_commands_ == kLevelsToCheck) {
           REXLOG_INFO("[nativo] C3: cambio de orden rapido: {} texturas comprobadas contra el de siempre, todas "
                       "iguales.",
-                      ordenes_comprobados_);
+                      checked_commands_);
         }
       }
     } else {
-      OrdenDeSiempre(datos, tf.unidad_orden, orden);
+      AlwaysOrder(payload, tf.order_unit, orden);
     }
-    if (diag_mips_ && textura.niveles > 1 && leer_base && !volumen) {
-      RevisarMips(base, formato, ancho, alto, tf, textura, bytes_capa_nivel, datos);
+    if (diag_mips_ && texture.levels > 1 && read_base && !volume) {
+      ReviewMips(base, format_id, width_px, height_px, tf, texture, level_layer_bytes, payload);
     }
     /*
      * For a new (unprepared) texture this hash decides nothing: it is uploaded regardless. 0 is stored, and
      * the first time its memory changes it will be computed and uploaded (at most, one extra upload).
      */
-    const auto inicio_huella_datos = std::chrono::steady_clock::now();
-    const uint64_t huella = textura.imagen.preparada ? XXH3_64bits(datos.data(), datos.size()) : 0;
-    nfsmw::esperas::g_ns_huella_datos.fetch_add(
+    const auto data_fingerprint_start = std::chrono::steady_clock::now();
+    const uint64_t fingerprint = texture.img.prepared ? XXH3_64bits(payload.data(), payload.size()) : 0;
+    nfsmw::waits::g_data_fingerprint_ns.fetch_add(
         uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() -
-                                                                      inicio_huella_datos)
+                                                                      data_fingerprint_start)
                      .count()),
         std::memory_order_relaxed);
-    if (textura.imagen.preparada && huella == textura.huella) {
-      textura.intervalo = std::min<uint32_t>(textura.intervalo * 2, 32);
-      textura.siguiente = fotograma_ + textura.intervalo;
-      valido_hasta = textura.siguiente - 1;
+    if (texture.img.prepared && fingerprint == texture.fingerprint) {
+      texture.interval = std::min<uint32_t>(texture.interval * 2, 32);
+      texture.next = frame_ + texture.interval;
+      valid_until = texture.next - 1;
       return;
     }
     // Observing phase of the hash thread: what the usual path produces, to compare when collecting.
-    if (comparacion_textura_ == &textura) {
-      AnotarComparacionHuella(textura, datos);
+    if (texture_comparison_ == &texture) {
+      TrackFingerprintCompare(texture, payload);
     }
-    textura.intervalo = 1;
-    textura.siguiente = fotograma_ + 1;
-    textura.huella = huella;
-    textura.datos.swap(datos);
-    textura.subir = true;
-    texturas_a_subir_.push_back(&textura);
-    nfsmw::esperas::g_texturas_subidas.fetch_add(1, std::memory_order_relaxed);
-    nfsmw::esperas::g_bytes_subidos.fetch_add(textura.datos.size(), std::memory_order_relaxed);
-    bytes_subida += (textura.datos.size() + 3) & ~size_t(3);
+    texture.interval = 1;
+    texture.next = frame_ + 1;
+    texture.fingerprint = fingerprint;
+    texture.payload.swap(payload);
+    texture.do_upload = true;
+    textures_to_upload_.push_back(&texture);
+    nfsmw::waits::g_uploads_textures.fetch_add(1, std::memory_order_relaxed);
+    nfsmw::waits::g_uploaded_bytes.fetch_add(texture.payload.size(), std::memory_order_relaxed);
+    upload_bytes += (texture.payload.size() + 3) & ~size_t(3);
   }
 
   // --- Measurement only: new textures with the content of another (nfsmw_nativo_diag_reutilizar) ---------------
@@ -9227,204 +9227,204 @@ class DibujosVulkanImpl final : public DibujosVulkan {
    * looked at (still under that content key, with a prepared image and no pending hash thread job), so a
    * stale entry cannot count.
    */
-  static constexpr uint32_t kReutilizarMirarMax = 8;  // candidates checked per new texture
-  static constexpr uint32_t kReutilizarDetalles = 8;  // lines detailing the first matches
+  static constexpr uint32_t kReusePeekMax = 8;  // candidates checked per new texture
+  static constexpr uint32_t kReuseDetails = 8;  // lines detailing the first matches
 
-  bool DiagReutilizar() {
-    if (diag_reutilizar_ < 0) {
-      diag_reutilizar_ = REXCVAR_GET(nfsmw_nativo_diag_reutilizar) ? 1 : 0;
+  bool DiagReuse() {
+    if (diag_reuse_ < 0) {
+      diag_reuse_ = REXCVAR_GET(nfsmw_nativo_diag_reutilizar) ? 1 : 0;
       REXLOG_INFO("[nativo] C3: medida de texturas nuevas con el contenido de otra viva "
                   "(nfsmw_nativo_diag_reutilizar) = {}",
-                  diag_reutilizar_ ? "SI (solo cuenta: no cambia nada)" : "no");
+                  diag_reuse_ ? "SI (solo cuenta: no cambia nada)" : "no");
     }
-    return diag_reutilizar_ > 0;
+    return diag_reuse_ > 0;
   }
 
   // The content key of a texture with a valid raw hash. Never 0 (0 = not recorded).
-  static uint64_t ClaveContenido(const Textura& textura) {
-    const uint64_t forma[4] = {textura.forma_contenido, (uint64_t(textura.imagen.formato) << 32) | textura.niveles,
-                               (uint64_t(textura.imagen.ancho) << 32) | textura.imagen.alto, textura.capas};
-    return XXH3_64bits_withSeed(forma, sizeof(forma), textura.huella_cruda) | 1;
+  static uint64_t ContentKey(const Texture& texture) {
+    const uint64_t shape[4] = {texture.content_shape, (uint64_t(texture.img.format_id) << 32) | texture.levels,
+                               (uint64_t(texture.img.width_px) << 32) | texture.img.height_px, texture.layer_count};
+    return XXH3_64bits_withSeed(shape, sizeof(shape), texture.raw_fingerprint) | 1;
   }
 
   // Stops counting a texture (when it is released, when its image is recreated, or before recording it
   // with another hash).
-  void QuitarContenidoTextura(Textura& textura, uint64_t clave) {
-    if (!textura.clave_contenido) {
+  void RemoveTextureContent(Texture& texture, uint64_t key) {
+    if (!texture.content_key) {
       return;
     }
-    const auto [desde, hasta] = vivas_por_contenido_.equal_range(textura.clave_contenido);
-    for (auto it = desde; it != hasta; ++it) {
-      if (it->second == clave) {
-        vivas_por_contenido_.erase(it);
+    const auto [from, hasta] = alive_per_content_.equal_range(texture.content_key);
+    for (auto it = from; it != hasta; ++it) {
+      if (it->second == key) {
+        alive_per_content_.erase(it);
         break;
       }
     }
-    if (vivas_por_contenido_.find(textura.clave_contenido) == vivas_por_contenido_.end() && contenidos_distintos_) {
-      --contenidos_distintos_;
+    if (alive_per_content_.find(texture.content_key) == alive_per_content_.end() && distinct_contents_) {
+      --distinct_contents_;
     }
-    textura.clave_contenido = 0;
+    texture.content_key = 0;
   }
 
   // With the raw hash just set. If the texture is new, counts whether another live one has the same
   // content and shape, and whether that other one is cold. Then records it under its content key. Ring
   // thread only.
-  void AnotarContenidoTextura(Textura& textura, uint64_t clave) {
-    if (!DiagReutilizar()) {
+  void TrackTextureContent(Texture& texture, uint64_t key) {
+    if (!DiagReuse()) {
       return;
     }
-    QuitarContenidoTextura(textura, clave);
-    const uint64_t contenido = ClaveContenido(textura);
-    if (textura.contenido_por_medir) {
-      textura.contenido_por_medir = false;
-      ++reutilizar_nuevas_;
-      reutilizar_bytes_nuevas_ += textura.bytes;
-      const Textura* igual = nullptr;
-      const Textura* fria = nullptr;
-      uint32_t miradas = 0;
-      const auto [desde, hasta] = vivas_por_contenido_.equal_range(contenido);
-      for (auto it = desde; it != hasta; ++it) {
-        if (miradas++ >= kReutilizarMirarMax) {
-          ++reutilizar_sin_mirar_;
+    RemoveTextureContent(texture, key);
+    const uint64_t content = ContentKey(texture);
+    if (texture.content_per_measure) {
+      texture.content_per_measure = false;
+      ++reuse_new_;
+      reuse_new_bytes_ += texture.bytes;
+      const Texture* is_equal = nullptr;
+      const Texture* cold = nullptr;
+      uint32_t peeked = 0;
+      const auto [from, hasta] = alive_per_content_.equal_range(content);
+      for (auto it = from; it != hasta; ++it) {
+        if (peeked++ >= kReusePeekMax) {
+          ++reuse_without_peek_;
           break;
         }
-        const auto otra = texturas_.find(it->second);
-        if (otra == texturas_.end() || &otra->second == &textura) {
+        const auto another = textures_.find(it->second);
+        if (another == textures_.end() || &another->second == &texture) {
           continue;
         }
-        const Textura& t = otra->second;
-        if (t.clave_contenido != contenido || t.imagen.imagen == VK_NULL_HANDLE || !t.imagen.preparada ||
-            t.huella_trabajo) {
+        const Texture& t = another->second;
+        if (t.content_key != content || t.img.img == VK_NULL_HANDLE || !t.img.prepared ||
+            t.job_fingerprint) {
           continue;
         }
-        igual = &t;
-        if (t.fotograma != UINT64_MAX && t.fotograma + kFotogramasSinUsoParaSoltar < fotograma_) {
-          fria = &t;
+        is_equal = &t;
+        if (t.frame != UINT64_MAX && t.frame + kFramesWithoutUseForRelease < frame_) {
+          cold = &t;
           break;  // one cold one is enough
         }
       }
-      if (igual) {
-        ++reutilizar_coinciden_;
-        reutilizar_bytes_coinciden_ += textura.bytes;
+      if (is_equal) {
+        ++reuse_match_;
+        reuse_match_bytes_ += texture.bytes;
       }
-      if (fria) {
-        ++reutilizar_frias_;
-        reutilizar_bytes_frias_ += textura.bytes;
+      if (cold) {
+        ++reuse_cold_;
+        reuse_cold_bytes_ += texture.bytes;
       }
-      if (igual && reutilizar_detalles_ < kReutilizarDetalles) {
-        ++reutilizar_detalles_;
-        const Textura& t = fria ? *fria : *igual;
-        NFSMW_INFORME_ANILLO("[nativo] C3 reutilizar por contenido (build 186, solo medida): la textura nueva {:08X} "
+      if (is_equal && reuse_details_ < kReuseDetails) {
+        ++reuse_details_;
+        const Texture& t = cold ? *cold : *is_equal;
+        NFSMW_RING_REPORT("[nativo] C3 reutilizar por contenido (build 186, solo medida): la textura nueva {:08X} "
                              "({}x{}, VkFormat {}, {} niveles, {} capas, {} KB) tiene el mismo contenido y forma que "
                              "la {:08X}, {}",
-                             textura.direccion, textura.imagen.ancho, textura.imagen.alto,
-                             uint32_t(textura.imagen.formato), textura.niveles, textura.capas, textura.bytes >> 10,
-                             t.direccion,
-                             fria ? fmt::format("sin comprobarse desde hace {} fotogramas", fotograma_ - t.fotograma)
+                             texture.address, texture.img.width_px, texture.img.height_px,
+                             uint32_t(texture.img.format_id), texture.levels, texture.layer_count, texture.bytes >> 10,
+                             t.address,
+                             cold ? fmt::format("sin comprobarse desde hace {} fotogramas", frame_ - t.frame)
                                   : std::string("que sigue en uso"));
       }
     }
-    if (vivas_por_contenido_.find(contenido) == vivas_por_contenido_.end()) {
-      ++contenidos_distintos_;
+    if (alive_per_content_.find(content) == alive_per_content_.end()) {
+      ++distinct_contents_;
     }
-    vivas_por_contenido_.emplace(contenido, clave);
-    textura.clave_contenido = contenido;
+    alive_per_content_.emplace(content, key);
+    texture.content_key = content;
   }
 
   // Every 10 s, if there were new textures with a hash. The cache snapshot (recorded, distinct contents)
   // is O(1).
-  void InformeReutilizar() {
-    if (diag_reutilizar_ <= 0) {
+  void ReuseReport() {
+    if (diag_reuse_ <= 0) {
       return;
     }
-    const auto ahora = std::chrono::steady_clock::now();
-    if (ahora - informe_reutilizar_ < std::chrono::seconds(10)) {
+    const auto now_time = std::chrono::steady_clock::now();
+    if (now_time - reuse_report_ < std::chrono::seconds(10)) {
       return;
     }
-    informe_reutilizar_ = ahora;
-    if (reutilizar_nuevas_) {
-      const uint64_t apuntadas = uint64_t(vivas_por_contenido_.size());
-      NFSMW_INFORME_ANILLO(
+    reuse_report_ = now_time;
+    if (reuse_new_) {
+      const uint64_t pointed = uint64_t(alive_per_content_.size());
+      NFSMW_RING_REPORT(
           "[nativo] C3 reutilizar por contenido (build 186, solo medida), ultimos 10 s: {} texturas nuevas con huella "
           "({:.1f} MB); {} con el mismo contenido y forma que otra viva ({:.1f} MB), {} de ellas con una sin "
           "comprobarse desde hace mas de {} fotogramas ({:.1f} MB); {} con mas de {} iguales sin mirar enteras | en la "
           "cache: {} texturas con huella en {} contenidos distintos ({} repetidas)",
-          reutilizar_nuevas_, double(reutilizar_bytes_nuevas_) / 1048576.0, reutilizar_coinciden_,
-          double(reutilizar_bytes_coinciden_) / 1048576.0, reutilizar_frias_, kFotogramasSinUsoParaSoltar,
-          double(reutilizar_bytes_frias_) / 1048576.0, reutilizar_sin_mirar_, kReutilizarMirarMax, apuntadas,
-          contenidos_distintos_, apuntadas - std::min(apuntadas, contenidos_distintos_));
+          reuse_new_, double(reuse_new_bytes_) / 1048576.0, reuse_match_,
+          double(reuse_match_bytes_) / 1048576.0, reuse_cold_, kFramesWithoutUseForRelease,
+          double(reuse_cold_bytes_) / 1048576.0, reuse_without_peek_, kReusePeekMax, pointed,
+          distinct_contents_, pointed - std::min(pointed, distinct_contents_));
     }
-    reutilizar_nuevas_ = 0;
-    reutilizar_coinciden_ = 0;
-    reutilizar_frias_ = 0;
-    reutilizar_sin_mirar_ = 0;
-    reutilizar_bytes_nuevas_ = 0;
-    reutilizar_bytes_coinciden_ = 0;
-    reutilizar_bytes_frias_ = 0;
+    reuse_new_ = 0;
+    reuse_match_ = 0;
+    reuse_cold_ = 0;
+    reuse_without_peek_ = 0;
+    reuse_new_bytes_ = 0;
+    reuse_match_bytes_ = 0;
+    reuse_cold_bytes_ = 0;
   }
 
   // Every 30 s, one line with what hash sampling has done (see PrepararTextura). The ring thread writes
   // it, but it is a single short line every 30 s.
-  void InformeMuestreo(std::chrono::steady_clock::time_point ahora) {
-    if (ahora - informe_muestreo_ < std::chrono::seconds(30)) {
+  void SamplingReport(std::chrono::steady_clock::time_point now_time) {
+    if (now_time - sampling_report_ < std::chrono::seconds(30)) {
       return;
     }
-    if (informe_muestreo_ != std::chrono::steady_clock::time_point{}) {
-      NFSMW_INFORME_ANILLO("[nativo] C3 muestreo de huellas: {} recomprobaciones resueltas con la muestra ({:.1f} MB leidos y "
+    if (sampling_report_ != std::chrono::steady_clock::time_point{}) {
+      NFSMW_RING_REPORT("[nativo] C3 muestreo de huellas: {} recomprobaciones resueltas con la muestra ({:.1f} MB leidos y "
                   "{:.1f} MB sin leer), {} con la muestra cambiada y {} con las dos huellas desde la linea anterior; "
                   "{} con las dos desde el principio",
-                  muestras_aciertos_, double(bytes_muestra_) / 1048576.0,
-                  double(bytes_ahorrados_muestra_) / 1048576.0, muestras_distintas_, muestras_con_las_dos_,
-                  muestras_comprobadas_);
+                  hits_samples_, double(sample_bytes_) / 1048576.0,
+                  double(sample_saved_bytes_) / 1048576.0, distinct_samples_, samples_with_two_,
+                  checked_samples_);
     }
-    informe_muestreo_ = ahora;
-    muestras_aciertos_ = 0;
-    muestras_distintas_ = 0;
-    muestras_con_las_dos_ = 0;
-    bytes_muestra_ = 0;
-    bytes_ahorrados_muestra_ = 0;
+    sampling_report_ = now_time;
+    hits_samples_ = 0;
+    distinct_samples_ = 0;
+    samples_with_two_ = 0;
+    sample_bytes_ = 0;
+    sample_saved_bytes_ = 0;
   }
 
   // nfsmw_nativo_diag_mips: average color of each level of the first layer against the base's, for
   // DXT1/3/5 (average of the two colors of each block, in RGB565) and 8888. Only levels of 2x2 blocks or
   // more: the small ones are too little data for an average. Counts the textures with any level more than
   // 32/255 away from the base in any channel and logs the first 12 with their averages.
-  void RevisarMips(uint32_t base, uint32_t formato, uint32_t ancho, uint32_t alto, const FormatoTextura& tf,
-                   const Textura& textura, const std::array<size_t, 16>& bytes_capa_nivel,
-                   const std::vector<uint8_t>& datos) {
-    const bool dxt = tf.formato == VK_FORMAT_BC1_RGBA_UNORM_BLOCK || tf.formato == VK_FORMAT_BC2_UNORM_BLOCK ||
-                     tf.formato == VK_FORMAT_BC3_UNORM_BLOCK;
-    if (!dxt && tf.formato != VK_FORMAT_R8G8B8A8_UNORM) {
+  void ReviewMips(uint32_t base, uint32_t format_id, uint32_t width_px, uint32_t height_px, const TextureFormat& tf,
+                   const Texture& texture, const std::array<size_t, 16>& level_layer_bytes,
+                   const std::vector<uint8_t>& payload) {
+    const bool dxt = tf.format_id == VK_FORMAT_BC1_RGBA_UNORM_BLOCK || tf.format_id == VK_FORMAT_BC2_UNORM_BLOCK ||
+                     tf.format_id == VK_FORMAT_BC3_UNORM_BLOCK;
+    if (!dxt && tf.format_id != VK_FORMAT_R8G8B8A8_UNORM) {
       return;
     }
     const auto media = [&](uint32_t n, std::array<double, 3>& rgb) {
-      const size_t inicio = textura.desplazamiento_nivel[n];
-      const size_t bytes = bytes_capa_nivel[n];
-      if (inicio + bytes > datos.size() || bytes < 4u * tf.bytes) {
+      const size_t start = texture.level_offset[n];
+      const size_t bytes = level_layer_bytes[n];
+      if (start + bytes > payload.size() || bytes < 4u * tf.bytes) {
         return false;
       }
       rgb = {0.0, 0.0, 0.0};
-      size_t cuenta = 0;
+      size_t num = 0;
       for (size_t i = 0; i + tf.bytes <= bytes; i += tf.bytes) {
-        const uint8_t* p = datos.data() + inicio + i;
+        const uint8_t* p = payload.data() + start + i;
         if (dxt) {
-          const uint8_t* color = tf.formato == VK_FORMAT_BC1_RGBA_UNORM_BLOCK ? p : p + 8;
+          const uint8_t* color = tf.format_id == VK_FORMAT_BC1_RGBA_UNORM_BLOCK ? p : p + 8;
           for (uint32_t k = 0; k < 2; ++k) {
             const uint16_t v = uint16_t(color[2 * k] | (color[2 * k + 1] << 8));
             rgb[0] += ((v >> 11) & 31) * (255.0 / 31.0);
             rgb[1] += ((v >> 5) & 63) * (255.0 / 63.0);
             rgb[2] += (v & 31) * (255.0 / 31.0);
           }
-          cuenta += 2;
+          num += 2;
         } else {
           rgb[0] += p[0];
           rgb[1] += p[1];
           rgb[2] += p[2];
-          cuenta += 1;
+          num += 1;
         }
       }
       for (double& c : rgb) {
-        c /= double(cuenta);
+        c /= double(num);
       }
       return true;
     };
@@ -9432,29 +9432,29 @@ class DibujosVulkanImpl final : public DibujosVulkan {
     if (!media(0, base_rgb)) {
       return;
     }
-    ++mips_revisadas_;
-    std::string niveles = fmt::format("[0]={:.0f}/{:.0f}/{:.0f}", base_rgb[0], base_rgb[1], base_rgb[2]);
-    double peor = 0.0;
-    for (uint32_t n = 1; n < textura.niveles; ++n) {
+    ++reviewed_mips_;
+    std::string levels = fmt::format("[0]={:.0f}/{:.0f}/{:.0f}", base_rgb[0], base_rgb[1], base_rgb[2]);
+    double worst = 0.0;
+    for (uint32_t n = 1; n < texture.levels; ++n) {
       std::array<double, 3> rgb{};
       if (!media(n, rgb)) {
         break;
       }
       for (uint32_t c = 0; c < 3; ++c) {
-        peor = std::max(peor, std::abs(rgb[c] - base_rgb[c]));
+        worst = std::max(worst, std::abs(rgb[c] - base_rgb[c]));
       }
-      niveles += fmt::format(" [{}]={:.0f}/{:.0f}/{:.0f}", n, rgb[0], rgb[1], rgb[2]);
+      levels += fmt::format(" [{}]={:.0f}/{:.0f}/{:.0f}", n, rgb[0], rgb[1], rgb[2]);
     }
-    if (peor > 32.0) {
-      if (++mips_raras_ <= 12) {
+    if (worst > 32.0) {
+      if (++rare_mips_ <= 12) {
         REXLOG_WARN("[nativo] C3 diag mips: textura {:08X} {}x{} formato {} con {} niveles: un nivel se aleja {:.0f} "
                     "de la base; medias RGB {}",
-                    base, ancho, alto, formato, textura.niveles, peor, niveles);
+                    base, width_px, height_px, format_id, texture.levels, worst, levels);
       }
     }
-    if (mips_revisadas_ % 200 == 0) {
+    if (reviewed_mips_ % 200 == 0) {
       REXLOG_INFO("[nativo] C3 diag mips: {} texturas revisadas, {} con algun nivel a mas de 32/255 de la base",
-                  mips_revisadas_, mips_raras_);
+                  reviewed_mips_, rare_mips_);
     }
   }
 
@@ -9462,43 +9462,43 @@ class DibujosVulkanImpl final : public DibujosVulkan {
   // region (the packed tail or the base of a small texture do not start at 0), to the host destination
   // bx_host blocks wide. Linear: fila_bytes per row; tiled: pitch in blocks (GetTiledOffset2D). false if
   // it goes past memory.
-  bool LeerNivel(uint64_t direccion, bool mosaico, uint32_t pitch_bloques, uint64_t fila_bytes,
-                 const FormatoTextura& tf, uint32_t ox, uint32_t oy, uint32_t bx, uint32_t by, uint32_t bx_host,
-                 uint8_t* destino) {
+  bool ReadLevel(uint64_t address, bool tile, uint32_t blocks_pitch, uint64_t row_bytes,
+                 const TextureFormat& tf, uint32_t ox, uint32_t oy, uint32_t bx, uint32_t by, uint32_t bx_host,
+                 uint8_t* target) {
     if (!bx || !by) {
       return true;
     }
     const uint32_t log2 = tf.bytes >= 16 ? 4 : tf.bytes >= 8 ? 3 : tf.bytes >= 4 ? 2 : tf.bytes >= 2 ? 1 : 0;
-    const uint64_t extremo =
-        mosaico ? uint64_t(std::max<int64_t>(DesplazamientoMosaico2D(int32_t((ox + bx + 31) & ~31u),
+    const uint64_t extreme =
+        tile ? uint64_t(std::max<int64_t>(Tile2dOffset(int32_t((ox + bx + 31) & ~31u),
                                                                      int32_t((oy + by + 31) & ~31u),
-                                                                     pitch_bloques, log2),
+                                                                     blocks_pitch, log2),
                                              0))
-                : fila_bytes * (oy + by - 1) + uint64_t(ox + bx) * tf.bytes;
-    if (direccion + extremo > kMemoriaFisica) {
+                : row_bytes * (oy + by - 1) + uint64_t(ox + bx) * tf.bytes;
+    if (address + extreme > kPhysicalMemory) {
       return false;
     }
-    const uint8_t* origen = memoria_->TranslatePhysical(uint32_t(direccion));
-    if (!mosaico) {
+    const uint8_t* src = mem_->TranslatePhysical(uint32_t(address));
+    if (!tile) {
       for (uint32_t y = 0; y < by; ++y) {
-        std::memcpy(destino + size_t(y) * bx_host * tf.bytes,
-                    origen + uint64_t(oy + y) * fila_bytes + uint64_t(ox) * tf.bytes, size_t(bx) * tf.bytes);
+        std::memcpy(target + size_t(y) * bx_host * tf.bytes,
+                    src + uint64_t(oy + y) * row_bytes + uint64_t(ox) * tf.bytes, size_t(bx) * tf.bytes);
       }
       return true;
     }
     // The fast untiling (DesenmosaicarNivel) when the block is 1, 2, 4, 8 or 16 bytes.
-    if (mosaico_rapido_ < 0) {
-      mosaico_rapido_ = REXCVAR_GET(nfsmw_nativo_mosaico_rapido) ? 1 : 0;
+    if (fast_tile_ < 0) {
+      fast_tile_ = REXCVAR_GET(nfsmw_nativo_mosaico_rapido) ? 1 : 0;
       REXLOG_INFO("[nativo] C3: desenmosaicado rapido (nfsmw_nativo_mosaico_rapido) = {}",
-                  mosaico_rapido_ ? "SI, comprobando los primeros niveles contra el de siempre" : "no");
+                  fast_tile_ ? "SI, comprobando los primeros niveles contra el de siempre" : "no");
     }
-    if (mosaico_rapido_ && tf.bytes == (1u << log2)) {
+    if (fast_tile_ && tf.bytes == (1u << log2)) {
       switch (log2) {
-        case 0: DesenmosaicarNivel<0>(origen, pitch_bloques, ox, oy, bx, by, bx_host, destino); break;
-        case 1: DesenmosaicarNivel<1>(origen, pitch_bloques, ox, oy, bx, by, bx_host, destino); break;
-        case 2: DesenmosaicarNivel<2>(origen, pitch_bloques, ox, oy, bx, by, bx_host, destino); break;
-        case 3: DesenmosaicarNivel<3>(origen, pitch_bloques, ox, oy, bx, by, bx_host, destino); break;
-        default: DesenmosaicarNivel<4>(origen, pitch_bloques, ox, oy, bx, by, bx_host, destino); break;
+        case 0: UntileLevel<0>(src, blocks_pitch, ox, oy, bx, by, bx_host, target); break;
+        case 1: UntileLevel<1>(src, blocks_pitch, ox, oy, bx, by, bx_host, target); break;
+        case 2: UntileLevel<2>(src, blocks_pitch, ox, oy, bx, by, bx_host, target); break;
+        case 3: UntileLevel<3>(src, blocks_pitch, ox, oy, bx, by, bx_host, target); break;
+        default: UntileLevel<4>(src, blocks_pitch, ox, oy, bx, by, bx_host, target); break;
       }
       /*
        * Guard: the first kNivelesAComprobar levels are repeated on the usual path and compared byte by byte.
@@ -9506,65 +9506,65 @@ class DibujosVulkanImpl final : public DibujosVulkan {
        * of the session.
        */
       // The first 200, then 1 in 64 (checking every level, the guard cost 4.2 ms per MB).
-      ++niveles_vistos_;
-      if (niveles_vistos_ <= kNivelesAComprobar || niveles_vistos_ % kComprobarUnaDeCada == 0) {
-        ++niveles_comprobados_;
-        comprobacion_mosaico_.assign(size_t(by) * bx_host * tf.bytes, 0);
+      ++seen_levels_;
+      if (seen_levels_ <= kLevelsToCheck || seen_levels_ % kCheckEvery == 0) {
+        ++checked_levels_;
+        tile_check_.assign(size_t(by) * bx_host * tf.bytes, 0);
         for (uint32_t y = 0; y < by; ++y) {
-          std::memcpy(comprobacion_mosaico_.data() + size_t(y) * bx_host * tf.bytes,
-                      destino + size_t(y) * bx_host * tf.bytes, size_t(bx) * tf.bytes);
+          std::memcpy(tile_check_.data() + size_t(y) * bx_host * tf.bytes,
+                      target + size_t(y) * bx_host * tf.bytes, size_t(bx) * tf.bytes);
         }
-        LeerNivelMosaicoDeSiempre(origen, pitch_bloques, log2, tf.bytes, ox, oy, bx, by, bx_host, destino);
-        bool iguales = true;
-        for (uint32_t y = 0; y < by && iguales; ++y) {
-          iguales = std::memcmp(comprobacion_mosaico_.data() + size_t(y) * bx_host * tf.bytes,
-                                destino + size_t(y) * bx_host * tf.bytes, size_t(bx) * tf.bytes) == 0;
+        ReadLevelTileAsAlways(src, blocks_pitch, log2, tf.bytes, ox, oy, bx, by, bx_host, target);
+        bool all_equal = true;
+        for (uint32_t y = 0; y < by && all_equal; ++y) {
+          all_equal = std::memcmp(tile_check_.data() + size_t(y) * bx_host * tf.bytes,
+                                target + size_t(y) * bx_host * tf.bytes, size_t(bx) * tf.bytes) == 0;
         }
-        if (!iguales) {
+        if (!all_equal) {
           REXLOG_ERROR("[nativo] C3: el desenmosaicado rapido NO coincide ({}x{} bloques de {} bytes, pitch {}, "
                        "desde {},{}). Se APAGA y se usa el de siempre.",
-                       bx, by, tf.bytes, pitch_bloques, ox, oy);
-          mosaico_rapido_ = 0;
-        } else if (niveles_comprobados_ == kNivelesAComprobar) {
+                       bx, by, tf.bytes, blocks_pitch, ox, oy);
+          fast_tile_ = 0;
+        } else if (checked_levels_ == kLevelsToCheck) {
           REXLOG_INFO("[nativo] C3: desenmosaicado rapido: {} niveles comprobados contra el de siempre, todos "
                       "iguales. Sigue el rapido.",
-                      niveles_comprobados_);
+                      checked_levels_);
         }
       }
       return true;
     }
-    LeerNivelMosaicoDeSiempre(origen, pitch_bloques, log2, tf.bytes, ox, oy, bx, by, bx_host, destino);
+    ReadLevelTileAsAlways(src, blocks_pitch, log2, tf.bytes, ox, oy, bx, by, bx_host, target);
     return true;
   }
 
   // The original byte swap, word by word.
-  static void OrdenDeSiempre(std::vector<uint8_t>& datos, uint32_t unidad, xenos::Endian orden) {
-    if (unidad == 2 && orden != xenos::Endian::kNone) {
-      for (size_t i = 0; i + 1 < datos.size(); i += 2) {
+  static void AlwaysOrder(std::vector<uint8_t>& payload, uint32_t unit, xenos::Endian orden) {
+    if (unit == 2 && orden != xenos::Endian::kNone) {
+      for (size_t i = 0; i + 1 < payload.size(); i += 2) {
         uint16_t v;
-        std::memcpy(&v, datos.data() + i, 2);
+        std::memcpy(&v, payload.data() + i, 2);
         v = xenos::GpuSwap(v, orden);
-        std::memcpy(datos.data() + i, &v, 2);
+        std::memcpy(payload.data() + i, &v, 2);
       }
-    } else if (unidad == 4 && orden != xenos::Endian::kNone) {
-      for (size_t i = 0; i + 3 < datos.size(); i += 4) {
+    } else if (unit == 4 && orden != xenos::Endian::kNone) {
+      for (size_t i = 0; i + 3 < payload.size(); i += 4) {
         uint32_t v;
-        std::memcpy(&v, datos.data() + i, 4);
+        std::memcpy(&v, payload.data() + i, 4);
         v = xenos::GpuSwap(v, orden);
-        std::memcpy(datos.data() + i, &v, 4);
+        std::memcpy(payload.data() + i, &v, 4);
       }
     }
   }
 
   // The original untiling, block by block.
-  static void LeerNivelMosaicoDeSiempre(const uint8_t* origen, uint32_t pitch_bloques, uint32_t log2, uint32_t bytes,
+  static void ReadLevelTileAsAlways(const uint8_t* src, uint32_t blocks_pitch, uint32_t log2, uint32_t bytes,
                                         uint32_t ox, uint32_t oy, uint32_t bx, uint32_t by, uint32_t bx_host,
-                                        uint8_t* destino) {
+                                        uint8_t* target) {
     for (uint32_t y = 0; y < by; ++y) {
       for (uint32_t x = 0; x < bx; ++x) {
-        const int32_t desplazamiento =
-            DesplazamientoMosaico2D(int32_t(ox + x), int32_t(oy + y), pitch_bloques, log2);
-        std::memcpy(destino + (size_t(y) * bx_host + x) * bytes, origen + desplazamiento, bytes);
+        const int32_t byte_offset =
+            Tile2dOffset(int32_t(ox + x), int32_t(oy + y), blocks_pitch, log2);
+        std::memcpy(target + (size_t(y) * bx_host + x) * bytes, src + byte_offset, bytes);
       }
     }
   }
@@ -9572,37 +9572,37 @@ class DibujosVulkanImpl final : public DibujosVulkan {
   // Base level of a 3D texture, slice by slice (z, then y, then x), in the order vkCmdCopyBufferToImage
   // uploads it. Tiled: GetTiledOffset3D; linear: consecutive slices with rows and columns aligned to 32
   // blocks (GetGuestTextureLayout).
-  bool LeerVolumen(const uint32_t* f, const FormatoTextura& tf, uint32_t bloques_x,
-                   uint32_t bloques_y, uint32_t fondo, uint32_t bloques_x_host,
-                   uint32_t bloques_y_host, uint32_t pitch_bloques, bool mosaico,
-                   std::vector<uint8_t>& datos) {
-    const uint64_t direccion = uint64_t((f[1] >> 12) << 12) & 0x1FFFFFFF;
+  bool ReadVolume(const uint32_t* f, const TextureFormat& tf, uint32_t blocks_x,
+                   uint32_t blocks_y, uint32_t background, uint32_t host_blocks_x,
+                   uint32_t host_blocks_y, uint32_t blocks_pitch, bool tile,
+                   std::vector<uint8_t>& payload) {
+    const uint64_t address = uint64_t((f[1] >> 12) << 12) & 0x1FFFFFFF;
     const uint32_t log2 = tf.bytes >= 16 ? 4 : tf.bytes >= 8 ? 3 : tf.bytes >= 4 ? 2
                                                              : tf.bytes >= 2 ? 1 : 0;
-    const uint64_t fila = uint64_t((pitch_bloques + 31) & ~uint32_t(31)) * tf.bytes;
-    const uint64_t corte = fila * ((bloques_y + 31) & ~uint32_t(31));
-    const uint64_t extremo =
-        mosaico ? uint64_t(std::max<int64_t>(
-                      DesplazamientoMosaico3D(int32_t((bloques_x + 31) & ~31u),
-                                              int32_t((bloques_y + 31) & ~31u),
-                                              int32_t((fondo + 3) & ~3u), pitch_bloques,
-                                              bloques_y, log2),
+    const uint64_t row = uint64_t((blocks_pitch + 31) & ~uint32_t(31)) * tf.bytes;
+    const uint64_t cut = row * ((blocks_y + 31) & ~uint32_t(31));
+    const uint64_t extreme =
+        tile ? uint64_t(std::max<int64_t>(
+                      Tile3dOffset(int32_t((blocks_x + 31) & ~31u),
+                                              int32_t((blocks_y + 31) & ~31u),
+                                              int32_t((background + 3) & ~3u), blocks_pitch,
+                                              blocks_y, log2),
                       0))
-                : corte * fondo;
-    if (direccion + extremo > kMemoriaFisica) {
+                : cut * background;
+    if (address + extreme > kPhysicalMemory) {
       return false;
     }
-    const uint8_t* origen = memoria_->TranslatePhysical(uint32_t(direccion));
-    const size_t bytes_corte = size_t(bloques_x_host) * bloques_y_host * tf.bytes;
-    for (uint32_t z = 0; z < fondo; ++z) {
-      for (uint32_t y = 0; y < bloques_y; ++y) {
-        for (uint32_t x = 0; x < bloques_x; ++x) {
-          const uint64_t desplazamiento =
-              mosaico ? uint64_t(DesplazamientoMosaico3D(int32_t(x), int32_t(y), int32_t(z),
-                                                         pitch_bloques, bloques_y, log2))
-                      : z * corte + y * fila + uint64_t(x) * tf.bytes;
-          std::memcpy(datos.data() + bytes_corte * z + (size_t(y) * bloques_x_host + x) * tf.bytes,
-                      origen + desplazamiento, tf.bytes);
+    const uint8_t* src = mem_->TranslatePhysical(uint32_t(address));
+    const size_t cut_bytes = size_t(host_blocks_x) * host_blocks_y * tf.bytes;
+    for (uint32_t z = 0; z < background; ++z) {
+      for (uint32_t y = 0; y < blocks_y; ++y) {
+        for (uint32_t x = 0; x < blocks_x; ++x) {
+          const uint64_t byte_offset =
+              tile ? uint64_t(Tile3dOffset(int32_t(x), int32_t(y), int32_t(z),
+                                                         blocks_pitch, blocks_y, log2))
+                      : z * cut + y * row + uint64_t(x) * tf.bytes;
+          std::memcpy(payload.data() + cut_bytes * z + (size_t(y) * host_blocks_x + x) * tf.bytes,
+                      src + byte_offset, tf.bytes);
         }
       }
     }
@@ -9611,16 +9611,16 @@ class DibujosVulkanImpl final : public DibujosVulkan {
 
   // A texture's VkImageCreateInfo, factored out so CrearTextura and CrearTexturaEnHilo create exactly the
   // same image.
-  static VkImageCreateInfo InfoImagenTextura(VkFormat formato, uint32_t ancho, uint32_t alto, uint32_t capas,
-                                             uint32_t fondo, uint32_t niveles) {
+  static VkImageCreateInfo TextureImageInfo(VkFormat format_id, uint32_t width_px, uint32_t height_px, uint32_t layer_count,
+                                             uint32_t background, uint32_t levels) {
     VkImageCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    info.imageType = fondo ? VK_IMAGE_TYPE_3D : VK_IMAGE_TYPE_2D;
-    info.flags = capas == 6 ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0;
-    info.format = formato;
-    info.extent = {ancho, alto, fondo ? fondo : 1};
-    info.mipLevels = std::max(niveles, 1u);
-    info.arrayLayers = capas;
+    info.imageType = background ? VK_IMAGE_TYPE_3D : VK_IMAGE_TYPE_2D;
+    info.flags = layer_count == 6 ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0;
+    info.format = format_id;
+    info.extent = {width_px, height_px, background ? background : 1};
+    info.mipLevels = std::max(levels, 1u);
+    info.arrayLayers = layer_count;
     info.samples = VK_SAMPLE_COUNT_1_BIT;
     info.tiling = VK_IMAGE_TILING_OPTIMAL;
     info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
@@ -9632,9 +9632,9 @@ class DibujosVulkanImpl final : public DibujosVulkan {
   // `emergencia` = false only from RecogerEnlaces. Half the cache cannot be released there: that waits
   // for the GPU by submitting the work, and we are inside AntesDeEnviar. Out of memory: false, and the
   // texture is recreated later.
-  bool CrearTextura(ImagenNativa& imagen, VkFormat formato, uint32_t ancho, uint32_t alto,
-                    uint32_t capas = 1, uint32_t fondo = 0, uint32_t niveles = 1, bool emergencia = true) {
-    const VkImageCreateInfo info = InfoImagenTextura(formato, ancho, alto, capas, fondo, niveles);
+  bool CreateTexture(NativeImage& img, VkFormat format_id, uint32_t width_px, uint32_t height_px,
+                    uint32_t layer_count = 1, uint32_t background = 0, uint32_t levels = 1, bool emergency = true) {
+    const VkImageCreateInfo info = TextureImageInfo(format_id, width_px, height_px, layer_count, background, levels);
     /*
      * The pool first, and the usual path only if it does not fit.
      *
@@ -9653,74 +9653,74 @@ class DibujosVulkanImpl final : public DibujosVulkan {
      * keeps the block-linear layout (nvk_image.c:1700-1710) and is the normal path of any sub-allocator in
      * NVK.
      */
-    bool reservada = false;
-    if (pool_texturas_.Activo()) {
-      VkImage imagen_pool = VK_NULL_HANDLE;
-      if (dfn_.vkCreateImage(device_, &info, nullptr, &imagen_pool) == VK_SUCCESS) {
+    bool reserved = false;
+    if (textures_pool_.Active()) {
+      VkImage pool_image = VK_NULL_HANDLE;
+      if (dfn_.vkCreateImage(device_, &info, nullptr, &pool_image) == VK_SUCCESS) {
         VkMemoryRequirements req{};
-        dfn_.vkGetImageMemoryRequirements(device_, imagen_pool, &req);
-        VkDeviceMemory bloque = VK_NULL_HANDLE;
+        dfn_.vkGetImageMemoryRequirements(device_, pool_image, &req);
+        VkDeviceMemory block = VK_NULL_HANDLE;
         VkDeviceSize offset = 0;
-        uint32_t id_bloque = 0xFFFFFFFFu;
-        if (pool_texturas_.Reservar(req, bloque, offset, id_bloque) &&
-            dfn_.vkBindImageMemory(device_, imagen_pool, bloque, offset) == VK_SUCCESS) {
-          imagen.imagen = imagen_pool;
-          imagen.memoria = VK_NULL_HANDLE;  // from the pool: not freed on its own
-          imagen.pool_bloque = id_bloque;
-          reservada = true;
+        uint32_t block_id = 0xFFFFFFFFu;
+        if (textures_pool_.Reserve(req, block, offset, block_id) &&
+            dfn_.vkBindImageMemory(device_, pool_image, block, offset) == VK_SUCCESS) {
+          img.img = pool_image;
+          img.mem = VK_NULL_HANDLE;  // from the pool: not freed on its own
+          img.block_pool = block_id;
+          reserved = true;
         } else {
-          if (id_bloque != 0xFFFFFFFFu) {
-            pool_texturas_.Liberar(id_bloque);
+          if (block_id != 0xFFFFFFFFu) {
+            textures_pool_.Dispose(block_id);
           }
-          dfn_.vkDestroyImage(device_, imagen_pool, nullptr);
-          pool_texturas_.AnotarDedicada();
+          dfn_.vkDestroyImage(device_, pool_image, nullptr);
+          textures_pool_.TrackDedicated();
         }
       }
     }
-    if (!reservada) {
-      imagen.pool_bloque = 0xFFFFFFFFu;
-      reservada = rex::ui::vulkan::util::CreateDedicatedAllocationImage(
-          dispositivo_, info, rex::ui::vulkan::util::MemoryPurpose::kDeviceLocal, imagen.imagen,
-          imagen.memoria);
+    if (!reserved) {
+      img.block_pool = 0xFFFFFFFFu;
+      reserved = rex::ui::vulkan::util::CreateDedicatedAllocationImage(
+          vk_device_, info, rex::ui::vulkan::util::MemoryPurpose::kDeviceLocal, img.img,
+          img.mem);
     }
-    if (reservada && prueba_sin_memoria_cada_ > 0 &&
-        ++reservas_de_textura_ % uint64_t(prueba_sin_memoria_cada_) == 0) {
+    if (reserved && test_without_memory_every_ > 0 &&
+        ++texture_reserves_ % uint64_t(test_without_memory_every_) == 0) {
       // Test: undo the successful allocation and continue as if it had failed.
-      DestruirImagen(imagen);
-      reservada = false;
-      REXLOG_INFO("[nativo] C3: prueba, se finge que falta memoria en la reserva {}", reservas_de_textura_);
+      DestroyImage(img);
+      reserved = false;
+      REXLOG_INFO("[nativo] C3: prueba, se finge que falta memoria en la reserva {}", texture_reserves_);
     }
-    if (!reservada) {
+    if (!reserved) {
       // Out of GPU memory. Instead of giving up (which ends in a black screen), half the cache is released
       // with the GPU idle and the allocation is retried once.
       // The retry always takes the dedicated path, on purpose. Getting here means memory is short, and the
       // dedicated path is the one that can ask the system for more; the pool only hands out what it already
       // has. pool_bloque is left invalid so DestruirImagen does not touch the pool.
-      imagen.pool_bloque = 0xFFFFFFFFu;
-      if (!emergencia || !SoltarTexturasPorFaltaDeMemoria() ||
+      img.block_pool = 0xFFFFFFFFu;
+      if (!emergency || !ReleaseTexturesOnMemoryShortage() ||
           !rex::ui::vulkan::util::CreateDedicatedAllocationImage(
-              dispositivo_, info, rex::ui::vulkan::util::MemoryPurpose::kDeviceLocal, imagen.imagen,
-              imagen.memoria)) {
+              vk_device_, info, rex::ui::vulkan::util::MemoryPurpose::kDeviceLocal, img.img,
+              img.mem)) {
         REXLOG_ERROR("[nativo] C3: sin memoria en la GPU para una textura de {}x{} ({} niveles, {} capas) y "
                      "{}; quedan {} texturas y {} MB",
-                     ancho, alto, std::max(niveles, 1u), capas,
-                     emergencia ? "soltar la cache no ha bastado"
+                     width_px, height_px, std::max(levels, 1u), layer_count,
+                     emergency ? "soltar la cache no ha bastado"
                                 : "sin soltar la cache (desde RecogerEnlaces; se recrea en su proxima comprobacion)",
-                     texturas_.size(), bytes_texturas_ >> 20);
+                     textures_.size(), textures_bytes_ >> 20);
         return false;
       }
     }
-    imagen.ancho = ancho;
-    imagen.alto = alto;
-    imagen.formato = formato;
-    imagen.preparada = false;
+    img.width_px = width_px;
+    img.height_px = height_px;
+    img.format_id = format_id;
+    img.prepared = false;
     return true;
   }
 
-  bool SubirTextura(Textura& textura) {
-    const VkCommandBuffer subida = contexto_->ComandosSubida();
-    if (!subida || !textura.subir) {
-      return subida != VK_NULL_HANDLE;
+  bool UploadTexture(Texture& texture) {
+    const VkCommandBuffer upload = contexto_->UploadCommands();
+    if (!upload || !texture.do_upload) {
+      return upload != VK_NULL_HANDLE;
     }
     VkDeviceSize offset;
     /*
@@ -9729,13 +9729,13 @@ class DibujosVulkanImpl final : public DibujosVulkan {
      * and the copy are recorded below as usual: the GPU does not read the upload buffer until
      * vkQueueSubmit.
      */
-    if (textura.huella_trabajo && textura.huella_trabajo != kTrabajoHuellaPublicado) {
-      const size_t bytes = BytesHuellaPlaneada(textura);
-      Reservar(bytes, 16, offset);  // BC: offset multiple of the block
-      PublicarHuella(textura, subida_datos_ + offset, bytes);
+    if (texture.job_fingerprint && texture.job_fingerprint != kPublishedFingerprintJob) {
+      const size_t bytes = PlannedFingerprintBytes(texture);
+      Reserve(bytes, 16, offset);  // BC: offset multiple of the block
+      PublishFingerprint(texture, data_upload_ + offset, bytes);
     } else {
-      Reservar(textura.datos.size(), 16, offset);  // BC: offset multiple of the block
-      std::memcpy(subida_datos_ + offset, textura.datos.data(), textura.datos.size());
+      Reserve(texture.payload.size(), 16, offset);  // BC: offset multiple of the block
+      std::memcpy(data_upload_ + offset, texture.payload.data(), texture.payload.size());
     }
     /*
      * If its vkBindImageMemory is still on the bind thread, neither the barrier nor the copy can be
@@ -9743,17 +9743,17 @@ class DibujosVulkanImpl final : public DibujosVulkan {
      * the copy are recorded in RecogerEnlaces, in this same upload buffer before it is closed
      * (AntesDeEnviar).
      */
-    if (textura.en_vuelo && !AplazarCopia(textura, offset, subida)) {
-      RecogerEnlaces(true);  // inconsistent index (AplazarCopia already logged it and switched off): collect everything here
+    if (texture.in_flight && !DeferCopy(texture, offset, upload)) {
+      CollectBindings(true);  // inconsistent index (AplazarCopia already logged it and switched off): collect everything here
     }
-    if (!textura.en_vuelo && textura.imagen.imagen != VK_NULL_HANDLE) {
-      if (!textura.imagen.preparada) {
-        Barrera(subida, textura.imagen.imagen, textura.capas);
-        textura.imagen.preparada = true;
+    if (!texture.in_flight && texture.img.img != VK_NULL_HANDLE) {
+      if (!texture.img.prepared) {
+        Barrier(upload, texture.img.img, texture.layer_count);
+        texture.img.prepared = true;
       }
-      GrabarCopiaTextura(subida, textura, offset);
+      RecordTextureCopy(upload, texture, offset);
     }
-    textura.subir = false;
+    texture.do_upload = false;
     /*
      * The copy of the pixels is no longer needed. They are already in the upload buffer, and to know
      * whether the texture changes its hashes are kept, not the bytes. Keeping the copy made the texture
@@ -9762,102 +9762,102 @@ class DibujosVulkanImpl final : public DibujosVulkan {
      */
     // The larger buffer is kept as temporal_ (so the next new texture does not ask the system for memory
     // again or touch fresh pages); the other is released.
-    if (textura.datos.capacity() > temporal_.capacity()) {
-      temporal_.swap(textura.datos);
+    if (texture.payload.capacity() > temporal_.capacity()) {
+      temporal_.swap(texture.payload);
     }
-    std::vector<uint8_t>().swap(textura.datos);
-    ++subidas_textura_;
+    std::vector<uint8_t>().swap(texture.payload);
+    ++texture_uploads_;
     return true;
   }
 
   // One range per mip level (with all its layers). Factored out for SubirTextura and for the deferred
   // copies of RecogerEnlaces.
-  void GrabarCopiaTextura(VkCommandBuffer subida, const Textura& textura, VkDeviceSize offset) {
-    std::array<VkBufferImageCopy, 16> copias{};
-    for (uint32_t n = 0; n < textura.niveles; ++n) {
-      VkBufferImageCopy& copia = copias[n];
-      copia.bufferOffset = offset + textura.desplazamiento_nivel[n];
-      copia.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, n, 0, textura.capas};
-      copia.imageExtent = {std::max(textura.imagen.ancho >> n, 1u), std::max(textura.imagen.alto >> n, 1u),
-                           textura.fondo ? textura.fondo : 1};
+  void RecordTextureCopy(VkCommandBuffer upload, const Texture& texture, VkDeviceSize offset) {
+    std::array<VkBufferImageCopy, 16> copies{};
+    for (uint32_t n = 0; n < texture.levels; ++n) {
+      VkBufferImageCopy& copy_info = copies[n];
+      copy_info.bufferOffset = offset + texture.level_offset[n];
+      copy_info.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, n, 0, texture.layer_count};
+      copy_info.imageExtent = {std::max(texture.img.width_px >> n, 1u), std::max(texture.img.height_px >> n, 1u),
+                           texture.background ? texture.background : 1};
     }
-    dfn_.vkCmdCopyBufferToImage(subida, subida_, textura.imagen.imagen, VK_IMAGE_LAYOUT_GENERAL,
-                                textura.niveles, copias.data());
+    dfn_.vkCmdCopyBufferToImage(upload, upload_, texture.img.img, VK_IMAGE_LAYOUT_GENERAL,
+                                texture.levels, copies.data());
   }
 
   // A texture's view, the same for RanuraVista and for the deferred views of RecogerEnlaces.
-  VkResult CrearVistaTextura(VkImage imagen, VkFormat formato, uint32_t swizzle, uint16_t swizzle_host, uint32_t monton,
-                             VkImageView& vista) {
+  VkResult CreateTextureView(VkImage img, VkFormat format_id, uint32_t swizzle, uint16_t swizzle_host, uint32_t heap,
+                             VkImageView& view) {
     VkImageViewCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    info.image = imagen;
-    info.viewType = monton == 2   ? VK_IMAGE_VIEW_TYPE_CUBE
-                    : monton == 1 ? VK_IMAGE_VIEW_TYPE_3D
+    info.image = img;
+    info.viewType = heap == 2   ? VK_IMAGE_VIEW_TYPE_CUBE
+                    : heap == 1 ? VK_IMAGE_VIEW_TYPE_3D
                                   : VK_IMAGE_VIEW_TYPE_2D;
-    info.format = formato;
-    info.components = MapeoComponentes(swizzle, swizzle_host);
-    info.subresourceRange = {EsProfundidad(formato)
+    info.format = format_id;
+    info.components = ComponentsMapping(swizzle, swizzle_host);
+    info.subresourceRange = {IsDepth(format_id)
                                  ? VkImageAspectFlags(VK_IMAGE_ASPECT_DEPTH_BIT)
                                  : VkImageAspectFlags(VK_IMAGE_ASPECT_COLOR_BIT),
-                             0, VK_REMAINING_MIP_LEVELS, 0, monton == 2 ? 6u : 1u};  // with its mips
-    return dfn_.vkCreateImageView(device_, &info, nullptr, &vista);
+                             0, VK_REMAINING_MIP_LEVELS, 0, heap == 2 ? 6u : 1u};  // with its mips
+    return dfn_.vkCreateImageView(device_, &info, nullptr, &view);
   }
 
   // The vistas_ key (image, heap and both swizzles), factored out for RecogerEnlaces.
-  static uint64_t ClaveVista(VkImage imagen, uint32_t swizzle, uint16_t swizzle_host, uint32_t monton) {
-    return XXH3_64bits_withSeed(&imagen, sizeof(imagen),
-                                (uint64_t(monton) << 40) | (uint64_t(swizzle) << 16) | swizzle_host);
+  static uint64_t ViewKey(VkImage img, uint32_t swizzle, uint16_t swizzle_host, uint32_t heap) {
+    return XXH3_64bits_withSeed(&img, sizeof(img),
+                                (uint64_t(heap) << 40) | (uint64_t(swizzle) << 16) | swizzle_host);
   }
 
   // Heap slot (0 for 2D textures, 2 for cubemaps) for a view of the image with that swizzle.
-  uint32_t RanuraVista(VkImage imagen, VkFormat formato, uint32_t swizzle, uint16_t swizzle_host,
-                       uint32_t monton = 0) {
-    const uint64_t clave = ClaveVista(imagen, swizzle, swizzle_host, monton);  // The same key
-    if (const auto it = vistas_.find(clave); it != vistas_.end()) {
+  uint32_t ViewSlot(VkImage img, VkFormat format_id, uint32_t swizzle, uint16_t swizzle_host,
+                       uint32_t heap = 0) {
+    const uint64_t key = ViewKey(img, swizzle, swizzle_host, heap);  // The same key
+    if (const auto it = views_.find(key); it != views_.end()) {
       return it->second.ranura;
     }
     // An image whose vkBindImageMemory is still on the bind thread. The view carries the image's GPU
     // address, which comes from the bind: the slot is reserved now, and the view is created and written in
     // RecogerEnlaces, before submission (UPDATE_AFTER_BIND descriptors).
-    if (!imagenes_en_vuelo_.empty() && imagenes_en_vuelo_.count(imagen)) {
-      return RanuraVistaEnVuelo(clave, imagen, formato, swizzle, swizzle_host, monton);
+    if (!images_in_flight_.empty() && images_in_flight_.count(img)) {
+      return ViewSlotInFlight(key, img, format_id, swizzle, swizzle_host, heap);
     }
-    Vista vista;
-    vista.imagen = imagen;
-    vista.monton = monton;
-    if (CrearVistaTextura(imagen, formato, swizzle, swizzle_host, monton, vista.vista) != VK_SUCCESS) {
-      Avisar(34, "no se pudo crear la vista de una textura");
+    View view;
+    view.img = img;
+    view.heap = heap;
+    if (CreateTextureView(img, format_id, swizzle, swizzle_host, heap, view.view) != VK_SUCCESS) {
+      Warn(34, "no se pudo crear la vista de una textura");
       return 0;
     }
-    vista.ranura = ReservarRanura(monton);
-    if (!vista.ranura) {
-      dfn_.vkDestroyImageView(device_, vista.vista, nullptr);
-      Avisar(35, "monton de texturas lleno");
+    view.ranura = ReserveSlot(heap);
+    if (!view.ranura) {
+      dfn_.vkDestroyImageView(device_, view.view, nullptr);
+      Warn(35, "monton de texturas lleno");
       return 0;
     }
-    EscribirImagen(monton, vista.ranura, vista.vista);
-    vistas_.emplace(clave, vista);
-    vistas_por_imagen_[imagen].push_back(clave);
-    return vista.ranura;
+    WriteImage(heap, view.ranura, view.view);
+    views_.emplace(key, view);
+    views_per_image_[img].push_back(key);
+    return view.ranura;
   }
 
   // point: no filtering (depth textures).
-  uint32_t RanuraSampler(const uint32_t* f, bool puntual = false) {
+  uint32_t RanuraSampler(const uint32_t* f, bool point = false) {
     // Diagnostic: filters the game requests that this renderer does not apply (anisotropy, mip bias and
     // maximum mip level; the bias is not even part of the key). Each new value is logged once.
     {
       const uint32_t aniso = (f[3] >> 25) & 0x7;
-      const int32_t sesgo = int32_t(f[4] << 10) >> 22;  // lod_bias: 10 bits con signo, 5 fraccionarios
+      const int32_t bias = int32_t(f[4] << 10) >> 22;  // lod_bias: 10 bits con signo, 5 fraccionarios
       const uint32_t mip_max = (f[4] >> 6) & 0xF;
-      const uint32_t indice_sesgo = uint32_t(sesgo + 512);
-      if (!((aniso_vistos_ >> aniso) & 1u) || !sesgos_vistos_[indice_sesgo] || !((mip_max_vistos_ >> mip_max) & 1u)) {
-        aniso_vistos_ |= 1u << aniso;
-        sesgos_vistos_[indice_sesgo] = true;
-        mip_max_vistos_ |= 1u << mip_max;
+      const uint32_t bias_index = uint32_t(bias + 512);
+      if (!((seen_aniso_ >> aniso) & 1u) || !seen_biases_[bias_index] || !((seen_mip_max_ >> mip_max) & 1u)) {
+        seen_aniso_ |= 1u << aniso;
+        seen_biases_[bias_index] = true;
+        seen_mip_max_ |= 1u << mip_max;
         REXLOG_INFO("[nativo] C4 filtros pedidos por el juego (valor nuevo): anisotropico {}, sesgo de mip {:.3f}, "
                     "nivel maximo de mip {}, filtros mag/min/mip {}/{}/{}{}",
-                    aniso, float(sesgo) / 32.0f, mip_max, (f[3] >> 19) & 0x3, (f[3] >> 21) & 0x3,
-                    (f[3] >> 23) & 0x3, puntual ? " (muestreo puntual)" : "");
+                    aniso, float(bias) / 32.0f, mip_max, (f[3] >> 19) & 0x3, (f[3] >> 21) & 0x3,
+                    (f[3] >> 23) & 0x3, point ? " (muestreo puntual)" : "");
       }
     }
     /*
@@ -9876,51 +9876,51 @@ class DibujosVulkanImpl final : public DibujosVulkan {
      * The modified mip field is part of the sampler key, so toggling at runtime creates two different
      * samplers and nothing has to be invalidated: the alternation works.
      */
-    uint32_t campo_filtros = (f[3] >> 19) & 0xFFF;  // mag in 0-1, min in 2-3, mip in 4-5
-    if (mip_puntual_prueba_ && ((campo_filtros >> 4) & 0x3) == 1) {
-      campo_filtros &= ~(0x3u << 4);  // LINEAR -> NEAREST between mip levels
+    uint32_t filters_field = (f[3] >> 19) & 0xFFF;  // mag in 0-1, min in 2-3, mip in 4-5
+    if (test_point_mip_ && ((filters_field >> 4) & 0x3) == 1) {
+      filters_field &= ~(0x3u << 4);  // LINEAR -> NEAREST between mip levels
     }
     // With nfsmw_nativo_diag_mip_minimo the minimum level rises (without passing the maximum) and goes into
     // the key that way: each value has its own samplers, and going back to 0 reuses the usual ones.
-    uint32_t campo_mips = (f[4] >> 2) & 0xFF;  // minimum in 0-3, maximum in 4-7
-    if (diag_mip_minimo_ != 0) {
-      const uint32_t minimo = campo_mips & 0xF;
-      const uint32_t maximo = (campo_mips >> 4) & 0xF;
-      if (maximo > minimo) {
-        campo_mips = (campo_mips & 0xF0) | std::min(maximo, minimo + diag_mip_minimo_);
+    uint32_t mips_field = (f[4] >> 2) & 0xFF;  // minimum in 0-3, maximum in 4-7
+    if (diag_mip_min_ != 0) {
+      const uint32_t min_value = mips_field & 0xF;
+      const uint32_t max_value = (mips_field >> 4) & 0xF;
+      if (max_value > min_value) {
+        mips_field = (mips_field & 0xF0) | std::min(max_value, min_value + diag_mip_min_);
       }
     }
-    const uint32_t clave = ((f[0] >> 10) & 0x1FF) | (campo_filtros << 9) |
-                           (campo_mips << 21) | ((f[5] & 0x3) << 29) |
-                           (puntual ? 0x80000000u : 0u);
-    if (const auto it = samplers_.find(clave); it != samplers_.end()) {
+    const uint32_t key = ((f[0] >> 10) & 0x1FF) | (filters_field << 9) |
+                           (mips_field << 21) | ((f[5] & 0x3) << 29) |
+                           (point ? 0x80000000u : 0u);
+    if (const auto it = samplers_.find(key); it != samplers_.end()) {
       return it->second.second;
     }
-    static constexpr VkSamplerAddressMode kModos[8] = {
+    static constexpr VkSamplerAddressMode kModes[8] = {
         VK_SAMPLER_ADDRESS_MODE_REPEAT,          VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT,
         VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,   VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE,
         VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,   VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE,
         VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER, VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE};
-    const bool espejo = dispositivo_->properties().samplerMirrorClampToEdge;
-    const auto modo = [&](uint32_t valor) {
-      const VkSamplerAddressMode m = kModos[valor & 0x7];
-      return m == VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE && !espejo
+    const bool mirror = vk_device_->properties().samplerMirrorClampToEdge;
+    const auto mode = [&](uint32_t value) {
+      const VkSamplerAddressMode m = kModes[value & 0x7];
+      return m == VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE && !mirror
                  ? VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE
                  : m;
     };
     VkSamplerCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
     info.magFilter =
-        ((f[3] >> 19) & 0x3) == 1 && !puntual ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
+        ((f[3] >> 19) & 0x3) == 1 && !point ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
     info.minFilter =
-        ((f[3] >> 21) & 0x3) == 1 && !puntual ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
-    const uint32_t mip = (campo_filtros >> 4) & 0x3;  // already includes the point mip test
+        ((f[3] >> 21) & 0x3) == 1 && !point ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
+    const uint32_t mip = (filters_field >> 4) & 0x3;  // already includes the point mip test
     info.mipmapMode =
-        mip == 1 && !puntual ? VK_SAMPLER_MIPMAP_MODE_LINEAR : VK_SAMPLER_MIPMAP_MODE_NEAREST;
-    info.addressModeU = modo(f[0] >> 10);
-    info.addressModeV = modo(f[0] >> 13);
-    info.addressModeW = modo(f[0] >> 16);
-    info.minLod = float(campo_mips & 0xF);  // with the mip diagnostic if it is enabled
+        mip == 1 && !point ? VK_SAMPLER_MIPMAP_MODE_LINEAR : VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    info.addressModeU = mode(f[0] >> 10);
+    info.addressModeV = mode(f[0] >> 13);
+    info.addressModeW = mode(f[0] >> 16);
+    info.minLod = float(mips_field & 0xF);  // with the mip diagnostic if it is enabled
     // With real mips, the fetch constant's maximum level also limits (like the emulation's sampler);
     // single-level textures stay as before.
     info.maxLod = mip == 2 ? info.minLod + 0.25f : std::max(info.minLod, float((f[4] >> 6) & 0xF));
@@ -9929,55 +9929,55 @@ class DibujosVulkanImpl final : public DibujosVulkan {
     // nfsmw_nativo_anisotropico. Only linear samplers with mips (maxLod above minLod); the value is read at
     // start-up, so it does not need to be in the key: every sampler is created with the same one.
     {
-      static const uint32_t aniso_pedido = uint32_t(std::max(0, int32_t(REXCVAR_GET(nfsmw_nativo_anisotropico))));
-      const auto& propiedades = dispositivo_->properties();
-      if (aniso_pedido > 1 && propiedades.samplerAnisotropy && info.minFilter == VK_FILTER_LINEAR &&
+      static const uint32_t request_aniso = uint32_t(std::max(0, int32_t(REXCVAR_GET(nfsmw_nativo_anisotropico))));
+      const auto& props = vk_device_->properties();
+      if (request_aniso > 1 && props.samplerAnisotropy && info.minFilter == VK_FILTER_LINEAR &&
           info.mipmapMode == VK_SAMPLER_MIPMAP_MODE_LINEAR && info.maxLod > info.minLod) {
         info.anisotropyEnable = VK_TRUE;
-        info.maxAnisotropy = std::max(1.0f, std::min(float(aniso_pedido), propiedades.maxSamplerAnisotropy));
-        if (!aniso_anotado_) {
-          aniso_anotado_ = true;
+        info.maxAnisotropy = std::max(1.0f, std::min(float(request_aniso), props.maxSamplerAnisotropy));
+        if (!tracked_aniso_) {
+          tracked_aniso_ = true;
           REXLOG_INFO("[nativo] C4 filtrado anisotropico {} en los samplers lineales con mips (pedido {}, tope del "
                       "dispositivo {}); los de un solo nivel y los puntuales, sin cambios",
-                      info.maxAnisotropy, aniso_pedido, propiedades.maxSamplerAnisotropy);
+                      info.maxAnisotropy, request_aniso, props.maxSamplerAnisotropy);
         }
       }
     }
     VkSampler sampler;
     if (dfn_.vkCreateSampler(device_, &info, nullptr, &sampler) != VK_SUCCESS) {
-      Avisar(36, "no se pudo crear un sampler");
+      Warn(36, "no se pudo crear un sampler");
       return 0;
     }
-    const uint32_t ranura = ReservarRanura(3);
+    const uint32_t ranura = ReserveSlot(3);
     if (!ranura) {
       dfn_.vkDestroySampler(device_, sampler, nullptr);
-      Avisar(37, "monton de samplers lleno");
+      Warn(37, "monton de samplers lleno");
       return 0;
     }
-    EscribirSampler(ranura, sampler);
-    samplers_.emplace(clave, std::make_pair(sampler, ranura));
+    WriteSampler(ranura, sampler);
+    samplers_.emplace(key, std::make_pair(sampler, ranura));
     return ranura;
   }
 
   // Category clipped to 1x1 (0 = none), with its alternating test.
-  uint32_t TijeraDePrueba() {
-    const int32_t categoria = REXCVAR_GET(nfsmw_nativo_prueba_tijera);
-    if (categoria <= 0) {
+  uint32_t TestScissor() {
+    const int32_t category = REXCVAR_GET(nfsmw_nativo_prueba_tijera);
+    if (category <= 0) {
       return 0;
     }
     const int32_t alternar = REXCVAR_GET(nfsmw_nativo_prueba_tijera_alternar_s);
     if (alternar <= 0) {
-      return uint32_t(categoria);
+      return uint32_t(category);
     }
-    const auto segundos = std::chrono::duration_cast<std::chrono::seconds>(
-                              std::chrono::steady_clock::now() - inicio_alternancia_ps_)
+    const auto secs = std::chrono::duration_cast<std::chrono::seconds>(
+                              std::chrono::steady_clock::now() - ps_toggle_start_)
                               .count();
-    const bool con_tijera = (segundos / alternar) % 2 == 1;
-    if (con_tijera != alternancia_tijera_anotada_) {
-      alternancia_tijera_anotada_ = con_tijera;
-      REXLOG_INFO("[nativo] C2 tijera de prueba: {}", con_tijera ? "recortando a 1x1" : "normal");
+    const bool with_scissor = (secs / alternar) % 2 == 1;
+    if (with_scissor != tracked_scissor_toggle_) {
+      tracked_scissor_toggle_ = with_scissor;
+      REXLOG_INFO("[nativo] C2 tijera de prueba: {}", with_scissor ? "recortando a 1x1" : "normal");
     }
-    return con_tijera ? uint32_t(categoria) : 0;
+    return with_scissor ? uint32_t(category) : 0;
   }
 
   /*
@@ -9988,273 +9988,273 @@ class DibujosVulkanImpl final : public DibujosVulkan {
    * guard (AnotarVegetacionAnillo) and, if Dibujar reaches its early discard, it must have decided the
    * same (AnotarVegetacionModelo otherwise).
    */
-  void VeredictoVegetacion(const PeticionDibujo& p) {
-    vegetacion_calculada_ = false;
-    if (!(p.vegetacion_juego & kVegHay)) {
+  void VegetationVerdict(const DrawRequest& p) {
+    vegetation_computed_ = false;
+    if (!(p.vegetation_game & kVegHay)) {
       return;
     }
-    const uint32_t* r = p.registros;
-    DetalleVegetacion a;
+    const uint32_t* r = p.regs;
+    VegetationDetail a;
     if (r) {
-      a.modo = r[gr::XE_GPU_REG_RB_MODECONTROL];
-      a.mascara = r[gr::XE_GPU_REG_RB_COLOR_MASK];
+      a.mode = r[gr::XE_GPU_REG_RB_MODECONTROL];
+      a.mask = r[gr::XE_GPU_REG_RB_COLOR_MASK];
       a.control = r[gr::XE_GPU_REG_RB_COLORCONTROL];
     }
-    a.vs = p.vs ? int32_t(p.vs->numero) : -1;
-    a.ps = p.ps ? int32_t(p.ps->numero) : -1;
+    a.vs = p.vs ? int32_t(p.vs->number) : -1;
+    a.ps = p.ps ? int32_t(p.ps->number) : -1;
     if (p.ps) {
-      a.salidas = p.ps->salidas;
-      a.descarta = p.ps->descarta;
+      a.outputs = p.ps->outputs;
+      a.discards = p.ps->discards;
     }
-    if (r && p.vs && p.ps && (a.modo & 0x7) == uint32_t(xenos::EdramMode::kColorDepth)) {
+    if (r && p.vs && p.ps && (a.mode & 0x7) == uint32_t(xenos::EdramMode::kColorDepth)) {
       bool color = false;
       for (uint32_t i = 0; i < 4; ++i) {
-        color = color || (((a.mascara >> (i * 4)) & 0xF) && ((p.ps->salidas >> i) & 0x1));
+        color = color || (((a.mask >> (i * 4)) & 0xF) && ((p.ps->outputs >> i) & 0x1));
       }
-      const bool prueba_alfa = ((a.control >> 3) & 0x1) && (a.control & 0x7) != 7;
-      a.estructura = !color && (prueba_alfa || p.ps->descarta || (p.ps->salidas & 0x10));
+      const bool alpha_test = ((a.control >> 3) & 0x1) && (a.control & 0x7) != 7;
+      a.structure = !color && (alpha_test || p.ps->discards || (p.ps->outputs & 0x10));
     }
-    a.ajustes = (cvars_por_fotograma_ ? ps_solo_alfa_fotograma_ : PsSoloAlfa()) && sin_vegetacion_;
-    a.oclusion = oclusion_abierta_;
-    vegetacion_anillo_ = a.estructura && a.ajustes && !a.oclusion;
-    vegetacion_calculada_ = true;
-    vegetacion_banderas_ = p.vegetacion_juego;
-    vegetacion_detalle_ = a;
-    AnotarVegetacionAnillo(p.vegetacion_juego, a);
+    a.settings = (cvars_per_frame_ ? frame_alpha_only_ps_ : PsAlphaOnly()) && without_vegetation_;
+    a.oclusion = open_occlusion_;
+    vegetation_ring_ = a.structure && a.settings && !a.oclusion;
+    vegetation_computed_ = true;
+    vegetation_flags_ = p.vegetation_game;
+    vegetation_detail_ = a;
+    TrackRingVegetation(p.vegetation_game, a);
   }
 
   // The setting, or its alternating test.
-  bool PsSoloAlfa() {
+  bool PsAlphaOnly() {
     const int32_t alternar = REXCVAR_GET(nfsmw_nativo_ps_solo_alfa_alternar_s);
     if (alternar <= 0) {
       return REXCVAR_GET(nfsmw_nativo_ps_solo_alfa);
     }
-    const auto segundos = std::chrono::duration_cast<std::chrono::seconds>(
-                              std::chrono::steady_clock::now() - inicio_alternancia_ps_)
+    const auto secs = std::chrono::duration_cast<std::chrono::seconds>(
+                              std::chrono::steady_clock::now() - ps_toggle_start_)
                               .count();
-    const bool solo_alfa = (segundos / alternar) % 2 == 1;
-    if (solo_alfa != alternancia_solo_alfa_anotada_) {
-      alternancia_solo_alfa_anotada_ = solo_alfa;
+    const bool only_alpha = (secs / alternar) % 2 == 1;
+    if (only_alpha != tracked_alpha_only_toggle_) {
+      tracked_alpha_only_toggle_ = only_alpha;
       REXLOG_INFO("[nativo] C2 escrituras de color: {}",
-                  solo_alfa ? "quitadas en las pasadas sin color" : "todas");
+                  only_alpha ? "quitadas en las pasadas sin color" : "todas");
     }
-    return solo_alfa;
+    return only_alpha;
   }
 
   // The setting, or its alternating test.
-  bool SinPsSinColor() {
+  bool NoPsNoColor() {
     const int32_t alternar = REXCVAR_GET(nfsmw_nativo_sin_ps_sin_color_alternar_s);
     if (alternar <= 0) {
       return REXCVAR_GET(nfsmw_nativo_sin_ps_sin_color);
     }
-    const auto segundos = std::chrono::duration_cast<std::chrono::seconds>(
-                              std::chrono::steady_clock::now() - inicio_alternancia_ps_)
+    const auto secs = std::chrono::duration_cast<std::chrono::seconds>(
+                              std::chrono::steady_clock::now() - ps_toggle_start_)
                               .count();
-    const bool sin_ps = (segundos / alternar) % 2 == 1;
-    if (sin_ps != alternancia_ps_anotada_) {
-      alternancia_ps_anotada_ = sin_ps;
+    const bool without_ps = (secs / alternar) % 2 == 1;
+    if (without_ps != tracked_ps_toggle_) {
+      tracked_ps_toggle_ = without_ps;
       REXLOG_INFO("[nativo] C2 etapa de fragmentos: {}",
-                  sin_ps ? "quitada en los dibujos sin color" : "siempre montada");
+                  without_ps ? "quitada en los dibujos sin color" : "siempre montada");
     }
-    return sin_ps;
+    return without_ps;
   }
 
   // 1/size of a slot's host image, in the shared constants. With size 0 (a texture that could not be
   // prepared) 0 is written: the shader does not use it because it does not sample either.
   // AirborneNX: value scale of a slot (see kPalabraEscala).
-  static void EscribirEscala(uint32_t* compartidas, uint32_t registro, float escala) {
-    std::memcpy(compartidas + kPalabraEscala + registro, &escala, sizeof(escala));
+  static void WriteScale(uint32_t* shared, uint32_t reg_index, float scale) {
+    std::memcpy(shared + kScaleWord + reg_index, &scale, sizeof(scale));
   }
 
-  static void EscribirInvTamano(uint32_t* compartidas, uint32_t registro, uint32_t ancho, uint32_t alto) {
-    const float inv[2] = {ancho ? 1.0f / float(ancho) : 0.0f, alto ? 1.0f / float(alto) : 0.0f};
-    std::memcpy(compartidas + kPalabraInvTamano + registro * 2, inv, sizeof(inv));
+  static void WriteInvSize(uint32_t* shared, uint32_t reg_index, uint32_t width_px, uint32_t height_px) {
+    const float inv[2] = {width_px ? 1.0f / float(width_px) : 0.0f, height_px ? 1.0f / float(height_px) : 0.0f};
+    std::memcpy(shared + kSizeInvWord + reg_index * 2, inv, sizeof(inv));
   }
 
-  bool EmpezarPase(const uint32_t* r, const uint64_t claves[5], uint32_t pitch,
-                   uint64_t clave_pase) {
-    inicio_pase_ = cronometrar_ ? std::chrono::steady_clock::now()
+  bool StartPass(const uint32_t* r, const uint64_t keys[5], uint32_t pitch,
+                   uint64_t pass_key) {
+    pass_start_ = time_ ? std::chrono::steady_clock::now()
                                 : std::chrono::steady_clock::time_point{};
-    if (!PrepararVacias()) {
+    if (!PrepareEmpty()) {
       return false;
     }
-    std::array<ImagenNativa*, 5> imagenes{};
+    std::array<NativeImage*, 5> images{};
     for (uint32_t i = 0; i < 4; ++i) {
-      if (claves[i]) {
-        imagenes[i] = contexto_->DestinoColor(uint32_t(claves[i] >> 24) & 0xFFF,
-                                              uint32_t(claves[i] >> 16) & 0xF, pitch);
-        if (!imagenes[i]) {
-          return Rechazar(40, "no hay destino de color");
+      if (keys[i]) {
+        images[i] = contexto_->ColorTarget(uint32_t(keys[i] >> 24) & 0xFFF,
+                                              uint32_t(keys[i] >> 16) & 0xF, pitch);
+        if (!images[i]) {
+          return Reject(40, "no hay destino de color");
         }
       }
     }
-    if (claves[4]) {
-      imagenes[4] = contexto_->DestinoProfundidad(uint32_t(claves[4] >> 24) & 0xFFF,
-                                                  uint32_t(claves[4] >> 16) & 0x1, pitch);
-      if (!imagenes[4]) {
-        return Rechazar(41, "no hay destino de profundidad");
+    if (keys[4]) {
+      images[4] = contexto_->DepthTarget(uint32_t(keys[4] >> 24) & 0xFFF,
+                                                  uint32_t(keys[4] >> 16) & 0x1, pitch);
+      if (!images[4]) {
+        return Reject(41, "no hay destino de profundidad");
       }
     }
     (void)r;
     // The render targets are already resolved above; that segment is closed.
-    const auto tras_destinos = cronometrar_ ? std::chrono::steady_clock::now()
+    const auto after_targets = time_ ? std::chrono::steady_clock::now()
                                             : std::chrono::steady_clock::time_point{};
-    if (cronometrar_) {
-      etapas_ns_[9] += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
-          tras_destinos - inicio_pase_).count());
+    if (time_) {
+      stages_ns_[9] += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
+          after_targets - pass_start_).count());
     }
-    uint32_t ancho = UINT32_MAX, alto = UINT32_MAX;
-    std::array<VkImageView, 5> vistas{};
-    uint32_t formatos[5] = {};
+    uint32_t width_px = UINT32_MAX, height_px = UINT32_MAX;
+    std::array<VkImageView, 5> views{};
+    uint32_t formats[5] = {};
     for (uint32_t i = 0; i < 5; ++i) {
-      if (imagenes[i]) {
-        ancho = std::min(ancho, imagenes[i]->ancho);
-        alto = std::min(alto, imagenes[i]->alto);
-        vistas[i] = imagenes[i]->vista;
-        formatos[i] = uint32_t(imagenes[i]->formato);
+      if (images[i]) {
+        width_px = std::min(width_px, images[i]->width_px);
+        height_px = std::min(height_px, images[i]->height_px);
+        views[i] = images[i]->view;
+        formats[i] = uint32_t(images[i]->format_id);
       }
     }
     // Shadow map: a depth-only target with a pitch of 1600 or more (same as omitir_sombras).
-    const bool es_sombras = pitch >= 1600 && formatos[4] && !formatos[0] && !formatos[1] &&
-                            !formatos[2] && !formatos[3];
+    const bool is_shadows = pitch >= 1600 && formats[4] && !formats[0] && !formats[1] &&
+                            !formats[2] && !formats[3];
     // nfsmw_nativo_sombra_minimo. If C2 says this is the car pass of the shadow map, each draw is validated
     // for it (and the pass must be depth-only).
-    pase_coches_sombra_ = imagenes[4] != nullptr && contexto_->PaseDeCochesSombra(imagenes[4], es_sombras);
+    shadow_cars_pass_ = images[4] != nullptr && contexto_->CarShadowPass(images[4], is_shadows);
     // GPU time per pass type (C2 report), by render target width. Shadows are recognized by being
     // depth-only, not by measuring 1600 or more. With the scene at 1920 (nfsmw_1080p_prueba) the width no
     // longer tells them apart: the scene fell into the shadow bucket and vanished from its own category.
-    categoria_pase_ = CategoriaDeDestino(pitch, claves);
-    contexto_->MarcarGpu(categoria_pase_);
-    const bool sombras_sin_load =
-        es_sombras && REXCVAR_GET(nfsmw_nativo_pase_sombras_sin_load);
-    const VkRenderPass pase = PaseDe(formatos, sombras_sin_load ? kCargaIgnorar : kCargaLeer);
-    if (pase == VK_NULL_HANDLE) {
-      return Rechazar(42, "no se pudo crear el render pass");
+    pass_category_ = TargetCategory(pitch, keys);
+    contexto_->MarkGpu(pass_category_);
+    const bool shadows_without_load =
+        is_shadows && REXCVAR_GET(nfsmw_nativo_pase_sombras_sin_load);
+    const VkRenderPass pass = PassOf(formats, shadows_without_load ? kIgnoreLoad : kReadLoad);
+    if (pass == VK_NULL_HANDLE) {
+      return Reject(42, "no se pudo crear el render pass");
     }
-    const VkFramebuffer framebuffer = FramebufferDe(pase, vistas, ancho, alto);
+    const VkFramebuffer framebuffer = FramebufferDe(pass, views, width_px, height_px);
     if (framebuffer == VK_NULL_HANDLE) {
-      return Rechazar(43, "no se pudo crear el framebuffer");
+      return Reject(43, "no se pudo crear el framebuffer");
     }
-    if (cronometrar_) {
-      etapas_ns_[10] += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
-          std::chrono::steady_clock::now() - tras_destinos).count());
+    if (time_) {
+      stages_ns_[10] += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now() - after_targets).count());
     }
-    const auto antes_abrir = cronometrar_ ? std::chrono::steady_clock::now()
+    const auto before_open = time_ ? std::chrono::steady_clock::now()
                                           : std::chrono::steady_clock::time_point{};
-    const VkCommandBuffer cmd = contexto_->ComandosTrabajo();
+    const VkCommandBuffer cmd = contexto_->JobCommands();
     if (!cmd) {
       return false;
     }
-    VkRenderPassBeginInfo inicio{};
-    inicio.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    inicio.renderPass = pase;
-    inicio.framebuffer = framebuffer;
+    VkRenderPassBeginInfo start{};
+    start.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    start.renderPass = pass;
+    start.framebuffer = framebuffer;
     // Only the rectangle the game uses (see nfsmw_nativo_pase_area_util).
-    uint32_t alto_pase = alto;
-    if (area_util_) {
-      const auto it = alto_util_.find(pitch);
-      if (it != alto_util_.end() && it->second < alto) {
-        alto_pase = it->second;
+    uint32_t pass_height = height_px;
+    if (usable_area_) {
+      const auto it = usable_height_.find(pitch);
+      if (it != usable_height_.end() && it->second < height_px) {
+        pass_height = it->second;
       }
     }
-    inicio.renderArea.extent = {ancho, alto_pase};
+    start.renderArea.extent = {width_px, pass_height};
     // nfsmw_nativo_diag_borrados. What this pass loads and stores of each render target, to compare with
     // what is cleared of it (C2 clears per target). Before opening the pass.
-    for (const ImagenNativa* imagen : imagenes) {
-      if (imagen) {
-        contexto_->AnotarAreaDePase(imagen, ancho, alto_pase);
+    for (const NativeImage* img : images) {
+      if (img) {
+        contexto_->TrackPassArea(img, width_px, pass_height);
       }
     }
     // The statistics cover the whole pass, from here to after EndRenderPass.
-    estadisticas_pase_ = contexto_->EmpezarEstadisticas(categoria_pase_);
-    const auto antes_inicio = std::chrono::steady_clock::now();
-    dfn_.vkCmdBeginRenderPass(cmd, &inicio, VK_SUBPASS_CONTENTS_INLINE);
+    pass_stats_ = contexto_->StartStats(pass_category_);
+    const auto before_start = std::chrono::steady_clock::now();
+    dfn_.vkCmdBeginRenderPass(cmd, &start, VK_SUBPASS_CONTENTS_INLINE);
     ns_render_pass_ += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::steady_clock::now() - antes_inicio).count());
-    if (cronometrar_) {
-      etapas_ns_[11] += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
-          std::chrono::steady_clock::now() - antes_abrir).count());
+        std::chrono::steady_clock::now() - before_start).count());
+    if (time_) {
+      stages_ns_[11] += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now() - before_open).count());
     }
-    pase_activo_ = true;
-    ++pases_empezados_;
-    texels_pases_ += uint64_t(ancho) * alto_pase;  // how much tile is loaded by loadOp = LOAD
+    active_pass_ = true;
+    ++started_passes_;
+    passes_texels_ += uint64_t(width_px) * pass_height;  // how much tile is loaded by loadOp = LOAD
     {
       // Same criterion as the per-category GPU time: the render target's pitch decides.
-      const uint32_t categoria = CategoriaDeDestino(pitch, claves);
-      texels_por_categoria_[categoria] += uint64_t(ancho) * alto_pase;
-      ++pases_por_categoria_[categoria];
+      const uint32_t category = TargetCategory(pitch, keys);
+      texels_per_category_[category] += uint64_t(width_px) * pass_height;
+      ++passes_per_category_[category];
     }
-    pase_comandos_ = cmd;
-    dibujos_en_pase_ = 0;  // position within the pass (deferred sky report)
-    pase_clave_ = clave_pase;
-    std::memcpy(pase_claves_, claves, sizeof(pase_claves_));  // the bytes that produce pase_clave_
-    pase_claves_validas_ = true;
-    ++pase_serie_;  // the cached framing depends on the pass size and scale
-    pase_generacion_ = contexto_->GeneracionComandos();
-    pase_ancho_ = ancho;
-    pase_alto_ = alto;
+    commands_pass_ = cmd;
+    draws_in_pass_ = 0;  // position within the pass (deferred sky report)
+    key_pass_ = pass_key;
+    std::memcpy(keys_pass_, keys, sizeof(keys_pass_));  // the bytes that produce pase_clave_
+    valid_keys_pass_ = true;
+    ++series_pass_;  // the cached framing depends on the pass size and scale
+    generation_pass_ = contexto_->CommandsGeneration();
+    pass_width_ = width_px;
+    pass_height_ = height_px;
     // Only the shadow map is drawn at a size other than the one the guest thinks.
-    pase_escala_ = (es_sombras && pitch && ancho && ancho != pitch)
-                       ? float(ancho) / float(pitch)
+    scale_pass_ = (is_shadows && pitch && width_px && width_px != pitch)
+                       ? float(width_px) / float(pitch)
                        : 1.0f;
-    std::copy(std::begin(formatos), std::end(formatos), std::begin(pase_formatos_));
-    pase_rp_ = pase;
+    std::copy(std::begin(formats), std::end(formats), std::begin(formats_pass_));
+    rp_pass_ = pass;
     // Phase 0b (nfsmw_nativo_pipeline_entre_pases). Vulkan keeps the bound pipeline across passes of the
     // same buffer: the pass's first draw only binds again if its key differs. A new buffer still starts
     // with nothing bound (Dibujar, grabacion_generacion_).
-    if (!pipeline_entre_pases_) {
-      pipeline_enlazado_ = VK_NULL_HANDLE;
-    } else if (pipeline_enlazado_ != VK_NULL_HANDLE) {
-      ++pases_con_pipeline_;
+    if (!pipeline_between_passes_) {
+      bound_pipeline_ = VK_NULL_HANDLE;
+    } else if (bound_pipeline_ != VK_NULL_HANDLE) {
+      ++passes_with_pipeline_;
     }
-    estado_grabado_ = false;
-    if (pipeline_enlazado_ == VK_NULL_HANDLE) {
-      eds_valido_ = false;  // pass that forgets the pipeline (without 0b): set everything again
+    recorded_state_ = false;
+    if (bound_pipeline_ == VK_NULL_HANDLE) {
+      eds_valid_ = false;  // pass that forgets the pipeline (without 0b): set everything again
     }
     return true;
   }
 
   // ZCULL: three load modes. kCargaBorrar is needed to clear the depth of images created without
   // TRANSFER_DST, the only ones eligible for a ZCULL plane.
-  enum : uint32_t { kCargaLeer = 0, kCargaIgnorar = 1, kCargaBorrar = 2 };
+  enum : uint32_t { kReadLoad = 0, kIgnoreLoad = 1, kClearLoad = 2 };
 
-  VkRenderPass PaseDe(const uint32_t formatos[5], uint32_t modo_carga = kCargaLeer) {
+  VkRenderPass PassOf(const uint32_t formats[5], uint32_t load_mode = kReadLoad) {
     // The mode is part of the key: two render passes with the same formats but a different loadOp are
     // different.
-    const uint64_t clave =
-        XXH3_64bits_withSeed(formatos, sizeof(uint32_t) * 5, modo_carga);
-    if (const auto it = pases_.find(clave); it != pases_.end()) {
+    const uint64_t key =
+        XXH3_64bits_withSeed(formats, sizeof(uint32_t) * 5, load_mode);
+    if (const auto it = passes_.find(key); it != passes_.end()) {
       return it->second;
     }
-    const VkRenderPass pase = CrearPase(formatos, modo_carga);  // the usual code, factored out
-    if (pase == VK_NULL_HANDLE) {
+    const VkRenderPass pass = CreatePass(formats, load_mode);  // the usual code, factored out
+    if (pass == VK_NULL_HANDLE) {
       return VK_NULL_HANDLE;
     }
-    pases_.emplace(clave, pase);
-    return pase;
+    passes_.emplace(key, pass);
+    return pass;
   }
 
   // The plain loop for 16-bit indices (byte-swapped or not), untouched.
-  static void IndicesDe16Escalar(const uint8_t* datos, uint32_t cuenta, uint16_t* salida, bool girar, uint32_t& minimo,
-                                 uint32_t& maximo) {
-    minimo = 0xFFFF;
-    maximo = 0;
-    if (girar) {
-      for (uint32_t i = 0; i < cuenta; ++i) {
-        uint16_t crudo;
-        std::memcpy(&crudo, datos + size_t(i) * 2, 2);
-        const uint16_t v = std::byteswap(crudo);
-        salida[i] = v;
-        minimo = std::min<uint32_t>(minimo, v);
-        maximo = std::max<uint32_t>(maximo, v);
+  static void ScalarIndices16(const uint8_t* payload, uint32_t num, uint16_t* output, bool rotate, uint32_t& min_value,
+                                 uint32_t& max_value) {
+    min_value = 0xFFFF;
+    max_value = 0;
+    if (rotate) {
+      for (uint32_t i = 0; i < num; ++i) {
+        uint16_t raw;
+        std::memcpy(&raw, payload + size_t(i) * 2, 2);
+        const uint16_t v = std::byteswap(raw);
+        output[i] = v;
+        min_value = std::min<uint32_t>(min_value, v);
+        max_value = std::max<uint32_t>(max_value, v);
       }
     } else {
-      for (uint32_t i = 0; i < cuenta; ++i) {
+      for (uint32_t i = 0; i < num; ++i) {
         uint16_t v;
-        std::memcpy(&v, datos + size_t(i) * 2, 2);
-        salida[i] = v;
-        minimo = std::min<uint32_t>(minimo, v);
-        maximo = std::max<uint32_t>(maximo, v);
+        std::memcpy(&v, payload + size_t(i) * 2, 2);
+        output[i] = v;
+        min_value = std::min<uint32_t>(min_value, v);
+        max_value = std::max<uint32_t>(max_value, v);
       }
     }
   }
@@ -10262,35 +10262,35 @@ class DibujosVulkanImpl final : public DibujosVulkan {
   // The same loop with NEON, 16 indices per iteration (vrev16 swaps the bytes of each 16-bit index, the
   // same as std::byteswap), and the remainder with the plain loop. NEON loads and stores need no
   // alignment on AArch64.
-  static void IndicesDe16Neon(const uint8_t* datos, uint32_t cuenta, uint16_t* salida, bool girar, uint32_t& minimo,
-                              uint32_t& maximo) {
+  static void Indices16Neon(const uint8_t* payload, uint32_t num, uint16_t* output, bool rotate, uint32_t& min_value,
+                              uint32_t& max_value) {
 #if defined(__aarch64__)
     uint32_t i = 0;
     uint32_t mn = 0xFFFF;
     uint32_t mx = 0;
-    if (cuenta >= 16) {
+    if (num >= 16) {
       uint16x8_t min_a = vdupq_n_u16(0xFFFF);
       uint16x8_t min_b = min_a;
       uint16x8_t max_a = vdupq_n_u16(0);
       uint16x8_t max_b = max_a;
       // Two loops (swapping is fixed per draw): no decision inside the iteration.
-      if (girar) {
-        for (; i + 16 <= cuenta; i += 16) {
-          const uint16x8_t a = vreinterpretq_u16_u8(vrev16q_u8(vld1q_u8(datos + size_t(i) * 2)));
-          const uint16x8_t b = vreinterpretq_u16_u8(vrev16q_u8(vld1q_u8(datos + size_t(i) * 2 + 16)));
-          vst1q_u16(salida + i, a);
-          vst1q_u16(salida + i + 8, b);
+      if (rotate) {
+        for (; i + 16 <= num; i += 16) {
+          const uint16x8_t a = vreinterpretq_u16_u8(vrev16q_u8(vld1q_u8(payload + size_t(i) * 2)));
+          const uint16x8_t b = vreinterpretq_u16_u8(vrev16q_u8(vld1q_u8(payload + size_t(i) * 2 + 16)));
+          vst1q_u16(output + i, a);
+          vst1q_u16(output + i + 8, b);
           min_a = vminq_u16(min_a, a);
           min_b = vminq_u16(min_b, b);
           max_a = vmaxq_u16(max_a, a);
           max_b = vmaxq_u16(max_b, b);
         }
       } else {
-        for (; i + 16 <= cuenta; i += 16) {
-          const uint16x8_t a = vreinterpretq_u16_u8(vld1q_u8(datos + size_t(i) * 2));
-          const uint16x8_t b = vreinterpretq_u16_u8(vld1q_u8(datos + size_t(i) * 2 + 16));
-          vst1q_u16(salida + i, a);
-          vst1q_u16(salida + i + 8, b);
+        for (; i + 16 <= num; i += 16) {
+          const uint16x8_t a = vreinterpretq_u16_u8(vld1q_u8(payload + size_t(i) * 2));
+          const uint16x8_t b = vreinterpretq_u16_u8(vld1q_u8(payload + size_t(i) * 2 + 16));
+          vst1q_u16(output + i, a);
+          vst1q_u16(output + i + 8, b);
           min_a = vminq_u16(min_a, a);
           min_b = vminq_u16(min_b, b);
           max_a = vmaxq_u16(max_a, a);
@@ -10300,26 +10300,26 @@ class DibujosVulkanImpl final : public DibujosVulkan {
       mn = vminvq_u16(vminq_u16(min_a, min_b));
       mx = vmaxvq_u16(vmaxq_u16(max_a, max_b));
     }
-    for (; i < cuenta; ++i) {
+    for (; i < num; ++i) {
       uint16_t v;
-      std::memcpy(&v, datos + size_t(i) * 2, 2);
-      if (girar) {
+      std::memcpy(&v, payload + size_t(i) * 2, 2);
+      if (rotate) {
         v = std::byteswap(v);
       }
-      salida[i] = v;
+      output[i] = v;
       mn = std::min<uint32_t>(mn, v);
       mx = std::max<uint32_t>(mx, v);
     }
-    minimo = mn;
-    maximo = mx;
+    min_value = mn;
+    max_value = mx;
 #else
-    IndicesDe16Escalar(datos, cuenta, salida, girar, minimo, maximo);
+    ScalarIndices16(payload, num, output, rotate, min_value, max_value);
 #endif
   }
 
   // The 16-bit indices of a draw (see nfsmw_nativo_indices_neon). Ring only.
-  void IndicesDe16(const uint8_t* datos, uint32_t cuenta, uint16_t* salida, bool girar, uint32_t& minimo,
-                   uint32_t& maximo) {
+  void Indices16(const uint8_t* payload, uint32_t num, uint16_t* output, bool rotate, uint32_t& min_value,
+                   uint32_t& max_value) {
     if (indices_neon_ < 0) {
       indices_neon_ = REXCVAR_GET(nfsmw_nativo_indices_neon) ? 1 : 0;
       REXLOG_INFO("[nativo] C6 indices de 16 bits (build 187): {}",
@@ -10327,34 +10327,34 @@ class DibujosVulkanImpl final : public DibujosVulkan {
                                 : "con el bucle de siempre (nfsmw_nativo_indices_neon = false)");
     }
     if (indices_neon_ == 0) {
-      IndicesDe16Escalar(datos, cuenta, salida, girar, minimo, maximo);
+      ScalarIndices16(payload, num, output, rotate, min_value, max_value);
       return;
     }
-    IndicesDe16Neon(datos, cuenta, salida, girar, minimo, maximo);
-    const uint64_t n = ++indices_neon_dibujos_;
+    Indices16Neon(payload, num, output, rotate, min_value, max_value);
+    const uint64_t n = ++draws_indices_neon_;
     if (n > 20000 && (n & 4095) != 0) {
       return;
     }
-    indices_neon_prueba_.resize(cuenta);
+    test_indices_neon_.resize(num);
     uint32_t mn = 0;
     uint32_t mx = 0;
-    IndicesDe16Escalar(datos, cuenta, indices_neon_prueba_.data(), girar, mn, mx);
-    ++indices_neon_comprobados_;
-    if (mn != minimo || mx != maximo ||
-        (cuenta && std::memcmp(indices_neon_prueba_.data(), salida, size_t(cuenta) * 2) != 0)) {
+    ScalarIndices16(payload, num, test_indices_neon_.data(), rotate, mn, mx);
+    ++checked_indices_neon_;
+    if (mn != min_value || mx != max_value ||
+        (num && std::memcmp(test_indices_neon_.data(), output, size_t(num) * 2) != 0)) {
       // The plain path stays for this draw and for the rest of the session.
-      if (cuenta) {
-        std::memcpy(salida, indices_neon_prueba_.data(), size_t(cuenta) * 2);
+      if (num) {
+        std::memcpy(output, test_indices_neon_.data(), size_t(num) * 2);
       }
-      minimo = mn;
-      maximo = mx;
+      min_value = mn;
+      max_value = mx;
       indices_neon_ = 0;
       REXLOG_ERROR("[nativo] C6 indices de 16 bits: DIFERENCIA entre NEON y el bucle de siempre ({} indices, {}; minimo "
                    "{} frente a {}, maximo {} frente a {}). Apagado para el resto de la sesion: el bucle de siempre",
-                   cuenta, girar ? "girados" : "sin girar", minimo, mn, maximo, mx);
+                   num, rotate ? "girados" : "sin girar", min_value, mn, max_value, mx);
       return;
     }
-    if (indices_neon_comprobados_ == 20000) {
+    if (checked_indices_neon_ == 20000) {
       REXLOG_INFO("[nativo] C6 indices de 16 bits (build 187): 20.000 dibujos comprobados contra el bucle de siempre, 0 "
                   "diferencias; sigue comprobando 1 de cada 4.096");
     }
@@ -10362,26 +10362,26 @@ class DibujosVulkanImpl final : public DibujosVulkan {
 
   // The PaseDe render pass without its cache, with nothing changed. The pipeline prewarm also uses it
   // from its thread (a compatible one: the same formats). It only reads its arguments.
-  VkRenderPass CrearPase(const uint32_t formatos[5], uint32_t modo_carga) const {
-    std::array<VkAttachmentDescription, 5> adjuntos{};
+  VkRenderPass CreatePass(const uint32_t formats[5], uint32_t load_mode) const {
+    std::array<VkAttachmentDescription, 5> attachments{};
     std::array<VkAttachmentReference, 4> colores{};
-    VkAttachmentReference profundidad{};
+    VkAttachmentReference depth_value{};
     uint32_t n = 0, n_colores = 0;
     for (uint32_t i = 0; i < 5; ++i) {
-      if (!formatos[i]) {
+      if (!formats[i]) {
         continue;
       }
-      VkAttachmentDescription& a = adjuntos[n];
-      a.format = VkFormat(formatos[i]);
+      VkAttachmentDescription& a = attachments[n];
+      a.format = VkFormat(formats[i]);
       a.samples = VK_SAMPLE_COUNT_1_BIT;
       // With the test active, the shadow map does not load its previous content: the game clears it before
       // drawing it, so fetching the 1600x1600 tile only to throw it away is wasted work.
-      a.loadOp = modo_carga == kCargaIgnorar ? VK_ATTACHMENT_LOAD_OP_DONT_CARE
-                 : modo_carga == kCargaBorrar ? VK_ATTACHMENT_LOAD_OP_CLEAR
+      a.loadOp = load_mode == kIgnoreLoad ? VK_ATTACHMENT_LOAD_OP_DONT_CARE
+                 : load_mode == kClearLoad ? VK_ATTACHMENT_LOAD_OP_CLEAR
                                               : VK_ATTACHMENT_LOAD_OP_LOAD;
       a.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
       a.stencilLoadOp = i != 4                       ? VK_ATTACHMENT_LOAD_OP_DONT_CARE
-                        : modo_carga == kCargaBorrar ? VK_ATTACHMENT_LOAD_OP_CLEAR
+                        : load_mode == kClearLoad ? VK_ATTACHMENT_LOAD_OP_CLEAR
                                                      : VK_ATTACHMENT_LOAD_OP_LOAD;
       a.stencilStoreOp = i == 4 ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE;
       a.initialLayout = VK_IMAGE_LAYOUT_GENERAL;
@@ -10389,97 +10389,97 @@ class DibujosVulkanImpl final : public DibujosVulkan {
       if (i < 4) {
         colores[n_colores++] = {n, VK_IMAGE_LAYOUT_GENERAL};
       } else {
-        profundidad = {n, VK_IMAGE_LAYOUT_GENERAL};
+        depth_value = {n, VK_IMAGE_LAYOUT_GENERAL};
       }
       ++n;
     }
-    VkSubpassDescription subpase{};
-    subpase.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpase.colorAttachmentCount = n_colores;
-    subpase.pColorAttachments = colores.data();
-    subpase.pDepthStencilAttachment = formatos[4] ? &profundidad : nullptr;
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = n_colores;
+    subpass.pColorAttachments = colores.data();
+    subpass.pDepthStencilAttachment = formats[4] ? &depth_value : nullptr;
     VkRenderPassCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
     info.attachmentCount = n;
-    info.pAttachments = adjuntos.data();
+    info.pAttachments = attachments.data();
     info.subpassCount = 1;
-    info.pSubpasses = &subpase;
-    VkRenderPass pase;
-    if (dfn_.vkCreateRenderPass(device_, &info, nullptr, &pase) != VK_SUCCESS) {
+    info.pSubpasses = &subpass;
+    VkRenderPass pass;
+    if (dfn_.vkCreateRenderPass(device_, &info, nullptr, &pass) != VK_SUCCESS) {
       return VK_NULL_HANDLE;
     }
-    return pase;
+    return pass;
   }
 
-  VkFramebuffer FramebufferDe(VkRenderPass pase, const std::array<VkImageView, 5>& vistas,
-                              uint32_t ancho, uint32_t alto) {
-    struct Clave {
-      VkRenderPass pase;
-      std::array<VkImageView, 5> vistas;
-      uint32_t ancho, alto;
-    } clave{pase, vistas, ancho, alto};
-    const uint64_t huella = XXH3_64bits(&clave, sizeof(clave));
-    if (const auto it = framebuffers_.find(huella); it != framebuffers_.end()) {
+  VkFramebuffer FramebufferDe(VkRenderPass pass, const std::array<VkImageView, 5>& views,
+                              uint32_t width_px, uint32_t height_px) {
+    struct Key {
+      VkRenderPass pass;
+      std::array<VkImageView, 5> views;
+      uint32_t width_px, height_px;
+    } key{pass, views, width_px, height_px};
+    const uint64_t fingerprint = XXH3_64bits(&key, sizeof(key));
+    if (const auto it = framebuffers_.find(fingerprint); it != framebuffers_.end()) {
       return it->second;
     }
-    std::array<VkImageView, 5> adjuntos{};
+    std::array<VkImageView, 5> attachments{};
     uint32_t n = 0;
-    for (VkImageView vista : vistas) {
-      if (vista != VK_NULL_HANDLE) {
-        adjuntos[n++] = vista;
+    for (VkImageView view : views) {
+      if (view != VK_NULL_HANDLE) {
+        attachments[n++] = view;
       }
     }
     VkFramebufferCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-    info.renderPass = pase;
+    info.renderPass = pass;
     info.attachmentCount = n;
-    info.pAttachments = adjuntos.data();
-    info.width = ancho;
-    info.height = alto;
+    info.pAttachments = attachments.data();
+    info.width = width_px;
+    info.height = height_px;
     info.layers = 1;
     VkFramebuffer framebuffer;
     if (dfn_.vkCreateFramebuffer(device_, &info, nullptr, &framebuffer) != VK_SUCCESS) {
       return VK_NULL_HANDLE;
     }
-    framebuffers_.emplace(huella, framebuffer);
-    framebuffers_vistas_[huella] = vistas;  // For OlvidarVista
+    framebuffers_.emplace(fingerprint, framebuffer);
+    views_framebuffers_[fingerprint] = views;  // For OlvidarVista
     return framebuffer;
   }
 
   // The bright pass variants of nfsmw_resplandor_cielo (1 natural, 2 soft), compiled with the same DXC
   // options as the library.
-  VkShaderModule ModuloVariante(size_t indice, const uint32_t* spirv, size_t bytes) {
-    if (!modulos_variantes_creados_[indice]) {
-      modulos_variantes_creados_[indice] = true;
+  VkShaderModule VariantModule(size_t index, const uint32_t* spirv, size_t bytes) {
+    if (!created_variants_modules_[index]) {
+      created_variants_modules_[index] = true;
       VkShaderModuleCreateInfo info{};
       info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
       info.codeSize = bytes;
       info.pCode = spirv;
-      if (dfn_.vkCreateShaderModule(device_, &info, nullptr, &modulos_variantes_[indice]) != VK_SUCCESS) {
-        modulos_variantes_[indice] = VK_NULL_HANDLE;
+      if (dfn_.vkCreateShaderModule(device_, &info, nullptr, &variants_modules_[index]) != VK_SUCCESS) {
+        variants_modules_[index] = VK_NULL_HANDLE;
       }
     }
-    return modulos_variantes_[indice];
+    return variants_modules_[index];
   }
 
   // nfsmw_resplandor_cielo (F4 menu, Graficos: 0 original, 1 natural, 2 soft), or its test rotation; logs
   // every change.
-  int ResplandorCielo() {
-    int modo = nfsmw::ajustes::ResplandorCielo();
+  int GlowSky() {
+    int mode = nfsmw::settings::GlowSky();
     const int32_t alternar = REXCVAR_GET(nfsmw_nativo_resplandor_suave_alternar_s);
     if (alternar > 0) {
-      const auto segundos = std::chrono::duration_cast<std::chrono::seconds>(
-                                std::chrono::steady_clock::now() - inicio_sombras_)
+      const auto secs = std::chrono::duration_cast<std::chrono::seconds>(
+                                std::chrono::steady_clock::now() - shadows_start_)
                                 .count();
-      modo = int((segundos / alternar) % 3);
+      mode = int((secs / alternar) % 3);
     }
-    modo = std::clamp(modo, 0, 2);
-    if (modo != resplandor_anotado_) {
-      resplandor_anotado_ = modo;
-      static constexpr const char* kNombres[3] = {"original", "natural", "suave"};
-      REXLOG_INFO("[nativo] resplandor del cielo: {} (fotograma {})", kNombres[modo], fotograma_);
+    mode = std::clamp(mode, 0, 2);
+    if (mode != glow_tracked_) {
+      glow_tracked_ = mode;
+      static constexpr const char* kNames[3] = {"original", "natural", "suave"};
+      REXLOG_INFO("[nativo] resplandor del cielo: {} (fotograma {})", kNames[mode], frame_);
     }
-    return modo;
+    return mode;
   }
 
   /*
@@ -10489,45 +10489,45 @@ class DibujosVulkanImpl final : public DibujosVulkan {
    * is, draw by draw, the exact size of what only a depth pre-pass could address, and that is expensive
    * to implement. A small figure means a pre-pass is not worth the risk.
    */
-  void InformeZTemprana() {
-    ++fotogramas_z_;
-    const auto ahora = std::chrono::steady_clock::now();
-    if (std::chrono::duration_cast<std::chrono::seconds>(ahora - ultimo_informe_z_).count() < 10) {
+  void EarlyZReport() {
+    ++frames_z_;
+    const auto now_time = std::chrono::steady_clock::now();
+    if (std::chrono::duration_cast<std::chrono::seconds>(now_time - last_report_z_).count() < 10) {
       return;
     }
-    ultimo_informe_z_ = ahora;
-    const uint64_t vistos = fotogramas_z_ - fotogramas_z_previos_;
-    const double fotogramas = double(vistos ? vistos : 1);
-    std::array<uint64_t, kZCuentas> d{};
+    last_report_z_ = now_time;
+    const uint64_t seen_items = frames_z_ - frames_z_previous_;
+    const double frames = double(seen_items ? seen_items : 1);
+    std::array<uint64_t, kZCounts> d{};
     uint64_t total = 0;
-    for (uint32_t i = 0; i < kZCuentas; ++i) {
-      d[i] = cuentas_z_[i] - cuentas_z_previas_[i];
-      cuentas_z_previas_[i] = cuentas_z_[i];
+    for (uint32_t i = 0; i < kZCounts; ++i) {
+      d[i] = counts_z_[i] - counts_z_previous_[i];
+      counts_z_previous_[i] = counts_z_[i];
       total += d[i];
     }
-    fotogramas_z_previos_ = fotogramas_z_;
-    InformeCielo(fotogramas);  // goes before the !total cutoff, which has nothing to do with the sky
+    frames_z_previous_ = frames_z_;
+    SkyReport(frames);  // goes before the !total cutoff, which has nothing to do with the sky
     if (!total) {
       return;
     }
-    const uint64_t tardios = d[kZPuesta] + d[kZEscribeZ] + d[kZEstencil] + d[kZOclusion];
-    NFSMW_INFORME_ANILLO(
+    const uint64_t late_items = d[kZSet] + d[kZWriteZ] + d[kZStencil] + d[kZOclusion];
+    NFSMW_RING_REPORT(
         "[nativo] C6 Z temprana por fotograma: {:.0f} dibujos la aprovechan, {:.0f} NO se pueden porque "
         "escriben profundidad (esos son el tamano de la pasada previa de C88), {:.0f} por estencil, {:.0f} "
         "dentro de una consulta de oclusion; {:.0f} ya probaban antes. De los que obligaban a sombrear "
         "primero se arregla el {:.0f} %{}",
-        double(d[kZPuesta]) / fotogramas, double(d[kZEscribeZ]) / fotogramas,
-        double(d[kZEstencil]) / fotogramas, double(d[kZOclusion]) / fotogramas,
-        double(d[kZYaTemprano]) / fotogramas,
-        tardios ? 100.0 * double(d[kZPuesta]) / double(tardios) : 0.0,
-        z_temprana_sin_modulo_ ? fmt::format(" ({} shaders sin modulo parcheado)", z_temprana_sin_modulo_)
+        double(d[kZSet]) / frames, double(d[kZWriteZ]) / frames,
+        double(d[kZStencil]) / frames, double(d[kZOclusion]) / frames,
+        double(d[kZEarlyAlready]) / frames,
+        late_items ? 100.0 * double(d[kZSet]) / double(late_items) : 0.0,
+        z_early_without_module_ ? fmt::format(" ({} shaders sin modulo parcheado)", z_early_without_module_)
                                : std::string());
-    if (d[kInvisibleMezcla] || d[kInvisibleAlfa] || d[kInvisibleSoloColor]) {
-      NFSMW_INFORME_ANILLO(
+    if (d[kBlendInvisible] || d[kInvisibleAlfa] || d[kColorOnlyInvisible]) {
+      NFSMW_RING_REPORT(
           "[nativo] C6 dibujos invisibles por fotograma: {:.1f} con la mezcla que copia el destino, {:.1f} "
           "con la prueba de alfa en NUNCA; {:.1f} se quedan solo con la profundidad",
-          double(d[kInvisibleMezcla]) / fotogramas, double(d[kInvisibleAlfa]) / fotogramas,
-          double(d[kInvisibleSoloColor]) / fotogramas);
+          double(d[kBlendInvisible]) / frames, double(d[kInvisibleAlfa]) / frames,
+          double(d[kColorOnlyInvisible]) / frames);
     }
   }
 
@@ -10540,49 +10540,49 @@ class DibujosVulkanImpl final : public DibujosVulkan {
    * between the old place and the new one: exactly the amount of geometry that now covers the sky before
    * it is shaded. If it is small, so is the saving.
    */
-  void InformeCielo(double fotogramas) {
-    const uint64_t aplazados = cielo_aplazados_ - cielo_aplazados_previos_;
-    const uint64_t vistos = cielo_vistos_ - cielo_vistos_previos_;
-    if (!vistos) {
+  void SkyReport(double frames) {
+    const uint64_t deferred_items = sky_deferred_count_ - sky_deferred_previous_;
+    const uint64_t seen_items = sky_seen_ - sky_seen_previous_;
+    if (!seen_items) {
       return;
     }
-    std::array<uint64_t, kCieloMotivos> por_motivo{};
+    std::array<uint64_t, kSkyReasons> per_reason{};
     uint64_t emitidos = 0;
-    for (uint32_t i = 0; i < kCieloMotivos; ++i) {
-      por_motivo[i] = cielo_emitidos_[i] - cielo_emitidos_previos_[i];
-      cielo_emitidos_previos_[i] = cielo_emitidos_[i];
-      emitidos += por_motivo[i];
+    for (uint32_t i = 0; i < kSkyReasons; ++i) {
+      per_reason[i] = sky_emitted_[i] - sky_emitted_previous_[i];
+      sky_emitted_previous_[i] = sky_emitted_[i];
+      emitidos += per_reason[i];
     }
-    const uint64_t posicion_suma = cielo_posicion_suma_ - cielo_posicion_suma_previa_;
-    const uint64_t candidatos = cielo_candidatos_ - cielo_candidatos_previos_;
-    cielo_candidatos_previos_ = cielo_candidatos_;
-    cielo_vistos_previos_ = cielo_vistos_;
-    cielo_aplazados_previos_ = cielo_aplazados_;
-    cielo_posicion_suma_previa_ = cielo_posicion_suma_;
+    const uint64_t sum_position = sky_sum_position_ - sky_sum_position_previous_;
+    const uint64_t candidates = sky_candidates_ - sky_candidates_previous_;
+    sky_candidates_previous_ = sky_candidates_;
+    sky_seen_previous_ = sky_seen_;
+    sky_deferred_previous_ = sky_deferred_count_;
+    sky_sum_position_previous_ = sky_sum_position_;
     /*
      * The line that decides whether the criterion works. "con la geometria del domo" is the number that
      * matters: it must be 1.00 per frame. The "detectados" are by fingerprint only and once gave 7.00,
      * which is what broke the image.
      */
-    NFSMW_INFORME_ANILLO("[nativo] C6 cielo: {:.2f} detectados por huella y {:.2f} con la geometria del domo "
+    NFSMW_RING_REPORT("[nativo] C6 cielo: {:.2f} detectados por huella y {:.2f} con la geometria del domo "
                 "(480 indices y primeros del pase) por fotograma. El segundo tiene que dar 1,00. "
                 "GUARDIA: {} ({} fotogramas con domo mirados, {} con exactamente uno, maximo {} en "
                 "un fotograma)",
-                double(vistos) / fotogramas, double(candidatos) / fotogramas,
-                cielo_guardia_ == kCieloAplazando  ? "SUPERADA, aplazando"
-                : cielo_guardia_ == kCieloDescartado ? "DESCARTADA, no se aplaza nada"
+                double(seen_items) / frames, double(candidates) / frames,
+                sky_guard_ == kSkyDeferring  ? "SUPERADA, aplazando"
+                : sky_guard_ == kSkyDiscarded ? "DESCARTADA, no se aplaza nada"
                                                      : "mirando todavia",
-                cielo_guardia_fotogramas_, cielo_guardia_con_uno_, cielo_guardia_max_);
-    NFSMW_INFORME_ANILLO(
+                sky_frames_guard_, sky_guard_with_one_, sky_guard_max_);
+    NFSMW_RING_REPORT(
         "[nativo] C6 cielo aplazado ({}): {:.2f} detectados por fotograma, {:.2f} aplazados de verdad "
         "({} no aplazables en total, {} con otro cielo ya pendiente); emitidos {} al llegar un dibujo "
         "con mezcla, {} al llegar un opaco que no escribe Z, {} al cerrarse el pase, {} por otro cielo; "
         "PERDIDOS {}; posicion media {:.0f} dibujos por delante de el (maximo {})",
-        cielo_aplazado_ ? "encendido" : "APAGADO", double(vistos) / fotogramas,
-        double(aplazados) / fotogramas, cielo_no_aplazables_, cielo_dos_en_pase_,
-        por_motivo[kCieloPorMezcla], por_motivo[kCieloPorSinZ], por_motivo[kCieloPorFinDePase],
-        por_motivo[kCieloPorOtroCielo], cielo_perdidos_,
-        emitidos ? double(posicion_suma) / double(emitidos) : 0.0, cielo_posicion_max_);
+        sky_deferred_ ? "encendido" : "APAGADO", double(seen_items) / frames,
+        double(deferred_items) / frames, sky_no_deferrable_, sky_two_in_pass_,
+        per_reason[kSkyPerBlend], per_reason[kSkyPerWithoutZ], per_reason[kSkyPerPassEnd],
+        per_reason[kSkyPerOtherSky], sky_lost_,
+        emitidos ? double(sum_position) / double(emitidos) : 0.0, sky_position_max_);
   }
 
   /*
@@ -10591,10 +10591,10 @@ class DibujosVulkanImpl final : public DibujosVulkan {
    * Runs once per frame and does nothing once the guard has decided, so its cost is one comparison. The
    * decision is taken only once per session and logged.
    */
-  void CerrarFotogramaDeLaGuardiaDelCielo() {
-    const uint32_t en_este = cielo_guardia_en_fotograma_;
-    cielo_guardia_en_fotograma_ = 0;
-    if (cielo_guardia_ != kCieloMirando) {
+  void CloseSkyGuardFrame() {
+    const uint32_t en_este = sky_guard_in_frame_;
+    sky_guard_in_frame_ = 0;
+    if (sky_guard_ != kSkyPeeking) {
       return;
     }
     /*
@@ -10605,11 +10605,11 @@ class DibujosVulkanImpl final : public DibujosVulkan {
     if (en_este == 0) {
       return;
     }
-    cielo_guardia_max_ = std::max(cielo_guardia_max_, en_este);
+    sky_guard_max_ = std::max(sky_guard_max_, en_este);
     if (en_este == 1) {
-      ++cielo_guardia_con_uno_;
+      ++sky_guard_with_one_;
     }
-    if (++cielo_guardia_fotogramas_ < kCieloFotogramasPrueba) {
+    if (++sky_frames_guard_ < kSkyTestFrames) {
       return;
     }
     /*
@@ -10617,62 +10617,62 @@ class DibujosVulkanImpl final : public DibujosVulkan {
      * with exactly one. In any other case it stays off and the image is identical to the non-deferred one,
      * which is known to work.
      */
-    if (cielo_guardia_max_ == 1 && cielo_guardia_con_uno_ >= kCieloFotogramasConUno) {
-      cielo_guardia_ = kCieloAplazando;
+    if (sky_guard_max_ == 1 && sky_guard_with_one_ >= kSkyFramesWithOne) {
+      sky_guard_ = kSkyDeferring;
       REXLOG_INFO("[nativo] C6 cielo: guardia SUPERADA ({} de {} fotogramas con exactamente un domo, "
                   "nunca dos). Se aplaza el cielo a partir de ahora: son 3,4-4,3 ms de GPU sin "
                   "cambiar un pixel",
-                  cielo_guardia_con_uno_, cielo_guardia_fotogramas_);
+                  sky_guard_with_one_, sky_frames_guard_);
     } else {
-      cielo_guardia_ = kCieloDescartado;
+      sky_guard_ = kSkyDiscarded;
       REXLOG_WARN("[nativo] C6 cielo: guardia NO superada (maximo {} domos en un fotograma, {} de {} "
                   "fotogramas con exactamente uno; hacian falta {}). NO se aplaza nada: la imagen "
                   "queda exactamente como estaba",
-                  cielo_guardia_max_, cielo_guardia_con_uno_, cielo_guardia_fotogramas_,
-                  kCieloFotogramasConUno);
+                  sky_guard_max_, sky_guard_with_one_, sky_frames_guard_,
+                  kSkyFramesWithOne);
     }
   }
 
-  VkShaderModule ModuloDe(const EntradaShader& entrada) {
-    if (const auto it = modulos_.find(&entrada); it != modulos_.end()) {
+  VkShaderModule ModuleOf(const ShaderEntry& entry) {
+    if (const auto it = modules_.find(&entry); it != modules_.end()) {
       return it->second;
     }
-    const auto& spirv = entrada.shader->spirv;
+    const auto& spirv = entry.shader->spirv;
     VkShaderModuleCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
     info.codeSize = spirv.size() * sizeof(uint32_t);
     info.pCode = spirv.data();
-    VkShaderModule modulo = VK_NULL_HANDLE;
-    if (dfn_.vkCreateShaderModule(device_, &info, nullptr, &modulo) != VK_SUCCESS) {
-      modulo = VK_NULL_HANDLE;
+    VkShaderModule spv_module = VK_NULL_HANDLE;
+    if (dfn_.vkCreateShaderModule(device_, &info, nullptr, &spv_module) != VK_SUCCESS) {
+      spv_module = VK_NULL_HANDLE;
     }
-    modulos_.emplace(&entrada, modulo);
-    return modulo;
+    modules_.emplace(&entry, spv_module);
+    return spv_module;
   }
 
   // Pixel shader module without the color writes, one per shader. If it cannot be pruned, the normal one
   // is returned: the image is the same, only the saving is lost.
-  VkShaderModule ModuloSoloAlfa(const EntradaShader& entrada) {
-    if (const auto it = modulos_solo_alfa_.find(&entrada); it != modulos_solo_alfa_.end()) {
-      return it->second != VK_NULL_HANDLE ? it->second : ModuloDe(entrada);
+  VkShaderModule AlphaOnlyModule(const ShaderEntry& entry) {
+    if (const auto it = alpha_only_modules_.find(&entry); it != alpha_only_modules_.end()) {
+      return it->second != VK_NULL_HANDLE ? it->second : ModuleOf(entry);
     }
-    uint32_t quitadas = 0;
-    const std::vector<uint32_t> podado = PodarEscriturasDeColor(entrada.shader->spirv, quitadas);
-    VkShaderModule modulo = VK_NULL_HANDLE;
-    if (!podado.empty()) {
+    uint32_t removed = 0;
+    const std::vector<uint32_t> pruned = PruneColorWrites(entry.shader->spirv, removed);
+    VkShaderModule spv_module = VK_NULL_HANDLE;
+    if (!pruned.empty()) {
       VkShaderModuleCreateInfo info{};
       info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-      info.codeSize = podado.size() * sizeof(uint32_t);
-      info.pCode = podado.data();
-      if (dfn_.vkCreateShaderModule(device_, &info, nullptr, &modulo) != VK_SUCCESS) {
-        modulo = VK_NULL_HANDLE;
+      info.codeSize = pruned.size() * sizeof(uint32_t);
+      info.pCode = pruned.data();
+      if (dfn_.vkCreateShaderModule(device_, &info, nullptr, &spv_module) != VK_SUCCESS) {
+        spv_module = VK_NULL_HANDLE;
       }
     }
     REXLOG_INFO("[nativo] C5a: PS n{} sin escrituras de color: {} quitadas, {} palabras de {} ({})",
-                entrada.numero, quitadas, podado.size(), entrada.shader->spirv.size(),
-                modulo != VK_NULL_HANDLE ? "modulo creado" : "se usa el normal");
-    modulos_solo_alfa_.emplace(&entrada, modulo);
-    return modulo != VK_NULL_HANDLE ? modulo : ModuloDe(entrada);
+                entry.number, removed, pruned.size(), entry.shader->spirv.size(),
+                spv_module != VK_NULL_HANDLE ? "modulo creado" : "se usa el normal");
+    alpha_only_modules_.emplace(&entry, spv_module);
+    return spv_module != VK_NULL_HANDLE ? spv_module : ModuleOf(entry);
   }
 
   /*
@@ -10680,32 +10680,32 @@ class DibujosVulkanImpl final : public DibujosVulkan {
    * already had it, it writes gl_FragDepth...), the normal one is returned: the image is the same and only
    * the saving is lost. It is logged once per shader so the log shows which ones qualified.
    */
-  VkShaderModule ModuloZTemprana(const EntradaShader& entrada) {
-    if (const auto it = modulos_z_temprana_.find(&entrada); it != modulos_z_temprana_.end()) {
-      return it->second != VK_NULL_HANDLE ? it->second : ModuloDe(entrada);
+  VkShaderModule EarlyModuleZ(const ShaderEntry& entry) {
+    if (const auto it = early_modules_z_.find(&entry); it != early_modules_z_.end()) {
+      return it->second != VK_NULL_HANDLE ? it->second : ModuleOf(entry);
     }
-    const char* motivo = "";
-    const std::vector<uint32_t> parcheado = ConPruebasTempranas(entrada.shader->spirv, motivo);
-    VkShaderModule modulo = VK_NULL_HANDLE;
-    if (!parcheado.empty()) {
+    const char* reason = "";
+    const std::vector<uint32_t> patched = WithEarlyTests(entry.shader->spirv, reason);
+    VkShaderModule spv_module = VK_NULL_HANDLE;
+    if (!patched.empty()) {
       VkShaderModuleCreateInfo info{};
       info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-      info.codeSize = parcheado.size() * sizeof(uint32_t);
-      info.pCode = parcheado.data();
-      if (dfn_.vkCreateShaderModule(device_, &info, nullptr, &modulo) != VK_SUCCESS) {
-        modulo = VK_NULL_HANDLE;
+      info.codeSize = patched.size() * sizeof(uint32_t);
+      info.pCode = patched.data();
+      if (dfn_.vkCreateShaderModule(device_, &info, nullptr, &spv_module) != VK_SUCCESS) {
+        spv_module = VK_NULL_HANDLE;
       }
     }
-    REXLOG_INFO("[nativo] C6 Z temprana: PS n{} {} ({} kills, {} palabras)", entrada.numero,
-                modulo != VK_NULL_HANDLE
+    REXLOG_INFO("[nativo] C6 Z temprana: PS n{} {} ({} kills, {} palabras)", entry.number,
+                spv_module != VK_NULL_HANDLE
                     ? std::string("prueba la profundidad antes de sombrear")
-                    : fmt::format("se queda como estaba: {}", motivo),
-                entrada.kills, entrada.shader->spirv.size());
-    modulos_z_temprana_.emplace(&entrada, modulo);
-    if (modulo == VK_NULL_HANDLE) {
-      ++z_temprana_sin_modulo_;
+                    : fmt::format("se queda como estaba: {}", reason),
+                entry.kills, entry.shader->spirv.size());
+    early_modules_z_.emplace(&entry, spv_module);
+    if (spv_module == VK_NULL_HANDLE) {
+      ++z_early_without_module_;
     }
-    return modulo != VK_NULL_HANDLE ? modulo : ModuloDe(entrada);
+    return spv_module != VK_NULL_HANDLE ? spv_module : ModuleOf(entry);
   }
 
   /*
@@ -10715,71 +10715,71 @@ class DibujosVulkanImpl final : public DibujosVulkan {
    * which thus compare against what the pipeline really carries and not against another copy of the same
    * computations. mezcla.pAttachments points to fijo.mezclas: the structure is not copied.
    */
-  struct EstadoFijoPipeline {
+  struct PipelineFixedState {
     VkPipelineInputAssemblyStateCreateInfo ensamblado{};
-    VkPipelineViewportStateCreateInfo vista{};
+    VkPipelineViewportStateCreateInfo view{};
     VkPipelineRasterizationStateCreateInfo rasterizado{};
-    VkPipelineMultisampleStateCreateInfo muestreo{};
-    VkPipelineDepthStencilStateCreateInfo profundidad{};
-    std::array<VkPipelineColorBlendAttachmentState, 4> mezclas{};
+    VkPipelineMultisampleStateCreateInfo sampling{};
+    VkPipelineDepthStencilStateCreateInfo depth_value{};
+    std::array<VkPipelineColorBlendAttachmentState, 4> blends{};
     uint32_t n_colores = 0;
-    VkPipelineColorBlendStateCreateInfo mezcla{};
-    EstadoFijoPipeline() = default;
-    EstadoFijoPipeline(const EstadoFijoPipeline&) = delete;
-    EstadoFijoPipeline& operator=(const EstadoFijoPipeline&) = delete;
+    VkPipelineColorBlendStateCreateInfo blend{};
+    PipelineFixedState() = default;
+    PipelineFixedState(const PipelineFixedState&) = delete;
+    PipelineFixedState& operator=(const PipelineFixedState&) = delete;
   };
 
   // avisar = false from the prewarm thread (Avisar belongs to the ring only).
-  void RellenarEstadoFijo(const ClavePipeline& clave, EstadoFijoPipeline& fijo, bool avisar = true) {
-    VkPipelineInputAssemblyStateCreateInfo& ensamblado = fijo.ensamblado;
+  void FillFixedState(const PipelineKey& key, PipelineFixedState& fixed, bool warn = true) {
+    VkPipelineInputAssemblyStateCreateInfo& ensamblado = fixed.ensamblado;
     ensamblado.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-    ensamblado.topology = VkPrimitiveTopology(clave.topologia);
-    ensamblado.primitiveRestartEnable = (clave.rasterizado & 0x8) ? VK_TRUE : VK_FALSE;
+    ensamblado.topology = VkPrimitiveTopology(key.topo);
+    ensamblado.primitiveRestartEnable = (key.rasterizado & 0x8) ? VK_TRUE : VK_FALSE;
 
-    VkPipelineViewportStateCreateInfo& vista = fijo.vista;
-    vista.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
-    vista.viewportCount = 1;
-    vista.scissorCount = 1;
+    VkPipelineViewportStateCreateInfo& view = fixed.view;
+    view.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    view.viewportCount = 1;
+    view.scissorCount = 1;
 
-    VkPipelineRasterizationStateCreateInfo& rasterizado = fijo.rasterizado;
+    VkPipelineRasterizationStateCreateInfo& rasterizado = fixed.rasterizado;
     rasterizado.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
     rasterizado.polygonMode = VK_POLYGON_MODE_FILL;
-    rasterizado.cullMode = ((clave.rasterizado & 0x1) ? VK_CULL_MODE_FRONT_BIT : 0) |
-                           ((clave.rasterizado & 0x2) ? VK_CULL_MODE_BACK_BIT : 0);
+    rasterizado.cullMode = ((key.rasterizado & 0x1) ? VK_CULL_MODE_FRONT_BIT : 0) |
+                           ((key.rasterizado & 0x2) ? VK_CULL_MODE_BACK_BIT : 0);
     // PA_SU_SC_MODE_CNTL.face: 1 = the front face is clockwise (not confirmed on screen).
     rasterizado.frontFace =
-        (clave.rasterizado & 0x4) ? VK_FRONT_FACE_CLOCKWISE : VK_FRONT_FACE_COUNTER_CLOCKWISE;
+        (key.rasterizado & 0x4) ? VK_FRONT_FACE_CLOCKWISE : VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rasterizado.lineWidth = 1.0f;
-    rasterizado.depthBiasEnable = (clave.rasterizado & 0x10) ? VK_TRUE : VK_FALSE;
+    rasterizado.depthBiasEnable = (key.rasterizado & 0x10) ? VK_TRUE : VK_FALSE;
     rasterizado.depthClampEnable = REXCVAR_GET(nfsmw_nativo_prueba_depth_clamp) ? VK_TRUE : VK_FALSE;
 
-    VkPipelineMultisampleStateCreateInfo& muestreo = fijo.muestreo;
-    muestreo.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    muestreo.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    VkPipelineMultisampleStateCreateInfo& sampling = fixed.sampling;
+    sampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    sampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
-    const uint32_t d = clave.profundidad;
-    VkPipelineDepthStencilStateCreateInfo& profundidad = fijo.profundidad;
-    profundidad.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-    if (clave.formatos[4]) {
-      profundidad.depthTestEnable = (d >> 1) & 0x1;
-      profundidad.depthWriteEnable = ((d >> 1) & 0x1) && ((d >> 2) & 0x1);
-      profundidad.depthCompareOp = VkCompareOp((d >> 4) & 0x7);
-      profundidad.stencilTestEnable = d & 0x1;
-      profundidad.front.failOp = VkStencilOp((d >> 11) & 0x7);
-      profundidad.front.passOp = VkStencilOp((d >> 14) & 0x7);
-      profundidad.front.depthFailOp = VkStencilOp((d >> 17) & 0x7);
-      profundidad.front.compareOp = VkCompareOp((d >> 8) & 0x7);
+    const uint32_t d = key.depth_value;
+    VkPipelineDepthStencilStateCreateInfo& depth_value = fixed.depth_value;
+    depth_value.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    if (key.formats[4]) {
+      depth_value.depthTestEnable = (d >> 1) & 0x1;
+      depth_value.depthWriteEnable = ((d >> 1) & 0x1) && ((d >> 2) & 0x1);
+      depth_value.depthCompareOp = VkCompareOp((d >> 4) & 0x7);
+      depth_value.stencilTestEnable = d & 0x1;
+      depth_value.front.failOp = VkStencilOp((d >> 11) & 0x7);
+      depth_value.front.passOp = VkStencilOp((d >> 14) & 0x7);
+      depth_value.front.depthFailOp = VkStencilOp((d >> 17) & 0x7);
+      depth_value.front.compareOp = VkCompareOp((d >> 8) & 0x7);
       if ((d >> 7) & 0x1) {
-        profundidad.back.compareOp = VkCompareOp((d >> 20) & 0x7);
-        profundidad.back.failOp = VkStencilOp((d >> 23) & 0x7);
-        profundidad.back.passOp = VkStencilOp((d >> 26) & 0x7);
-        profundidad.back.depthFailOp = VkStencilOp((d >> 29) & 0x7);
+        depth_value.back.compareOp = VkCompareOp((d >> 20) & 0x7);
+        depth_value.back.failOp = VkStencilOp((d >> 23) & 0x7);
+        depth_value.back.passOp = VkStencilOp((d >> 26) & 0x7);
+        depth_value.back.depthFailOp = VkStencilOp((d >> 29) & 0x7);
       } else {
-        profundidad.back = profundidad.front;
+        depth_value.back = depth_value.front;
       }
     }
 
-    static constexpr VkBlendFactor kFactores[32] = {
+    static constexpr VkBlendFactor kFactors[32] = {
         VK_BLEND_FACTOR_ZERO,
         VK_BLEND_FACTOR_ONE,
         VK_BLEND_FACTOR_ZERO,
@@ -10798,7 +10798,7 @@ class DibujosVulkanImpl final : public DibujosVulkan {
         VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA,
         VK_BLEND_FACTOR_SRC_ALPHA_SATURATE,
     };
-    const auto operacion = [&](uint32_t op) {
+    const auto operation = [&](uint32_t op) {
       switch (op) {
         case 1:
           return VK_BLEND_OP_SUBTRACT;
@@ -10807,26 +10807,26 @@ class DibujosVulkanImpl final : public DibujosVulkan {
         case 3:
           return VK_BLEND_OP_MAX;
         case 4:
-          if (avisar) {
-            Avisar(52, "mezcla con resta inversa: se usa resta");
+          if (warn) {
+            Warn(52, "mezcla con resta inversa: se usa resta");
           }
           return VK_BLEND_OP_SUBTRACT;
         default:
           return VK_BLEND_OP_ADD;
       }
     };
-    std::array<VkPipelineColorBlendAttachmentState, 4>& mezclas = fijo.mezclas;
-    uint32_t& n_colores = fijo.n_colores;
+    std::array<VkPipelineColorBlendAttachmentState, 4>& blends = fixed.blends;
+    uint32_t& n_colores = fixed.n_colores;
     for (uint32_t i = 0; i < 4; ++i) {
-      if (!clave.formatos[i]) {
+      if (!key.formats[i]) {
         continue;
       }
-      const uint32_t m = clave.mezcla[i];
-      VkPipelineColorBlendAttachmentState& s = mezclas[n_colores++];
-      s.colorWriteMask = (clave.mascaras >> (i * 4)) & 0xF;
-      const uint32_t fuente = m & 0x1F, op = (m >> 5) & 0x7, destino = (m >> 8) & 0x1F;
-      const uint32_t fuente_a = (m >> 16) & 0x1F, op_a = (m >> 21) & 0x7,
-                     destino_a = (m >> 24) & 0x1F;
+      const uint32_t m = key.blend[i];
+      VkPipelineColorBlendAttachmentState& s = blends[n_colores++];
+      s.colorWriteMask = (key.masks >> (i * 4)) & 0xF;
+      const uint32_t src_select = m & 0x1F, op = (m >> 5) & 0x7, target = (m >> 8) & 0x1F;
+      const uint32_t source_to = (m >> 16) & 0x1F, op_a = (m >> 21) & 0x7,
+                     target_to = (m >> 24) & 0x1F;
       /*
        * Blending is only enabled if it is needed on the channels that are written.
        *
@@ -10835,26 +10835,26 @@ class DibujosVulkanImpl final : public DibujosVulkan {
        * false the ROP does not have to read the destination or go through the blend unit. The result is the
        * same.
        */
-      const bool escribe_rgb = (s.colorWriteMask & 0x7) != 0;
-      const bool escribe_alfa = (s.colorWriteMask & 0x8) != 0;
-      const bool color_directo = fuente == 1 && destino == 0 && op == 0;
-      const bool alfa_directo = fuente_a == 1 && destino_a == 0 && op_a == 0;
-      s.blendEnable = (escribe_rgb && !color_directo) || (escribe_alfa && !alfa_directo);
-      s.srcColorBlendFactor = kFactores[fuente];
-      s.dstColorBlendFactor = kFactores[destino];
-      s.colorBlendOp = operacion(op);
-      s.srcAlphaBlendFactor = kFactores[fuente_a];
-      s.dstAlphaBlendFactor = kFactores[destino_a];
-      s.alphaBlendOp = operacion(op_a);
+      const bool rgb_write = (s.colorWriteMask & 0x7) != 0;
+      const bool alpha_write = (s.colorWriteMask & 0x8) != 0;
+      const bool direct_color = src_select == 1 && target == 0 && op == 0;
+      const bool direct_alpha = source_to == 1 && target_to == 0 && op_a == 0;
+      s.blendEnable = (rgb_write && !direct_color) || (alpha_write && !direct_alpha);
+      s.srcColorBlendFactor = kFactors[src_select];
+      s.dstColorBlendFactor = kFactors[target];
+      s.colorBlendOp = operation(op);
+      s.srcAlphaBlendFactor = kFactors[source_to];
+      s.dstAlphaBlendFactor = kFactors[target_to];
+      s.alphaBlendOp = operation(op_a);
     }
-    VkPipelineColorBlendStateCreateInfo& mezcla = fijo.mezcla;
-    mezcla.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-    mezcla.attachmentCount = n_colores;
-    mezcla.pAttachments = mezclas.data();
+    VkPipelineColorBlendStateCreateInfo& blend = fixed.blend;
+    blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    blend.attachmentCount = n_colores;
+    blend.pAttachments = blends.data();
   }
 
   // One stencil face, in what Vulkan looks at in the pipeline (masks and reference are dynamic).
-  static bool MismaCaraEstencil(const VkStencilOpState& a, const VkStencilOpState& b) {
+  static bool SameStencilFace(const VkStencilOpState& a, const VkStencilOpState& b) {
     return a.failOp == b.failOp && a.passOp == b.passOp && a.depthFailOp == b.depthFailOp && a.compareOp == b.compareOp;
   }
 
@@ -10863,14 +10863,14 @@ class DibujosVulkanImpl final : public DibujosVulkan {
    * each half only if the mask writes its channels, the Z function only with a Z test, stencil operations
    * only with stencil. Returns the first differing field, or nullptr if there is none.
    */
-  static const char* DiferenciaEfectiva(const EstadoFijoPipeline& a, const EstadoFijoPipeline& b) {
+  static const char* EffectiveDifference(const PipelineFixedState& a, const PipelineFixedState& b) {
     if (a.ensamblado.topology != b.ensamblado.topology) {
       return "topology";
     }
     if (a.ensamblado.primitiveRestartEnable != b.ensamblado.primitiveRestartEnable) {
       return "primitiveRestartEnable";
     }
-    if (a.vista.viewportCount != b.vista.viewportCount || a.vista.scissorCount != b.vista.scissorCount) {
+    if (a.view.viewportCount != b.view.viewportCount || a.view.scissorCount != b.view.scissorCount) {
       return "viewportCount o scissorCount";
     }
     const VkPipelineRasterizationStateCreateInfo& ra = a.rasterizado;
@@ -10888,11 +10888,11 @@ class DibujosVulkanImpl final : public DibujosVulkan {
     if (ra.depthBiasEnable != rb.depthBiasEnable) {
       return "depthBiasEnable";
     }
-    if (a.muestreo.rasterizationSamples != b.muestreo.rasterizationSamples) {
+    if (a.sampling.rasterizationSamples != b.sampling.rasterizationSamples) {
       return "rasterizationSamples";
     }
-    const VkPipelineDepthStencilStateCreateInfo& pa = a.profundidad;
-    const VkPipelineDepthStencilStateCreateInfo& pb = b.profundidad;
+    const VkPipelineDepthStencilStateCreateInfo& pa = a.depth_value;
+    const VkPipelineDepthStencilStateCreateInfo& pb = b.depth_value;
     if (pa.depthTestEnable != pb.depthTestEnable) {
       return "depthTestEnable";
     }
@@ -10908,19 +10908,19 @@ class DibujosVulkanImpl final : public DibujosVulkan {
     if (pa.stencilTestEnable != pb.stencilTestEnable) {
       return "stencilTestEnable";
     }
-    if (pa.stencilTestEnable && !MismaCaraEstencil(pa.front, pb.front)) {
+    if (pa.stencilTestEnable && !SameStencilFace(pa.front, pb.front)) {
       return "front (estencil)";
     }
-    if (pa.stencilTestEnable && !MismaCaraEstencil(pa.back, pb.back)) {
+    if (pa.stencilTestEnable && !SameStencilFace(pa.back, pb.back)) {
       return "back (estencil)";
     }
-    if (a.n_colores != b.n_colores || a.mezcla.attachmentCount != b.mezcla.attachmentCount ||
-        a.mezcla.logicOpEnable != b.mezcla.logicOpEnable) {
+    if (a.n_colores != b.n_colores || a.blend.attachmentCount != b.blend.attachmentCount ||
+        a.blend.logicOpEnable != b.blend.logicOpEnable) {
       return "attachmentCount o logicOpEnable";
     }
     for (uint32_t i = 0; i < a.n_colores && i < 4; ++i) {
-      const VkPipelineColorBlendAttachmentState& x = a.mezclas[i];
-      const VkPipelineColorBlendAttachmentState& y = b.mezclas[i];
+      const VkPipelineColorBlendAttachmentState& x = a.blends[i];
+      const VkPipelineColorBlendAttachmentState& y = b.blends[i];
       if (x.colorWriteMask != y.colorWriteMask) {
         return "colorWriteMask";
       }
@@ -10948,36 +10948,36 @@ class DibujosVulkanImpl final : public DibujosVulkan {
    * blending enabled the half of the equation (color or alpha) whose channels the mask does not write also
    * becomes that.
    */
-  static void Canonizar(ClavePipeline& c) {
-    constexpr uint32_t kDirecta = 0x00010001u;  // 1 x source + 0 x destination, ADD, for color and alpha
-    uint32_t mascaras = 0;
+  static void Canonicalize(PipelineKey& c) {
+    constexpr uint32_t kDirect = 0x00010001u;  // 1 x source + 0 x destination, ADD, for color and alpha
+    uint32_t masks = 0;
     for (uint32_t i = 0; i < 4; ++i) {
-      if (!c.formatos[i]) {
-        c.mezcla[i] = 0;  // RellenarEstadoFijo skips targets not in the pass (Dibujar leaves them at 0)
+      if (!c.formats[i]) {
+        c.blend[i] = 0;  // RellenarEstadoFijo skips targets not in the pass (Dibujar leaves them at 0)
         continue;
       }
-      const uint32_t mascara = (c.mascaras >> (i * 4)) & 0xF;
-      mascaras |= mascara << (i * 4);
-      const uint32_t m = c.mezcla[i];
-      const bool color_directo = (m & 0x1F) == 1 && ((m >> 8) & 0x1F) == 0 && ((m >> 5) & 0x7) == 0;
-      const bool alfa_directo = ((m >> 16) & 0x1F) == 1 && ((m >> 24) & 0x1F) == 0 && ((m >> 21) & 0x7) == 0;
-      const bool escribe_rgb = (mascara & 0x7) != 0;
-      const bool escribe_alfa = (mascara & 0x8) != 0;
-      if (!((escribe_rgb && !color_directo) || (escribe_alfa && !alfa_directo))) {
-        c.mezcla[i] = kDirecta;  // without blendEnable Vulkan ignores the equation
+      const uint32_t mask = (c.masks >> (i * 4)) & 0xF;
+      masks |= mask << (i * 4);
+      const uint32_t m = c.blend[i];
+      const bool direct_color = (m & 0x1F) == 1 && ((m >> 8) & 0x1F) == 0 && ((m >> 5) & 0x7) == 0;
+      const bool direct_alpha = ((m >> 16) & 0x1F) == 1 && ((m >> 24) & 0x1F) == 0 && ((m >> 21) & 0x7) == 0;
+      const bool rgb_write = (mask & 0x7) != 0;
+      const bool alpha_write = (mask & 0x8) != 0;
+      if (!((rgb_write && !direct_color) || (alpha_write && !direct_alpha))) {
+        c.blend[i] = kDirect;  // without blendEnable Vulkan ignores the equation
         continue;
       }
-      uint32_t canonica = m;
-      if (!escribe_rgb) {
-        canonica = (canonica & 0xFFFF0000u) | 0x00000001u;  // the color equation reaches no channel
+      uint32_t canonical = m;
+      if (!rgb_write) {
+        canonical = (canonical & 0xFFFF0000u) | 0x00000001u;  // the color equation reaches no channel
       }
-      if (!escribe_alfa) {
-        canonica = (canonica & 0x0000FFFFu) | 0x00010000u;  // neither does the alpha one
+      if (!alpha_write) {
+        canonical = (canonical & 0x0000FFFFu) | 0x00010000u;  // neither does the alpha one
       }
-      c.mezcla[i] = canonica;
+      c.blend[i] = canonical;
     }
-    c.mascaras = mascaras;
-    uint32_t d = c.formatos[4] ? c.profundidad : 0;  // ignored without a depth target
+    c.masks = masks;
+    uint32_t d = c.formats[4] ? c.depth_value : 0;  // ignored without a depth target
     d &= ~0x8u;                                      // bit 3 is not read
     if (!((d >> 1) & 0x1)) {
       d &= ~0x74u;  // without a Z test, write and function do not count
@@ -10987,7 +10987,7 @@ class DibujosVulkanImpl final : public DibujosVulkan {
     } else if (!((d >> 7) & 0x1)) {
       d &= 0x000FFFF7u;  // without its own back face state, the back copies the front
     }
-    c.profundidad = d;
+    c.depth_value = d;
   }
 
   /*
@@ -10996,35 +10996,35 @@ class DibujosVulkanImpl final : public DibujosVulkan {
    * (DiferenciaEfectiva on RellenarEstadoFijo). On a difference the phase switches off for the session and
    * false is returned.
    */
-  bool ComprobarClaveCanonica(const ClavePipeline& cruda, const ClavePipeline& canonica, uint64_t n) {
-    ++canonica_comprobadas_;
-    const char* campo = nullptr;
-    if (cruda.vs != canonica.vs || cruda.ps != canonica.ps || cruda.entrada != canonica.entrada ||
-        cruda.topologia != canonica.topologia || cruda.especializacion != canonica.especializacion ||
-        cruda.rasterizado != canonica.rasterizado || cruda.relleno != canonica.relleno ||
-        cruda.relleno2 != canonica.relleno2 ||
-        std::memcmp(cruda.formatos, canonica.formatos, sizeof(cruda.formatos)) != 0) {
-      campo = "shaders, entrada, topologia, especializacion, rasterizado o formatos";
+  bool CheckCanonicalKey(const PipelineKey& raw_data, const PipelineKey& canonical, uint64_t n) {
+    ++checked_canonical_;
+    const char* field = nullptr;
+    if (raw_data.vs != canonical.vs || raw_data.ps != canonical.ps || raw_data.entry != canonical.entry ||
+        raw_data.topo != canonical.topo || raw_data.specialization != canonical.specialization ||
+        raw_data.rasterizado != canonical.rasterizado || raw_data.padding != canonical.padding ||
+        raw_data.fill2 != canonical.fill2 ||
+        std::memcmp(raw_data.formats, canonical.formats, sizeof(raw_data.formats)) != 0) {
+      field = "shaders, entrada, topologia, especializacion, rasterizado o formatos";
     } else {
-      EstadoFijoPipeline a;
-      EstadoFijoPipeline b;
-      RellenarEstadoFijo(cruda, a);
-      RellenarEstadoFijo(canonica, b);
-      campo = DiferenciaEfectiva(a, b);
+      PipelineFixedState a;
+      PipelineFixedState b;
+      FillFixedState(raw_data, a);
+      FillFixedState(canonical, b);
+      field = EffectiveDifference(a, b);
     }
-    if (campo) {
-      clave_canonica_apagada_ = true;
-      clave_canonica_ = false;
-      canonica_valida_ = false;
+    if (field) {
+      canonical_key_disabled_ = true;
+      canonical_key_ = false;
+      valid_canonical_ = false;
       REXLOG_ERROR("[nativo] C6 clave canonica: DIFERENCIA en {} (comprobacion {}: VS {} PS {}, mezcla {:08X} -> "
                    "{:08X}, mascaras {:04X} -> {:04X}, profundidad {:08X} -> {:08X}). Apagada para el resto de la "
                    "sesion: se busca con la clave de siempre",
-                   campo, n, cruda.vs, cruda.ps, cruda.mezcla[0], canonica.mezcla[0], cruda.mascaras,
-                   canonica.mascaras, cruda.profundidad, canonica.profundidad);
+                   field, n, raw_data.vs, raw_data.ps, raw_data.blend[0], canonical.blend[0], raw_data.masks,
+                   canonical.masks, raw_data.depth_value, canonical.depth_value);
       return false;
     }
-    if (n == kCanonicasAComprobar) {
-      NFSMW_INFORME_ANILLO("[nativo] C6 clave canonica: {} claves cambiadas comprobadas campo a campo contra la de "
+    if (n == kCanonicalToCheck) {
+      NFSMW_RING_REPORT("[nativo] C6 clave canonica: {} claves cambiadas comprobadas campo a campo contra la de "
                            "siempre, 0 diferencias; sigue comprobando 1 de cada 4096",
                            n);
     }
@@ -11036,125 +11036,125 @@ class DibujosVulkanImpl final : public DibujosVulkan {
    * deferred sky reads its blending (opaco_en_todos) and the counter compares it. Phase 0a: canonical
    * form, remembering the previous draw's (the same raw key gives the same canonical one).
    */
-  ClavePipeline ClaveDeBusqueda(const ClavePipeline& clave) {
-    ClavePipeline c = clave;
-    if (clave_canonica_) {
-      if (canonica_valida_ && std::memcmp(&clave, &canonica_cruda_, sizeof(clave)) == 0) {
-        c = canonica_resultado_;
+  PipelineKey SearchKey(const PipelineKey& key) {
+    PipelineKey c = key;
+    if (canonical_key_) {
+      if (valid_canonical_ && std::memcmp(&key, &raw_canonical_, sizeof(key)) == 0) {
+        c = result_canonical_;
       } else {
-        Canonizar(c);
-        if (std::memcmp(&c, &clave, sizeof(c)) != 0) {
-          const uint64_t n = ++canonica_cambiadas_;
-          if ((n <= kCanonicasAComprobar || (n & 4095) == 0) && !ComprobarClaveCanonica(clave, c, n)) {
-            c = clave;  // the guard saw a difference: this draw, and the rest of the session, use the usual one
+        Canonicalize(c);
+        if (std::memcmp(&c, &key, sizeof(c)) != 0) {
+          const uint64_t n = ++changed_canonical_;
+          if ((n <= kCanonicalToCheck || (n & 4095) == 0) && !CheckCanonicalKey(key, c, n)) {
+            c = key;  // the guard saw a difference: this draw, and the rest of the session, use the usual one
           }
         }
-        canonica_cruda_ = clave;
-        canonica_resultado_ = c;
-        canonica_valida_ = clave_canonica_;
+        raw_canonical_ = key;
+        result_canonical_ = c;
+        valid_canonical_ = canonical_key_;
       }
     }
     // Phases 1 and 2. What goes through vkCmdSet* leaves the key, and the flag (relleno2) keeps these
     // pipelines apart from the usual ones in the map, in the direct-mapped cache and in PipelineDe's
     // shortcut.
-    const uint32_t modo_eds = eds_modo_;
-    if (modo_eds & kEds12) {
-      c.profundidad = 0;
+    const uint32_t mode_eds = eds_mode_;
+    if (mode_eds & kEds12) {
+      c.depth_value = 0;
       c.rasterizado = 0;
-      c.topologia = RepresentanteTopologia(c.topologia);
+      c.topo = TopologyRepresentative(c.topo);
     }
-    if (modo_eds & kEds3) {  // phase 2: blending and masks go through vkCmdSet*; targets stay in formatos
-      std::fill(std::begin(c.mezcla), std::end(c.mezcla), 0u);
-      c.mascaras = 0;
+    if (mode_eds & kEds3) {  // phase 2: blending and masks go through vkCmdSet*; targets stay in formatos
+      std::fill(std::begin(c.blend), std::end(c.blend), 0u);
+      c.masks = 0;
     }
-    c.relleno2 = modo_eds;
+    c.fill2 = mode_eds;
     return c;
   }
 
   // Every 20 s, phase 0a (nfsmw_nativo_clave_canonica).
-  void InformeClaveCanonica() {
-    const auto ahora = std::chrono::steady_clock::now();
-    if (ahora - canonica_informe_ < std::chrono::seconds(20)) {
+  void CanonicalKeyReport() {
+    const auto now_time = std::chrono::steady_clock::now();
+    if (now_time - canonical_report_ < std::chrono::seconds(20)) {
       return;
     }
-    const bool primera = canonica_informe_ == std::chrono::steady_clock::time_point{};
-    canonica_informe_ = ahora;
-    const uint64_t cambiadas = canonica_cambiadas_ - canonica_cambiadas_previas_;
-    canonica_cambiadas_previas_ = canonica_cambiadas_;
+    const bool is_first = canonical_report_ == std::chrono::steady_clock::time_point{};
+    canonical_report_ = now_time;
+    const uint64_t changed = changed_canonical_ - changed_canonical_previous_;
+    changed_canonical_previous_ = changed_canonical_;
     const uint64_t pipelines = pipelines_.size();
-    const uint64_t nuevos = pipelines - std::min<uint64_t>(pipelines, canonica_pipelines_previos_);
-    canonica_pipelines_previos_ = pipelines;
-    if (primera || (!cambiadas && !nuevos)) {
+    const uint64_t added_count = pipelines - std::min<uint64_t>(pipelines, pipelines_canonical_previous_);
+    pipelines_canonical_previous_ = pipelines;
+    if (is_first || (!changed && !added_count)) {
       return;
     }
-    NFSMW_INFORME_ANILLO("[nativo] C6 clave canonica (build 184): {}; {} claves cambiadas en 20 s ({} comprobadas "
+    NFSMW_RING_REPORT("[nativo] C6 clave canonica (build 184): {}; {} claves cambiadas en 20 s ({} comprobadas "
                          "desde el principio, {}); {} pipelines en el mapa, {} nuevos en 20 s",
-                         clave_canonica_apagada_ ? "APAGADA por la guardia"
-                         : clave_canonica_       ? "encendida"
+                         canonical_key_disabled_ ? "APAGADA por la guardia"
+                         : canonical_key_       ? "encendida"
                                                  : "apagada",
-                         cambiadas, canonica_comprobadas_,
-                         canonica_comprobadas_ >= kCanonicasAComprobar ? "guardia superada" : "comprobando", pipelines,
-                         nuevos);
+                         changed, checked_canonical_,
+                         checked_canonical_ >= kCanonicalToCheck ? "guardia superada" : "comprobando", pipelines,
+                         added_count);
   }
 
   // Every 20 s, phase 0b (nfsmw_nativo_pipeline_entre_pases).
-  void InformePipelineEntrePases() {
-    const auto ahora = std::chrono::steady_clock::now();
-    if (ahora - entre_pases_informe_ < std::chrono::seconds(20)) {
+  void PipelineBetweenPassesReport() {
+    const auto now_time = std::chrono::steady_clock::now();
+    if (now_time - between_passes_report_ < std::chrono::seconds(20)) {
       return;
     }
-    const bool primera = entre_pases_informe_ == std::chrono::steady_clock::time_point{};
-    entre_pases_informe_ = ahora;
-    const uint64_t pases = pases_empezados_ - entre_pases_pases_previos_;
-    const uint64_t conservados = pases_con_pipeline_ - entre_pases_conservados_previos_;
-    entre_pases_pases_previos_ = pases_empezados_;
-    entre_pases_conservados_previos_ = pases_con_pipeline_;
-    if (primera || !pases) {
+    const bool is_first = between_passes_report_ == std::chrono::steady_clock::time_point{};
+    between_passes_report_ = now_time;
+    const uint64_t passes = started_passes_ - between_passes_passes_previous_;
+    const uint64_t kept = passes_with_pipeline_ - between_kept_passes_previous_;
+    between_passes_passes_previous_ = started_passes_;
+    between_kept_passes_previous_ = passes_with_pipeline_;
+    if (is_first || !passes) {
       return;
     }
-    NFSMW_INFORME_ANILLO("[nativo] C6 pipeline entre pases (build 184): {}; {} pases empezados en 20 s, {} con un "
+    NFSMW_RING_REPORT("[nativo] C6 pipeline entre pases (build 184): {}; {} pases empezados en 20 s, {} con un "
                          "pipeline enlazado que se conserva (su primer dibujo no vuelve a enlazar si la clave es la "
                          "misma)",
-                         pipeline_entre_pases_ ? "se conserva" : "se olvida, como antes", pases, conservados);
+                         pipeline_between_passes_ ? "se conserva" : "se olvida, como antes", passes, kept);
   }
 
   /*
    * Dynamic state phases 1 and 2. The state that leaves the pipeline, with the Vulkan values the usual
    * pipeline would carry (the criterion of RellenarEstadoFijo, which is PipelineDe's).
    */
-  struct EstadoEds {
-    uint32_t cara = 0;         // VkCullModeFlags
-    uint32_t frente = 0;       // VkFrontFace
-    uint32_t topologia = 0;    // VkPrimitiveTopology
-    uint32_t reinicio = 0;     // primitiveRestartEnable
-    uint32_t sesgo = 0;        // depthBiasEnable
-    uint32_t prueba_z = 0;     // depthTestEnable
-    uint32_t escribe_z = 0;    // depthWriteEnable
-    uint32_t funcion_z = 0;    // VkCompareOp
-    uint32_t estencil = 0;     // stencilTestEnable
-    uint32_t delante[4] = {};  // failOp, passOp, depthFailOp (VkStencilOp) y compareOp (VkCompareOp)
-    uint32_t detras[4] = {};   // the same for the back face
+  struct EdsState {
+    uint32_t face = 0;         // VkCullModeFlags
+    uint32_t front_face = 0;       // VkFrontFace
+    uint32_t topo = 0;    // VkPrimitiveTopology
+    uint32_t restart_flag = 0;     // primitiveRestartEnable
+    uint32_t bias = 0;        // depthBiasEnable
+    uint32_t test_z = 0;     // depthTestEnable
+    uint32_t write_z = 0;    // depthWriteEnable
+    uint32_t function_z = 0;    // VkCompareOp
+    uint32_t stencil_state = 0;     // stencilTestEnable
+    uint32_t ahead[4] = {};  // failOp, passOp, depthFailOp (VkStencilOp) y compareOp (VkCompareOp)
+    uint32_t behind[4] = {};   // the same for the back face
     uint32_t n_colores = 0;                    // phase 2: the pass's color targets, compacted as in PipelineDe
-    VkBool32 mezcla_activa[4] = {};            // blendEnable
-    VkColorBlendEquationEXT ecuacion[4] = {};  // color and alpha factors and operations
-    VkColorComponentFlags mascara[4] = {};     // colorWriteMask
+    VkBool32 active_blend[4] = {};            // blendEnable
+    VkColorBlendEquationEXT equation[4] = {};  // color and alpha factors and operations
+    VkColorComponentFlags mask[4] = {};     // colorWriteMask
   };
 
   // Without EDS3 the dynamic topology must be of the same class as the pipeline's: the lookup key carries
   // one per class. Classes the ring does not draw stay as they are.
-  static uint32_t RepresentanteTopologia(uint32_t topologia) {
-    switch (ClaseTopologia(topologia)) {
+  static uint32_t TopologyRepresentative(uint32_t topo) {
+    switch (TopologyClass(topo)) {
       case 1:
         return VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
       case 2:
         return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
       default:
-        return topologia;
+        return topo;
     }
   }
 
-  static const char* NombreModoEds(uint32_t modo) {
-    switch (modo & (kEds12 | kEds3)) {
+  static const char* EdsModeName(uint32_t mode) {
+    switch (mode & (kEds12 | kEds3)) {
       case kEds12:
         return "EDS1/EDS2 (fase 1)";
       case kEds3:
@@ -11167,57 +11167,57 @@ class DibujosVulkanImpl final : public DibujosVulkan {
   }
 
   // The dynamic state of a raw key in the given mode (kEds12 | kEds3).
-  void EstadoEdsDe(const ClavePipeline& c, EstadoEds& e, uint32_t modo) {
-    e = EstadoEds{};
-    if (modo & kEds12) {
-      e.cara = ((c.rasterizado & 0x1) ? uint32_t(VK_CULL_MODE_FRONT_BIT) : 0u) |
+  void EdsStateFor(const PipelineKey& c, EdsState& e, uint32_t mode) {
+    e = EdsState{};
+    if (mode & kEds12) {
+      e.face = ((c.rasterizado & 0x1) ? uint32_t(VK_CULL_MODE_FRONT_BIT) : 0u) |
                ((c.rasterizado & 0x2) ? uint32_t(VK_CULL_MODE_BACK_BIT) : 0u);
-      e.frente = (c.rasterizado & 0x4) ? VK_FRONT_FACE_CLOCKWISE : VK_FRONT_FACE_COUNTER_CLOCKWISE;
-      e.reinicio = (c.rasterizado & 0x8) ? 1u : 0u;
-      e.sesgo = (c.rasterizado & 0x10) ? 1u : 0u;
-      e.topologia = c.topologia;
-      if (c.formatos[4]) {  // without a depth target everything stays zero, as in RellenarEstadoFijo
-        const uint32_t d = c.profundidad;
-        e.prueba_z = (d >> 1) & 0x1;
-        e.escribe_z = ((d >> 1) & 0x1) & ((d >> 2) & 0x1);
-        e.funcion_z = (d >> 4) & 0x7;
-        e.estencil = d & 0x1;
-        e.delante[0] = (d >> 11) & 0x7;
-        e.delante[1] = (d >> 14) & 0x7;
-        e.delante[2] = (d >> 17) & 0x7;
-        e.delante[3] = (d >> 8) & 0x7;
+      e.front_face = (c.rasterizado & 0x4) ? VK_FRONT_FACE_CLOCKWISE : VK_FRONT_FACE_COUNTER_CLOCKWISE;
+      e.restart_flag = (c.rasterizado & 0x8) ? 1u : 0u;
+      e.bias = (c.rasterizado & 0x10) ? 1u : 0u;
+      e.topo = c.topo;
+      if (c.formats[4]) {  // without a depth target everything stays zero, as in RellenarEstadoFijo
+        const uint32_t d = c.depth_value;
+        e.test_z = (d >> 1) & 0x1;
+        e.write_z = ((d >> 1) & 0x1) & ((d >> 2) & 0x1);
+        e.function_z = (d >> 4) & 0x7;
+        e.stencil_state = d & 0x1;
+        e.ahead[0] = (d >> 11) & 0x7;
+        e.ahead[1] = (d >> 14) & 0x7;
+        e.ahead[2] = (d >> 17) & 0x7;
+        e.ahead[3] = (d >> 8) & 0x7;
         if ((d >> 7) & 0x1) {
-          e.detras[0] = (d >> 23) & 0x7;
-          e.detras[1] = (d >> 26) & 0x7;
-          e.detras[2] = (d >> 29) & 0x7;
-          e.detras[3] = (d >> 20) & 0x7;
+          e.behind[0] = (d >> 23) & 0x7;
+          e.behind[1] = (d >> 26) & 0x7;
+          e.behind[2] = (d >> 29) & 0x7;
+          e.behind[3] = (d >> 20) & 0x7;
         } else {
-          std::memcpy(e.detras, e.delante, sizeof(e.detras));
+          std::memcpy(e.behind, e.ahead, sizeof(e.behind));
         }
       }
     }
-    if (modo & kEds3) {  // phase 2: like RellenarEstadoFijo, target by target and compacted
+    if (mode & kEds3) {  // phase 2: like RellenarEstadoFijo, target by target and compacted
       for (uint32_t i = 0; i < 4; ++i) {
-        if (!c.formatos[i]) {
+        if (!c.formats[i]) {
           continue;
         }
         const uint32_t a = e.n_colores++;
-        const uint32_t m = c.mezcla[i];
-        const uint32_t mascara = (c.mascaras >> (i * 4)) & 0xF;
-        const uint32_t fuente = m & 0x1F, op = (m >> 5) & 0x7, destino = (m >> 8) & 0x1F;
-        const uint32_t fuente_a = (m >> 16) & 0x1F, op_a = (m >> 21) & 0x7, destino_a = (m >> 24) & 0x1F;
-        const bool color_directo = fuente == 1 && destino == 0 && op == 0;
-        const bool alfa_directo = fuente_a == 1 && destino_a == 0 && op_a == 0;
-        e.mascara[a] = mascara;
-        e.mezcla_activa[a] =
-            (((mascara & 0x7) != 0 && !color_directo) || ((mascara & 0x8) != 0 && !alfa_directo)) ? VK_TRUE : VK_FALSE;
-        VkColorBlendEquationEXT& q = e.ecuacion[a];
-        q.srcColorBlendFactor = kFactoresMezcla[fuente];
-        q.dstColorBlendFactor = kFactoresMezcla[destino];
-        q.colorBlendOp = OperacionMezcla(op);
-        q.srcAlphaBlendFactor = kFactoresMezcla[fuente_a];
-        q.dstAlphaBlendFactor = kFactoresMezcla[destino_a];
-        q.alphaBlendOp = OperacionMezcla(op_a);
+        const uint32_t m = c.blend[i];
+        const uint32_t mask = (c.masks >> (i * 4)) & 0xF;
+        const uint32_t src_select = m & 0x1F, op = (m >> 5) & 0x7, target = (m >> 8) & 0x1F;
+        const uint32_t source_to = (m >> 16) & 0x1F, op_a = (m >> 21) & 0x7, target_to = (m >> 24) & 0x1F;
+        const bool direct_color = src_select == 1 && target == 0 && op == 0;
+        const bool direct_alpha = source_to == 1 && target_to == 0 && op_a == 0;
+        e.mask[a] = mask;
+        e.active_blend[a] =
+            (((mask & 0x7) != 0 && !direct_color) || ((mask & 0x8) != 0 && !direct_alpha)) ? VK_TRUE : VK_FALSE;
+        VkColorBlendEquationEXT& q = e.equation[a];
+        q.srcColorBlendFactor = kBlendFactors[src_select];
+        q.dstColorBlendFactor = kBlendFactors[target];
+        q.colorBlendOp = BlendOperation(op);
+        q.srcAlphaBlendFactor = kBlendFactors[source_to];
+        q.dstAlphaBlendFactor = kBlendFactors[target_to];
+        q.alphaBlendOp = BlendOperation(op_a);
       }
     }
   }
@@ -11229,119 +11229,119 @@ class DibujosVulkanImpl final : public DibujosVulkan {
    * re-recorded if only that changed; with todo = true it is recorded anyway, so everything is set at least
    * once in the buffer.
    */
-  void EmitirEstadoDinamico(VkCommandBuffer cmd, const EstadoEds& d, bool todo, uint32_t modo) {
-    EstadoEds& g = eds_grabado_;
-    eds_llamadas_[kEdsTodo] += todo ? 1 : 0;
-    if (modo & kEds12) {
-      if (todo || d.cara != g.cara) {
-        set_cara_(cmd, VkCullModeFlags(d.cara));
-        g.cara = d.cara;
-        ++eds_llamadas_[kEdsCara];
+  void EmitDynamicState(VkCommandBuffer cmd, const EdsState& d, bool all, uint32_t mode) {
+    EdsState& g = eds_recorded_;
+    eds_calls_[kEdsAll] += all ? 1 : 0;
+    if (mode & kEds12) {
+      if (all || d.face != g.face) {
+        set_face_(cmd, VkCullModeFlags(d.face));
+        g.face = d.face;
+        ++eds_calls_[kEdsFace];
       }
-      if (todo || d.frente != g.frente) {
-        set_frente_(cmd, VkFrontFace(d.frente));
-        g.frente = d.frente;
-        ++eds_llamadas_[kEdsFrente];
+      if (all || d.front_face != g.front_face) {
+        set_front_(cmd, VkFrontFace(d.front_face));
+        g.front_face = d.front_face;
+        ++eds_calls_[kEdsFront];
       }
-      if (todo || d.topologia != g.topologia) {
-        set_topologia_(cmd, VkPrimitiveTopology(d.topologia));
-        g.topologia = d.topologia;
-        ++eds_llamadas_[kEdsTopologia];
+      if (all || d.topo != g.topo) {
+        set_topology_(cmd, VkPrimitiveTopology(d.topo));
+        g.topo = d.topo;
+        ++eds_calls_[kEdsTopology];
       }
-      if (todo || d.reinicio != g.reinicio) {
-        set_reinicio_(cmd, VkBool32(d.reinicio));
-        g.reinicio = d.reinicio;
-        ++eds_llamadas_[kEdsReinicio];
+      if (all || d.restart_flag != g.restart_flag) {
+        set_reset_(cmd, VkBool32(d.restart_flag));
+        g.restart_flag = d.restart_flag;
+        ++eds_calls_[kEdsReset];
       }
-      if (todo || d.sesgo != g.sesgo) {
-        set_sesgo_(cmd, VkBool32(d.sesgo));
-        g.sesgo = d.sesgo;
-        ++eds_llamadas_[kEdsSesgo];
+      if (all || d.bias != g.bias) {
+        set_bias_(cmd, VkBool32(d.bias));
+        g.bias = d.bias;
+        ++eds_calls_[kEdsBias];
       }
-      if (todo || d.prueba_z != g.prueba_z) {
-        set_prueba_z_(cmd, VkBool32(d.prueba_z));
-        g.prueba_z = d.prueba_z;
-        ++eds_llamadas_[kEdsPruebaZ];
+      if (all || d.test_z != g.test_z) {
+        set_z_test_(cmd, VkBool32(d.test_z));
+        g.test_z = d.test_z;
+        ++eds_calls_[kEdsTestZ];
       }
-      if (todo || d.escribe_z != g.escribe_z) {
-        set_escribe_z_(cmd, VkBool32(d.escribe_z));
-        g.escribe_z = d.escribe_z;
-        ++eds_llamadas_[kEdsEscribeZ];
+      if (all || d.write_z != g.write_z) {
+        set_write_z_(cmd, VkBool32(d.write_z));
+        g.write_z = d.write_z;
+        ++eds_calls_[kEdsWriteZ];
       }
-      if (todo || (d.prueba_z && d.funcion_z != g.funcion_z)) {
-        set_funcion_z_(cmd, VkCompareOp(d.funcion_z));
-        g.funcion_z = d.funcion_z;
-        ++eds_llamadas_[kEdsFuncionZ];
+      if (all || (d.test_z && d.function_z != g.function_z)) {
+        set_z_func_(cmd, VkCompareOp(d.function_z));
+        g.function_z = d.function_z;
+        ++eds_calls_[kEdsFunctionZ];
       }
-      if (todo || d.estencil != g.estencil) {
-        set_estencil_(cmd, VkBool32(d.estencil));
-        g.estencil = d.estencil;
-        ++eds_llamadas_[kEdsEstencil];
+      if (all || d.stencil_state != g.stencil_state) {
+        set_stencil_(cmd, VkBool32(d.stencil_state));
+        g.stencil_state = d.stencil_state;
+        ++eds_calls_[kEdsStencil];
       }
-      const bool delante = todo || (d.estencil && std::memcmp(d.delante, g.delante, sizeof(d.delante)) != 0);
-      const bool detras = todo || (d.estencil && std::memcmp(d.detras, g.detras, sizeof(d.detras)) != 0);
-      if (delante && detras && std::memcmp(d.delante, d.detras, sizeof(d.delante)) == 0) {
-        set_estencil_ops_(cmd, VK_STENCIL_FACE_FRONT_AND_BACK, VkStencilOp(d.delante[0]), VkStencilOp(d.delante[1]),
-                          VkStencilOp(d.delante[2]), VkCompareOp(d.delante[3]));
-        ++eds_llamadas_[kEdsEstencilOps];
+      const bool ahead = all || (d.stencil_state && std::memcmp(d.ahead, g.ahead, sizeof(d.ahead)) != 0);
+      const bool behind = all || (d.stencil_state && std::memcmp(d.behind, g.behind, sizeof(d.behind)) != 0);
+      if (ahead && behind && std::memcmp(d.ahead, d.behind, sizeof(d.ahead)) == 0) {
+        set_ops_stencil_(cmd, VK_STENCIL_FACE_FRONT_AND_BACK, VkStencilOp(d.ahead[0]), VkStencilOp(d.ahead[1]),
+                          VkStencilOp(d.ahead[2]), VkCompareOp(d.ahead[3]));
+        ++eds_calls_[kEdsOpsStencil];
       } else {
-        if (delante) {
-          set_estencil_ops_(cmd, VK_STENCIL_FACE_FRONT_BIT, VkStencilOp(d.delante[0]), VkStencilOp(d.delante[1]),
-                            VkStencilOp(d.delante[2]), VkCompareOp(d.delante[3]));
-          ++eds_llamadas_[kEdsEstencilOps];
+        if (ahead) {
+          set_ops_stencil_(cmd, VK_STENCIL_FACE_FRONT_BIT, VkStencilOp(d.ahead[0]), VkStencilOp(d.ahead[1]),
+                            VkStencilOp(d.ahead[2]), VkCompareOp(d.ahead[3]));
+          ++eds_calls_[kEdsOpsStencil];
         }
-        if (detras) {
-          set_estencil_ops_(cmd, VK_STENCIL_FACE_BACK_BIT, VkStencilOp(d.detras[0]), VkStencilOp(d.detras[1]),
-                            VkStencilOp(d.detras[2]), VkCompareOp(d.detras[3]));
-          ++eds_llamadas_[kEdsEstencilOps];
+        if (behind) {
+          set_ops_stencil_(cmd, VK_STENCIL_FACE_BACK_BIT, VkStencilOp(d.behind[0]), VkStencilOp(d.behind[1]),
+                            VkStencilOp(d.behind[2]), VkCompareOp(d.behind[3]));
+          ++eds_calls_[kEdsOpsStencil];
         }
       }
-      if (delante) {
-        std::memcpy(g.delante, d.delante, sizeof(g.delante));
+      if (ahead) {
+        std::memcpy(g.ahead, d.ahead, sizeof(g.ahead));
       }
-      if (detras) {
-        std::memcpy(g.detras, d.detras, sizeof(g.detras));
+      if (behind) {
+        std::memcpy(g.behind, d.behind, sizeof(g.behind));
       }
     }
-    if (modo & kEds3) {  // fase 2
+    if (mode & kEds3) {  // fase 2
       const uint32_t n = d.n_colores;
       if (!n) {
-        if (todo) {
+        if (all) {
           g.n_colores = 0;  // nothing set in this buffer: the first draw with color will set it all
         }
       } else {
-        const bool otro_n = todo || n != g.n_colores;
-        bool activa = otro_n;
-        bool ecuacion = otro_n;
-        bool mascara = otro_n;
+        const bool other_n = all || n != g.n_colores;
+        bool is_on = other_n;
+        bool equation = other_n;
+        bool mask = other_n;
         for (uint32_t a = 0; a < n && a < 4; ++a) {
-          activa = activa || d.mezcla_activa[a] != g.mezcla_activa[a];
-          mascara = mascara || d.mascara[a] != g.mascara[a];
-          if (!ecuacion && d.mezcla_activa[a]) {  // without blending the equation does not count; each half, with its channels
-            const VkColorBlendEquationEXT& x = d.ecuacion[a];
-            const VkColorBlendEquationEXT& y = g.ecuacion[a];
-            ecuacion = ((d.mascara[a] & 0x7) != 0 &&
+          is_on = is_on || d.active_blend[a] != g.active_blend[a];
+          mask = mask || d.mask[a] != g.mask[a];
+          if (!equation && d.active_blend[a]) {  // without blending the equation does not count; each half, with its channels
+            const VkColorBlendEquationEXT& x = d.equation[a];
+            const VkColorBlendEquationEXT& y = g.equation[a];
+            equation = ((d.mask[a] & 0x7) != 0 &&
                         (x.srcColorBlendFactor != y.srcColorBlendFactor ||
                          x.dstColorBlendFactor != y.dstColorBlendFactor || x.colorBlendOp != y.colorBlendOp)) ||
-                       ((d.mascara[a] & 0x8) != 0 &&
+                       ((d.mask[a] & 0x8) != 0 &&
                         (x.srcAlphaBlendFactor != y.srcAlphaBlendFactor ||
                          x.dstAlphaBlendFactor != y.dstAlphaBlendFactor || x.alphaBlendOp != y.alphaBlendOp));
           }
         }
-        if (activa) {
-          set_mezcla_activa_(cmd, 0, n, d.mezcla_activa);
-          std::memcpy(g.mezcla_activa, d.mezcla_activa, sizeof(g.mezcla_activa));
-          ++eds_llamadas_[kEdsMezclaActiva];
+        if (is_on) {
+          set_blend_enabled_(cmd, 0, n, d.active_blend);
+          std::memcpy(g.active_blend, d.active_blend, sizeof(g.active_blend));
+          ++eds_calls_[kEdsActiveBlend];
         }
-        if (ecuacion) {
-          set_ecuacion_(cmd, 0, n, d.ecuacion);
-          std::memcpy(g.ecuacion, d.ecuacion, sizeof(g.ecuacion));
-          ++eds_llamadas_[kEdsEcuacion];
+        if (equation) {
+          set_equation_(cmd, 0, n, d.equation);
+          std::memcpy(g.equation, d.equation, sizeof(g.equation));
+          ++eds_calls_[kEdsEquation];
         }
-        if (mascara) {
-          set_mascara_(cmd, 0, n, d.mascara);
-          std::memcpy(g.mascara, d.mascara, sizeof(g.mascara));
-          ++eds_llamadas_[kEdsMascara];
+        if (mask) {
+          set_mask_(cmd, 0, n, d.mask);
+          std::memcpy(g.mask, d.mask, sizeof(g.mask));
+          ++eds_calls_[kEdsMask];
         }
         g.n_colores = n;
       }
@@ -11356,79 +11356,79 @@ class DibujosVulkanImpl final : public DibujosVulkan {
    * session (both phases) and false is returned: the draw has to use its usual pipeline. Limit: it cannot
    * see the GPU, only that the computations and the record of what was recorded agree.
    */
-  bool ComprobarEstadoDinamico(const ClavePipeline& clave, uint64_t n) {
-    ++eds_comprobados_;
-    EstadoFijoPipeline fijo;
-    RellenarEstadoFijo(clave, fijo);
-    const EstadoEds& g = eds_grabado_;
-    const char* campo = nullptr;
-    uint32_t fijado = 0;
-    uint32_t esperado = 0;
-    const auto mirar = [&](const char* nombre, uint32_t a, uint32_t b) {
-      if (!campo && a != b) {
-        campo = nombre;
-        fijado = a;
-        esperado = b;
+  bool CheckDynamicState(const PipelineKey& key, uint64_t n) {
+    ++eds_checked_;
+    PipelineFixedState fixed;
+    FillFixedState(key, fixed);
+    const EdsState& g = eds_recorded_;
+    const char* field = nullptr;
+    uint32_t pinned = 0;
+    uint32_t expected = 0;
+    const auto peek = [&](const char* name, uint32_t a, uint32_t b) {
+      if (!field && a != b) {
+        field = name;
+        pinned = a;
+        expected = b;
       }
     };
-    if (eds_modo_ & kEds12) {
-      const VkPipelineRasterizationStateCreateInfo& r = fijo.rasterizado;
-      const VkPipelineDepthStencilStateCreateInfo& z = fijo.profundidad;
-      mirar("cullMode", g.cara, r.cullMode);
-      mirar("frontFace", g.frente, r.frontFace);
-      mirar("topology", g.topologia, fijo.ensamblado.topology);
-      mirar("primitiveRestartEnable", g.reinicio, fijo.ensamblado.primitiveRestartEnable);
-      mirar("depthBiasEnable", g.sesgo, r.depthBiasEnable);
-      mirar("depthTestEnable", g.prueba_z, z.depthTestEnable);
-      mirar("depthWriteEnable", g.escribe_z, z.depthWriteEnable);
+    if (eds_mode_ & kEds12) {
+      const VkPipelineRasterizationStateCreateInfo& r = fixed.rasterizado;
+      const VkPipelineDepthStencilStateCreateInfo& z = fixed.depth_value;
+      peek("cullMode", g.face, r.cullMode);
+      peek("frontFace", g.front_face, r.frontFace);
+      peek("topology", g.topo, fixed.ensamblado.topology);
+      peek("primitiveRestartEnable", g.restart_flag, fixed.ensamblado.primitiveRestartEnable);
+      peek("depthBiasEnable", g.bias, r.depthBiasEnable);
+      peek("depthTestEnable", g.test_z, z.depthTestEnable);
+      peek("depthWriteEnable", g.write_z, z.depthWriteEnable);
       if (z.depthTestEnable) {
-        mirar("depthCompareOp", g.funcion_z, z.depthCompareOp);
+        peek("depthCompareOp", g.function_z, z.depthCompareOp);
       }
-      mirar("stencilTestEnable", g.estencil, z.stencilTestEnable);
+      peek("stencilTestEnable", g.stencil_state, z.stencilTestEnable);
       if (z.stencilTestEnable) {
-        mirar("front.failOp", g.delante[0], z.front.failOp);
-        mirar("front.passOp", g.delante[1], z.front.passOp);
-        mirar("front.depthFailOp", g.delante[2], z.front.depthFailOp);
-        mirar("front.compareOp", g.delante[3], z.front.compareOp);
-        mirar("back.failOp", g.detras[0], z.back.failOp);
-        mirar("back.passOp", g.detras[1], z.back.passOp);
-        mirar("back.depthFailOp", g.detras[2], z.back.depthFailOp);
-        mirar("back.compareOp", g.detras[3], z.back.compareOp);
+        peek("front.failOp", g.ahead[0], z.front.failOp);
+        peek("front.passOp", g.ahead[1], z.front.passOp);
+        peek("front.depthFailOp", g.ahead[2], z.front.depthFailOp);
+        peek("front.compareOp", g.ahead[3], z.front.compareOp);
+        peek("back.failOp", g.behind[0], z.back.failOp);
+        peek("back.passOp", g.behind[1], z.back.passOp);
+        peek("back.depthFailOp", g.behind[2], z.back.depthFailOp);
+        peek("back.compareOp", g.behind[3], z.back.compareOp);
       }
     }
-    if ((eds_modo_ & kEds3) && fijo.n_colores) {  // phase 2 (without color targets there is nothing to check)
-      mirar("attachmentCount", g.n_colores, fijo.n_colores);
-      for (uint32_t a = 0; a < fijo.n_colores && a < 4; ++a) {
-        const VkPipelineColorBlendAttachmentState& s = fijo.mezclas[a];
-        const VkColorBlendEquationEXT& q = g.ecuacion[a];
-        mirar("colorWriteMask", g.mascara[a], s.colorWriteMask);
-        mirar("blendEnable", g.mezcla_activa[a], s.blendEnable);
+    if ((eds_mode_ & kEds3) && fixed.n_colores) {  // phase 2 (without color targets there is nothing to check)
+      peek("attachmentCount", g.n_colores, fixed.n_colores);
+      for (uint32_t a = 0; a < fixed.n_colores && a < 4; ++a) {
+        const VkPipelineColorBlendAttachmentState& s = fixed.blends[a];
+        const VkColorBlendEquationEXT& q = g.equation[a];
+        peek("colorWriteMask", g.mask[a], s.colorWriteMask);
+        peek("blendEnable", g.active_blend[a], s.blendEnable);
         if (s.blendEnable && (s.colorWriteMask & 0x7)) {
-          mirar("srcColorBlendFactor", q.srcColorBlendFactor, s.srcColorBlendFactor);
-          mirar("dstColorBlendFactor", q.dstColorBlendFactor, s.dstColorBlendFactor);
-          mirar("colorBlendOp", q.colorBlendOp, s.colorBlendOp);
+          peek("srcColorBlendFactor", q.srcColorBlendFactor, s.srcColorBlendFactor);
+          peek("dstColorBlendFactor", q.dstColorBlendFactor, s.dstColorBlendFactor);
+          peek("colorBlendOp", q.colorBlendOp, s.colorBlendOp);
         }
         if (s.blendEnable && (s.colorWriteMask & 0x8)) {
-          mirar("srcAlphaBlendFactor", q.srcAlphaBlendFactor, s.srcAlphaBlendFactor);
-          mirar("dstAlphaBlendFactor", q.dstAlphaBlendFactor, s.dstAlphaBlendFactor);
-          mirar("alphaBlendOp", q.alphaBlendOp, s.alphaBlendOp);
+          peek("srcAlphaBlendFactor", q.srcAlphaBlendFactor, s.srcAlphaBlendFactor);
+          peek("dstAlphaBlendFactor", q.dstAlphaBlendFactor, s.dstAlphaBlendFactor);
+          peek("alphaBlendOp", q.alphaBlendOp, s.alphaBlendOp);
         }
       }
     }
-    if (campo) {
-      eds_apagado_ = true;
-      eds_modo_ = 0;
-      eds_valido_ = false;
-      pipeline_enlazado_ = VK_NULL_HANDLE;
+    if (field) {
+      eds_disabled_ = true;
+      eds_mode_ = 0;
+      eds_valid_ = false;
+      bound_pipeline_ = VK_NULL_HANDLE;
       REXLOG_ERROR("[nativo] C6 estado dinamico: DIFERENCIA en {} (comprobacion {}: fijado {} y el pipeline de siempre "
                    "llevaria {}; VS {} PS {}, topologia {}, profundidad {:08X}, rasterizado {:02X}, mascaras {:04X}). "
                    "Apagado para el resto de la sesion: vuelven los pipelines con todo el estado fijo",
-                   campo, n, fijado, esperado, clave.vs, clave.ps, clave.topologia, clave.profundidad,
-                   clave.rasterizado, clave.mascaras);
+                   field, n, pinned, expected, key.vs, key.ps, key.topo, key.depth_value,
+                   key.rasterizado, key.masks);
       return false;
     }
-    if (n == kEdsAComprobar) {
-      NFSMW_INFORME_ANILLO("[nativo] C6 estado dinamico: {} cambios de clave comprobados contra el estado de su "
+    if (n == kEdsToCheck) {
+      NFSMW_RING_REPORT("[nativo] C6 estado dinamico: {} cambios de clave comprobados contra el estado de su "
                            "pipeline de siempre, 0 diferencias; sigue comprobando 1 de cada 4096",
                            n);
     }
@@ -11440,20 +11440,20 @@ class DibujosVulkanImpl final : public DibujosVulkan {
    * this buffer there is nothing to do; otherwise what changed is set and the guard checks it for the
    * first 200,000 changes and then 1 in 4,096. Returns false if the guard has switched dynamic state off.
    */
-  bool FijarEstadoDinamico(VkCommandBuffer cmd, const ClavePipeline& clave) {
-    ++eds_dibujos_;
-    if (eds_valido_ && std::memcmp(&clave, &eds_clave_, sizeof(clave)) == 0) {
-      ++eds_repetidos_;
+  bool FixDynamicState(VkCommandBuffer cmd, const PipelineKey& key) {
+    ++eds_draws_;
+    if (eds_valid_ && std::memcmp(&key, &eds_key_, sizeof(key)) == 0) {
+      ++eds_repeated_;
       return true;
     }
-    EstadoEds d;
-    EstadoEdsDe(clave, d, eds_modo_);
-    EmitirEstadoDinamico(cmd, d, !eds_valido_, eds_modo_);
-    eds_clave_ = clave;
-    eds_valido_ = true;
-    const uint64_t n = ++eds_comprobables_;
-    if (n <= kEdsAComprobar || (n & 4095) == 0) {
-      return ComprobarEstadoDinamico(clave, n);
+    EdsState d;
+    EdsStateFor(key, d, eds_mode_);
+    EmitDynamicState(cmd, d, !eds_valid_, eds_mode_);
+    eds_key_ = key;
+    eds_valid_ = true;
+    const uint64_t n = ++eds_checkable_;
+    if (n <= kEdsToCheck || (n & 4095) == 0) {
+      return CheckDynamicState(key, n);
     }
     return true;
   }
@@ -11463,38 +11463,38 @@ class DibujosVulkanImpl final : public DibujosVulkan {
    * table does not load them: they are requested from the driver, like vkCmdCopyImage. With an API below
    * 1.3 or with any of them missing, phase 1 is not used for the whole session and one log line says so.
    */
-  void CargarEstadoDinamico() {
-    const auto& ifn = dispositivo_->vulkan_instance()->functions();
-    const auto pedir = [&](const char* nombre) { return ifn.vkGetDeviceProcAddr(device_, nombre); };
-    set_cara_ = reinterpret_cast<PFN_vkCmdSetCullMode>(pedir("vkCmdSetCullMode"));
-    set_frente_ = reinterpret_cast<PFN_vkCmdSetFrontFace>(pedir("vkCmdSetFrontFace"));
-    set_topologia_ = reinterpret_cast<PFN_vkCmdSetPrimitiveTopology>(pedir("vkCmdSetPrimitiveTopology"));
-    set_reinicio_ = reinterpret_cast<PFN_vkCmdSetPrimitiveRestartEnable>(pedir("vkCmdSetPrimitiveRestartEnable"));
-    set_sesgo_ = reinterpret_cast<PFN_vkCmdSetDepthBiasEnable>(pedir("vkCmdSetDepthBiasEnable"));
-    set_prueba_z_ = reinterpret_cast<PFN_vkCmdSetDepthTestEnable>(pedir("vkCmdSetDepthTestEnable"));
-    set_escribe_z_ = reinterpret_cast<PFN_vkCmdSetDepthWriteEnable>(pedir("vkCmdSetDepthWriteEnable"));
-    set_funcion_z_ = reinterpret_cast<PFN_vkCmdSetDepthCompareOp>(pedir("vkCmdSetDepthCompareOp"));
-    set_estencil_ = reinterpret_cast<PFN_vkCmdSetStencilTestEnable>(pedir("vkCmdSetStencilTestEnable"));
-    set_estencil_ops_ = reinterpret_cast<PFN_vkCmdSetStencilOp>(pedir("vkCmdSetStencilOp"));
-    const uint32_t api = dispositivo_->properties().apiVersion;
-    eds12_disponible_ = api >= VK_MAKE_API_VERSION(0, 1, 3, 0) && set_cara_ && set_frente_ && set_topologia_ &&
-                        set_reinicio_ && set_sesgo_ && set_prueba_z_ && set_escribe_z_ && set_funcion_z_ &&
-                        set_estencil_ && set_estencil_ops_;
+  void LoadDynamicState() {
+    const auto& ifn = vk_device_->vulkan_instance()->functions();
+    const auto fetch_proc = [&](const char* name) { return ifn.vkGetDeviceProcAddr(device_, name); };
+    set_face_ = reinterpret_cast<PFN_vkCmdSetCullMode>(fetch_proc("vkCmdSetCullMode"));
+    set_front_ = reinterpret_cast<PFN_vkCmdSetFrontFace>(fetch_proc("vkCmdSetFrontFace"));
+    set_topology_ = reinterpret_cast<PFN_vkCmdSetPrimitiveTopology>(fetch_proc("vkCmdSetPrimitiveTopology"));
+    set_reset_ = reinterpret_cast<PFN_vkCmdSetPrimitiveRestartEnable>(fetch_proc("vkCmdSetPrimitiveRestartEnable"));
+    set_bias_ = reinterpret_cast<PFN_vkCmdSetDepthBiasEnable>(fetch_proc("vkCmdSetDepthBiasEnable"));
+    set_z_test_ = reinterpret_cast<PFN_vkCmdSetDepthTestEnable>(fetch_proc("vkCmdSetDepthTestEnable"));
+    set_write_z_ = reinterpret_cast<PFN_vkCmdSetDepthWriteEnable>(fetch_proc("vkCmdSetDepthWriteEnable"));
+    set_z_func_ = reinterpret_cast<PFN_vkCmdSetDepthCompareOp>(fetch_proc("vkCmdSetDepthCompareOp"));
+    set_stencil_ = reinterpret_cast<PFN_vkCmdSetStencilTestEnable>(fetch_proc("vkCmdSetStencilTestEnable"));
+    set_ops_stencil_ = reinterpret_cast<PFN_vkCmdSetStencilOp>(fetch_proc("vkCmdSetStencilOp"));
+    const uint32_t api = vk_device_->properties().apiVersion;
+    eds12_available_ = api >= VK_MAKE_API_VERSION(0, 1, 3, 0) && set_face_ && set_front_ && set_topology_ &&
+                        set_reset_ && set_bias_ && set_z_test_ && set_write_z_ && set_z_func_ &&
+                        set_stencil_ && set_ops_stencil_;
     REXLOG_INFO("[nativo] C6 estado dinamico (build 184): EDS1/EDS2 {} (API del dispositivo {}.{}.{})",
-                eds12_disponible_ ? "disponible (nucleo 1.3)" : "NO disponible: la fase 1 no se usa",
+                eds12_available_ ? "disponible (nucleo 1.3)" : "NO disponible: la fase 1 no se usa",
                 VK_API_VERSION_MAJOR(api), VK_API_VERSION_MINOR(api), VK_API_VERSION_PATCH(api));
 #if defined(REX_UI_VULKAN_ESTADO_DINAMICO3)
     // Phase 2. The driver only provides these three if the SDK enabled the extension; the SDK records the
     // three features in its properties (ui_vulkan_estado_dinamico3.patch).
-    set_mezcla_activa_ = reinterpret_cast<PFN_vkCmdSetColorBlendEnableEXT>(pedir("vkCmdSetColorBlendEnableEXT"));
-    set_ecuacion_ = reinterpret_cast<PFN_vkCmdSetColorBlendEquationEXT>(pedir("vkCmdSetColorBlendEquationEXT"));
-    set_mascara_ = reinterpret_cast<PFN_vkCmdSetColorWriteMaskEXT>(pedir("vkCmdSetColorWriteMaskEXT"));
-    const auto& p3 = dispositivo_->properties();
-    eds3_disponible_ = dispositivo_->extensions().ext_EXT_extended_dynamic_state3 &&
+    set_blend_enabled_ = reinterpret_cast<PFN_vkCmdSetColorBlendEnableEXT>(fetch_proc("vkCmdSetColorBlendEnableEXT"));
+    set_equation_ = reinterpret_cast<PFN_vkCmdSetColorBlendEquationEXT>(fetch_proc("vkCmdSetColorBlendEquationEXT"));
+    set_mask_ = reinterpret_cast<PFN_vkCmdSetColorWriteMaskEXT>(fetch_proc("vkCmdSetColorWriteMaskEXT"));
+    const auto& p3 = vk_device_->properties();
+    eds3_available_ = vk_device_->extensions().ext_EXT_extended_dynamic_state3 &&
                        p3.extendedDynamicState3ColorBlendEnable && p3.extendedDynamicState3ColorBlendEquation &&
-                       p3.extendedDynamicState3ColorWriteMask && set_mezcla_activa_ && set_ecuacion_ && set_mascara_;
+                       p3.extendedDynamicState3ColorWriteMask && set_blend_enabled_ && set_equation_ && set_mask_;
     REXLOG_INFO("[nativo] C6 estado dinamico (build 184): EDS3 (mezcla, ecuacion y mascara de color) {}",
-                eds3_disponible_ ? "disponible"
+                eds3_available_ ? "disponible"
                                  : "NO disponible (el dispositivo no la da o no esta habilitada): la fase 2 no se usa");
 #else
     REXLOG_INFO("[nativo] C6 estado dinamico (build 184): EDS3 NO disponible: este SDK no habilita "
@@ -11503,45 +11503,45 @@ class DibujosVulkanImpl final : public DibujosVulkan {
   }
 
   // Every 20 s, dynamic state phases 1 and 2.
-  void InformeEstadoDinamico() {
-    const auto ahora = std::chrono::steady_clock::now();
-    if (ahora - eds_informe_ < std::chrono::seconds(20)) {
+  void DynamicStateReport() {
+    const auto now_time = std::chrono::steady_clock::now();
+    if (now_time - eds_report_ < std::chrono::seconds(20)) {
       return;
     }
-    const bool primera = eds_informe_ == std::chrono::steady_clock::time_point{};
-    eds_informe_ = ahora;
-    const std::array<uint64_t, kEdsN> n = eds_llamadas_;
-    eds_llamadas_.fill(0);
-    const uint64_t dibujos = eds_dibujos_ - eds_dibujos_previos_;
-    const uint64_t repetidos = eds_repetidos_ - eds_repetidos_previos_;
-    const uint64_t fotogramas = fotograma_ - eds_fotogramas_previos_;
-    eds_dibujos_previos_ = eds_dibujos_;
-    eds_repetidos_previos_ = eds_repetidos_;
-    eds_fotogramas_previos_ = fotograma_;
-    if (primera || !dibujos) {
+    const bool is_first = eds_report_ == std::chrono::steady_clock::time_point{};
+    eds_report_ = now_time;
+    const std::array<uint64_t, kEdsN> n = eds_calls_;
+    eds_calls_.fill(0);
+    const uint64_t draws = eds_draws_ - eds_draws_previous_;
+    const uint64_t repeated = eds_repeated_ - eds_repeated_previous_;
+    const uint64_t frames = frame_ - eds_frames_previous_;
+    eds_draws_previous_ = eds_draws_;
+    eds_repeated_previous_ = eds_repeated_;
+    eds_frames_previous_ = frame_;
+    if (is_first || !draws) {
       return;
     }
-    uint64_t llamadas = 0;
+    uint64_t calls = 0;
     for (size_t k = 0; k < kEdsN; ++k) {
-      llamadas += k == kEdsTodo ? 0 : n[k];
+      calls += k == kEdsAll ? 0 : n[k];
     }
-    NFSMW_INFORME_ANILLO(
+    NFSMW_RING_REPORT(
         "[nativo] C6 estado dinamico (build 184): {}; {} dibujos en 20 s ({:.0f} por fotograma; {} repiten la clave "
         "del anterior) y {} vkCmdSet* ({:.3f} por dibujo; {} veces todo: bufer nuevo, cielo o pase que olvida el "
         "pipeline) | cara {}, frente {}, topologia {}, reinicio {}, sesgo {}, prueba Z {}, escritura Z {}, funcion Z "
         "{}, estencil {}, operaciones de estencil {} | mezcla {}, ecuacion {}, mascaras {} | pipelines creados: {} de "
         "siempre, {} EDS1/EDS2, {} EDS3, {} con los dos | guardia: {} comprobados ({})",
-        eds_apagado_ ? "APAGADO por la guardia" : NombreModoEds(eds_modo_), dibujos,
-        fotogramas ? double(dibujos) / double(fotogramas) : 0.0, repetidos, llamadas,
-        double(llamadas) / double(dibujos), n[kEdsTodo], n[kEdsCara], n[kEdsFrente], n[kEdsTopologia],
-        n[kEdsReinicio], n[kEdsSesgo], n[kEdsPruebaZ], n[kEdsEscribeZ], n[kEdsFuncionZ], n[kEdsEstencil],
-        n[kEdsEstencilOps], n[kEdsMezclaActiva], n[kEdsEcuacion], n[kEdsMascara], pipelines_por_modo_[0],
-        pipelines_por_modo_[kEds12], pipelines_por_modo_[kEds3], pipelines_por_modo_[kEds12 | kEds3],
-        eds_comprobados_, eds_comprobados_ >= kEdsAComprobar ? "guardia superada" : "comprobando");
+        eds_disabled_ ? "APAGADO por la guardia" : EdsModeName(eds_mode_), draws,
+        frames ? double(draws) / double(frames) : 0.0, repeated, calls,
+        double(calls) / double(draws), n[kEdsAll], n[kEdsFace], n[kEdsFront], n[kEdsTopology],
+        n[kEdsReset], n[kEdsBias], n[kEdsTestZ], n[kEdsWriteZ], n[kEdsFunctionZ], n[kEdsStencil],
+        n[kEdsOpsStencil], n[kEdsActiveBlend], n[kEdsEquation], n[kEdsMask], pipelines_per_mode_[0],
+        pipelines_per_mode_[kEds12], pipelines_per_mode_[kEds3], pipelines_per_mode_[kEds12 | kEds3],
+        eds_checked_, eds_checked_ >= kEdsToCheck ? "guardia superada" : "comprobando");
   }
 
   // Phase 2. The blend operation of a register field, like the lambda in RellenarEstadoFijo.
-  VkBlendOp OperacionMezcla(uint32_t op) {
+  VkBlendOp BlendOperation(uint32_t op) {
     switch (op) {
       case 1:
         return VK_BLEND_OP_SUBTRACT;
@@ -11550,15 +11550,15 @@ class DibujosVulkanImpl final : public DibujosVulkan {
       case 3:
         return VK_BLEND_OP_MAX;
       case 4:
-        Avisar(52, "mezcla con resta inversa: se usa resta");
+        Warn(52, "mezcla con resta inversa: se usa resta");
         return VK_BLEND_OP_SUBTRACT;
       default:
         return VK_BLEND_OP_ADD;
     }
   }
 
-  VkPipeline PipelineDe(const ClavePipeline& clave, const EntradaVertices& entrada,
-                        const PeticionDibujo& p) {
+  VkPipeline PipelineDe(const PipelineKey& key, const VertexInput& entry,
+                        const DrawRequest& p) {
     /*
      * One-entry shortcut.
      *
@@ -11567,86 +11567,86 @@ class DibujosVulkanImpl final : public DibujosVulkan {
      * bucket count + two pointer hops (bucket and node, ~96 B) = 2-3 cache misses, all to end up comparing
      * the same 80 bytes this compares. Here there is just one memcmp on memory that is already hot.
      */
-    if (ultima_clave_valida_ && std::memcmp(&ultima_clave_, &clave, sizeof(clave)) == 0) {
-      return ultima_pipeline_;
+    if (last_valid_key_ && std::memcmp(&last_key_, &key, sizeof(key)) == 0) {
+      return last_pipeline_;
     }
-    const uint64_t huella = XXH3_64bits(&clave, sizeof(clave));
+    const uint64_t fingerprint = XXH3_64bits(&key, sizeof(key));
     // The direct-mapped cache (nfsmw_nativo_pipelines_directa) before the map.
-    CasillaPipeline& casilla = casillas_pipeline_[huella & (kCasillasPipeline - 1)];
-    if (pipelines_directa_ && casilla.pipeline != VK_NULL_HANDLE &&
-        std::memcmp(&casilla.clave, &clave, sizeof(clave)) == 0) {
-      const uint64_t n = ++pipelines_directa_aciertos_;
-      if (!(n <= kPipelinesAComprobar || (n & 4095) == 0) ||
-          ComprobarCasillaPipeline(huella, clave, casilla.pipeline, n)) {
-        ultima_clave_ = clave;
-        ultima_pipeline_ = casilla.pipeline;
-        ultima_clave_valida_ = true;
-        return casilla.pipeline;
+    PipelineSlot& slot = pipeline_slots_[fingerprint & (kPipelineSlots - 1)];
+    if (direct_pipelines_ && slot.pipeline != VK_NULL_HANDLE &&
+        std::memcmp(&slot.key, &key, sizeof(key)) == 0) {
+      const uint64_t n = ++hits_direct_pipelines_;
+      if (!(n <= kPipelinesToCheck || (n & 4095) == 0) ||
+          CheckPipelineSlot(fingerprint, key, slot.pipeline, n)) {
+        last_key_ = key;
+        last_pipeline_ = slot.pipeline;
+        last_valid_key_ = true;
+        return slot.pipeline;
       }
       // the guard saw a difference: this draw goes through the map, as before
     }
-    if (pipelines_directa_) {
-      ++pipelines_directa_fallos_;
+    if (direct_pipelines_) {
+      ++failures_direct_pipelines_;
     }
-    if (const auto it = pipelines_.find(huella); it != pipelines_.end()) {
-      if (std::memcmp(&it->second.first, &clave, sizeof(clave)) == 0) {
-        ultima_clave_ = clave;
-        ultima_pipeline_ = it->second.second;
-        ultima_clave_valida_ = true;
-        if (pipelines_directa_) {  // the slot keeps the map's pair
-          casilla.clave = clave;
-          casilla.pipeline = it->second.second;
+    if (const auto it = pipelines_.find(fingerprint); it != pipelines_.end()) {
+      if (std::memcmp(&it->second.first, &key, sizeof(key)) == 0) {
+        last_key_ = key;
+        last_pipeline_ = it->second.second;
+        last_valid_key_ = true;
+        if (direct_pipelines_) {  // the slot keeps the map's pair
+          slot.key = key;
+          slot.pipeline = it->second.second;
         }
         return it->second.second;
       }
-      Avisar(50, "colision de huellas de pipeline");
+      Warn(50, "colision de huellas de pipeline");
       return VK_NULL_HANDLE;
     }
-    const VkShaderModule vs = ModuloDe(*p.vs);
+    const VkShaderModule vs = ModuleOf(*p.vs);
     VkShaderModule ps = VK_NULL_HANDLE;
-    if (clave.ps && (clave.especializacion & kSpecResplandorNatural)) {
-      ps = ModuloVariante(1, kSpirvResplandorEnergia, sizeof(kSpirvResplandorEnergia));
-    } else if (clave.ps && (clave.especializacion & kSpecResplandorSuave)) {
-      ps = ModuloVariante(2, kSpirvResplandorSuave, sizeof(kSpirvResplandorSuave));
-    } else if (clave.ps && (clave.especializacion & kSpecSoloAlfa)) {
-      ps = ModuloSoloAlfa(*p.ps);
-    } else if (clave.ps && (clave.especializacion & kSpecZTemprana)) {
-      ps = ModuloZTemprana(*p.ps);
-    } else if (clave.ps) {
-      ps = ModuloDe(*p.ps);
+    if (key.ps && (key.specialization & kSpecGlowNatural)) {
+      ps = VariantModule(1, kSpirvGlowEnergy, sizeof(kSpirvGlowEnergy));
+    } else if (key.ps && (key.specialization & kSpecGlowSmooth)) {
+      ps = VariantModule(2, kSpirvGlowSmooth, sizeof(kSpirvGlowSmooth));
+    } else if (key.ps && (key.specialization & kSpecOnlyAlpha)) {
+      ps = AlphaOnlyModule(*p.ps);
+    } else if (key.ps && (key.specialization & kSpecZEarly)) {
+      ps = EarlyModuleZ(*p.ps);
+    } else if (key.ps) {
+      ps = ModuleOf(*p.ps);
     }
-    if (vs == VK_NULL_HANDLE || (clave.ps && ps == VK_NULL_HANDLE)) {
-      Rechazar(51, "no se pudo crear un modulo de shader");
+    if (vs == VK_NULL_HANDLE || (key.ps && ps == VK_NULL_HANDLE)) {
+      Reject(51, "no se pudo crear un modulo de shader");
       return VK_NULL_HANDLE;
     }
     // The VkGraphicsPipelineCreateInfo lives in CrearPipelineVulkan, the same function the prewarm uses from
     // its thread; what surrounds it stays here, as it was.
     uint32_t n_colores = 0;
     VkPipeline pipeline = VK_NULL_HANDLE;
-    const auto inicio_creacion = std::chrono::steady_clock::now();
-    if (CrearPipelineVulkan(clave, entrada, vs, ps, pase_rp_, true, pipeline, n_colores) != VK_SUCCESS) {
-      Rechazar(53, "no se pudo crear un pipeline");
+    const auto creation_start = std::chrono::steady_clock::now();
+    if (CreateVulkanPipeline(key, entry, vs, ps, rp_pass_, true, pipeline, n_colores) != VK_SUCCESS) {
+      Reject(53, "no se pudo crear un pipeline");
       pipeline = VK_NULL_HANDLE;
     } else {
-      ++pipelines_sin_guardar_;
+      ++pipelines_without_save_;
     }
-    const uint64_t ns_creacion = uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                              std::chrono::steady_clock::now() - inicio_creacion)
+    const uint64_t creation_ns = uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                              std::chrono::steady_clock::now() - creation_start)
                                               .count());
-    ns_pipelines_ += ns_creacion;
-    AnotarPipelineCreado(clave, entrada, p, pipeline, ns_creacion);  // List and measurement
-    pipelines_.emplace(huella, std::make_pair(clave, pipeline));
-    ++pipelines_por_modo_[clave.relleno2 & 3];  // Dynamic state report
-    if (pipelines_directa_ && pipeline != VK_NULL_HANDLE) {  // the same pair as the map
-      casilla.clave = clave;
-      casilla.pipeline = pipeline;
+    ns_pipelines_ += creation_ns;
+    TrackPipelineCreated(key, entry, p, pipeline, creation_ns);  // List and measurement
+    pipelines_.emplace(fingerprint, std::make_pair(key, pipeline));
+    ++pipelines_per_mode_[key.fill2 & 3];  // Dynamic state report
+    if (direct_pipelines_ && pipeline != VK_NULL_HANDLE) {  // the same pair as the map
+      slot.key = key;
+      slot.pipeline = pipeline;
     }
     if (pipelines_.size() <= 64) {
       REXLOG_INFO("[nativo] C6: pipeline {} (VS n{} PS n{}, topologia {}, {} colores, "
                   "profundidad {:08X}, mezcla {:08X}, especializacion {})",
-                  pipelines_.size(), p.vs->numero, clave.ps ? int(p.ps->numero) : -1,
-                  clave.topologia, n_colores,
-                  clave.profundidad, clave.mezcla[0], clave.especializacion);
+                  pipelines_.size(), p.vs->number, key.ps ? int(p.ps->number) : -1,
+                  key.topo, n_colores,
+                  key.depth_value, key.blend[0], key.specialization);
     }
     return pipeline;
   }
@@ -11657,89 +11657,89 @@ class DibujosVulkanImpl final : public DibujosVulkan {
    * same VkGraphicsPipelineCreateInfo as the ring. It only reads its arguments, layout_pipeline_ and the
    * pipeline cache, which Vulkan synchronizes internally; avisar = false outside the ring.
    */
-  VkResult CrearPipelineVulkan(const ClavePipeline& clave, const EntradaVertices& entrada, VkShaderModule vs,
-                               VkShaderModule ps, VkRenderPass pase, bool avisar, VkPipeline& pipeline,
-                               uint32_t& n_colores_salida) {
-    const VkSpecializationMapEntry mapa{0, 0, sizeof(uint32_t)};
-    const VkSpecializationInfo especializacion{1, &mapa, sizeof(uint32_t), &clave.especializacion};
-    VkPipelineShaderStageCreateInfo etapas[2]{};
-    for (auto& etapa : etapas) {
-      etapa.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-      etapa.pName = "main";
-      etapa.pSpecializationInfo = &especializacion;
+  VkResult CreateVulkanPipeline(const PipelineKey& key, const VertexInput& entry, VkShaderModule vs,
+                               VkShaderModule ps, VkRenderPass pass, bool warn, VkPipeline& pipeline,
+                               uint32_t& n_output_colors) {
+    const VkSpecializationMapEntry map_table{0, 0, sizeof(uint32_t)};
+    const VkSpecializationInfo specialization{1, &map_table, sizeof(uint32_t), &key.specialization};
+    VkPipelineShaderStageCreateInfo stages[2]{};
+    for (auto& stage_idx : stages) {
+      stage_idx.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+      stage_idx.pName = "main";
+      stage_idx.pSpecializationInfo = &specialization;
     }
-    etapas[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
-    etapas[0].module = vs;
-    etapas[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-    etapas[1].module = ps;
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vs;
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = ps;
 
-    std::vector<VkVertexInputBindingDescription> enlaces;
-    for (uint32_t i = 0; i < entrada.enlaces.size(); ++i) {
-      enlaces.push_back({i, entrada.enlaces[i].zancada, VK_VERTEX_INPUT_RATE_VERTEX});
+    std::vector<VkVertexInputBindingDescription> bindings;
+    for (uint32_t i = 0; i < entry.bindings.size(); ++i) {
+      bindings.push_back({i, entry.bindings[i].stride_bytes, VK_VERTEX_INPUT_RATE_VERTEX});
     }
-    std::vector<VkVertexInputAttributeDescription> atributos;
-    for (const AtributoVertices& a : entrada.atributos) {
-      atributos.push_back({a.ubicacion, a.enlace, a.formato, a.offset});
+    std::vector<VkVertexInputAttributeDescription> attributes;
+    for (const VertexAttribute& a : entry.attributes) {
+      attributes.push_back({a.loc_index, a.bind_index, a.format_id, a.offset});
     }
     VkPipelineVertexInputStateCreateInfo vertices{};
     vertices.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vertices.vertexBindingDescriptionCount = uint32_t(enlaces.size());
-    vertices.pVertexBindingDescriptions = enlaces.data();
-    vertices.vertexAttributeDescriptionCount = uint32_t(atributos.size());
-    vertices.pVertexAttributeDescriptions = atributos.data();
+    vertices.vertexBindingDescriptionCount = uint32_t(bindings.size());
+    vertices.pVertexBindingDescriptions = bindings.data();
+    vertices.vertexAttributeDescriptionCount = uint32_t(attributes.size());
+    vertices.pVertexAttributeDescriptions = attributes.data();
 
     // The fixed state is filled in by RellenarEstadoFijo: it is the usual code, moved there without
     // changing any computation, so the guards of the canonical key and of dynamic state compare with what
     // really goes into the VkGraphicsPipelineCreateInfo.
-    EstadoFijoPipeline fijo;
-    RellenarEstadoFijo(clave, fijo, avisar);  // notify
-    const VkPipelineInputAssemblyStateCreateInfo& ensamblado = fijo.ensamblado;
-    const VkPipelineViewportStateCreateInfo& vista = fijo.vista;
-    const VkPipelineRasterizationStateCreateInfo& rasterizado = fijo.rasterizado;
-    const VkPipelineMultisampleStateCreateInfo& muestreo = fijo.muestreo;
-    const VkPipelineDepthStencilStateCreateInfo& profundidad = fijo.profundidad;
-    const VkPipelineColorBlendStateCreateInfo& mezcla = fijo.mezcla;
-    const uint32_t n_colores = fijo.n_colores;
+    PipelineFixedState fixed;
+    FillFixedState(key, fixed, warn);  // notify
+    const VkPipelineInputAssemblyStateCreateInfo& ensamblado = fixed.ensamblado;
+    const VkPipelineViewportStateCreateInfo& view = fixed.view;
+    const VkPipelineRasterizationStateCreateInfo& rasterizado = fixed.rasterizado;
+    const VkPipelineMultisampleStateCreateInfo& sampling = fixed.sampling;
+    const VkPipelineDepthStencilStateCreateInfo& depth_value = fixed.depth_value;
+    const VkPipelineColorBlendStateCreateInfo& blend = fixed.blend;
+    const uint32_t n_colores = fixed.n_colores;
 
     // Dynamic state phases 1 and 2. Their pipelines (flagged in relleno2) also declare as dynamic what is
     // now set with vkCmdSet*; their lookup key already has it zeroed (ClaveDeBusqueda).
-    VkDynamicState dinamicos[24] = {
+    VkDynamicState dynamic_items[24] = {
         VK_DYNAMIC_STATE_VIEWPORT,          VK_DYNAMIC_STATE_SCISSOR,
         VK_DYNAMIC_STATE_BLEND_CONSTANTS,   VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK,
         VK_DYNAMIC_STATE_STENCIL_WRITE_MASK, VK_DYNAMIC_STATE_STENCIL_REFERENCE,
         VK_DYNAMIC_STATE_DEPTH_BIAS};
-    uint32_t n_dinamicos = 7;
-    if (clave.relleno2 & kEds12) {
-      for (const VkDynamicState estado : kDinamicosEds12) {
-        dinamicos[n_dinamicos++] = estado;
+    uint32_t n_dynamic = 7;
+    if (key.fill2 & kEds12) {
+      for (const VkDynamicState state : kEds12Dynamic) {
+        dynamic_items[n_dynamic++] = state;
       }
     }
-    if (clave.relleno2 & kEds3) {
-      for (const VkDynamicState estado : kDinamicosEds3) {
-        dinamicos[n_dinamicos++] = estado;
+    if (key.fill2 & kEds3) {
+      for (const VkDynamicState state : kEds3Dynamic) {
+        dynamic_items[n_dynamic++] = state;
       }
     }
-    VkPipelineDynamicStateCreateInfo dinamico{};
-    dinamico.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-    dinamico.dynamicStateCount = n_dinamicos;
-    dinamico.pDynamicStates = dinamicos;
+    VkPipelineDynamicStateCreateInfo dynamic{};
+    dynamic.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamic.dynamicStateCount = n_dynamic;
+    dynamic.pDynamicStates = dynamic_items;
 
     VkGraphicsPipelineCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-    info.stageCount = clave.ps ? 2 : 1;  // mode 5: VS only
-    info.pStages = etapas;
+    info.stageCount = key.ps ? 2 : 1;  // mode 5: VS only
+    info.pStages = stages;
     info.pVertexInputState = &vertices;
     info.pInputAssemblyState = &ensamblado;
-    info.pViewportState = &vista;
+    info.pViewportState = &view;
     info.pRasterizationState = &rasterizado;
-    info.pMultisampleState = &muestreo;
-    info.pDepthStencilState = &profundidad;
-    info.pColorBlendState = &mezcla;
-    info.pDynamicState = &dinamico;
+    info.pMultisampleState = &sampling;
+    info.pDepthStencilState = &depth_value;
+    info.pColorBlendState = &blend;
+    info.pDynamicState = &dynamic;
     info.layout = layout_pipeline_;
-    info.renderPass = pase;  // the pass's (ring) or a compatible one (prewarm)
+    info.renderPass = pass;  // the pass's (ring) or a compatible one (prewarm)
     info.basePipelineIndex = -1;
-    n_colores_salida = n_colores;
+    n_output_colors = n_colores;
     pipeline = VK_NULL_HANDLE;
     return dfn_.vkCreateGraphicsPipelines(device_, cache_pipelines_, 1, &info, nullptr, &pipeline);
   }
@@ -11767,154 +11767,154 @@ class DibujosVulkanImpl final : public DibujosVulkan {
    * compiled one (20 ms or more), it writes DIFERENCIA and stops the thread. Records whose shaders are no
    * longer in the library, or from another dynamic state mode, are skipped.
    */
-  enum : uint8_t { kListaPendiente = 0, kListaPrecalentado = 1, kListaSinShader = 2, kListaFallido = 3,
-                   kListaOtroModo = 4 };
+  enum : uint8_t { kPendingList = 0, kPrewarmedList = 1, kListWithoutShader = 2, kFailedList = 3,
+                   kModeOtherList = 4 };
   static constexpr uint64_t kNsCompilado = 5000000;  // more than this: really compiled (a cache hit is 0-2 ms)
-  static constexpr uint64_t kNsLento = 20000000;     // the ring creating one already prewarmed: mismatch
+  static constexpr uint64_t kSlowNs = 20000000;     // the ring creating one already prewarmed: mismatch
 
   // At start-up (Inicializar): the previous session's list, before the thread exists. It is not a
   // separate file: it is the part of the pipelines file that CargarCachePipelines read.
-  void CargarListaPipelines() {
-    const std::filesystem::path ruta = RutaFicheroPipelines();
-    std::vector<uint8_t> datos = std::move(lista_leida_);
-    lista_leida_ = {};
-    if (datos.size() < kCabeceraLista ||
-        datos.size() > kCabeceraLista + kMaxRegistrosLista * sizeof(RegistroPipeline)) {
-      datos.clear();
+  void LoadPipelinesList() {
+    const std::filesystem::path file_path = PipelinesFilePath();
+    std::vector<uint8_t> payload = std::move(read_list_);
+    read_list_ = {};
+    if (payload.size() < kListHeader ||
+        payload.size() > kListHeader + kMaxListRegs * sizeof(PipelineRecord)) {
+      payload.clear();
     }
-    const char* motivo = nullptr;
-    uint32_t cabecera[4] = {};
-    if (datos.empty()) {
-      motivo = "no hay lista: se empieza en esta sesion";
+    const char* reason = nullptr;
+    uint32_t hdr[4] = {};
+    if (payload.empty()) {
+      reason = "no hay lista: se empieza en esta sesion";
     } else {
-      std::memcpy(cabecera, datos.data(), sizeof(cabecera));
-      if (cabecera[0] != kMagiaListaPipelines || cabecera[1] != kVersionListaPipelines ||
-          cabecera[2] != sizeof(RegistroPipeline) ||
-          datos.size() != kCabeceraLista + size_t(cabecera[3]) * sizeof(RegistroPipeline)) {
-        motivo = "lista de otra version o danada: se empieza de cero";
+      std::memcpy(hdr, payload.data(), sizeof(hdr));
+      if (hdr[0] != kPipelinesListMagic || hdr[1] != kPipelinesListVersion ||
+          hdr[2] != sizeof(PipelineRecord) ||
+          payload.size() != kListHeader + size_t(hdr[3]) * sizeof(PipelineRecord)) {
+        reason = "lista de otra version o danada: se empieza de cero";
       }
     }
-    if (!motivo) {
-      lista_archivo_.reserve(cabecera[3]);
-      for (uint32_t i = 0; i < cabecera[3]; ++i) {
-        RegistroPipeline r;
-        std::memcpy(&r, datos.data() + kCabeceraLista + size_t(i) * sizeof(RegistroPipeline), sizeof(r));
-        if (r.n_atributos > RegistroPipeline::kMaxAtributos || r.n_enlaces > RegistroPipeline::kMaxEnlaces) {
+    if (!reason) {
+      file_list_.reserve(hdr[3]);
+      for (uint32_t i = 0; i < hdr[3]; ++i) {
+        PipelineRecord r;
+        std::memcpy(&r, payload.data() + kListHeader + size_t(i) * sizeof(PipelineRecord), sizeof(r));
+        if (r.n_attributes > PipelineRecord::kMaxAttributes || r.n_bindings > PipelineRecord::kMaxBindings) {
           continue;
         }
-        if (indice_lista_.emplace(XXH3_64bits(&r.clave, sizeof(r.clave)), lista_archivo_.size()).second) {
-          lista_archivo_.push_back(r);
+        if (list_index_.emplace(XXH3_64bits(&r.key, sizeof(r.key)), file_list_.size()).second) {
+          file_list_.push_back(r);
         }
       }
-      escrito_lista_ = std::move(datos);  // the writer thread rewrites it unchanged if only the cache changes
+      list_written_ = std::move(payload);  // the writer thread rewrites it unchanged if only the cache changes
     }
-    estado_lista_.assign(lista_archivo_.size(), kListaPendiente);
-    REXLOG_INFO("[nativo] C6 precalentado (build 186): {} pipelines en la lista de {}{}{}", lista_archivo_.size(),
-                ruta.string(), motivo ? ": " : "", motivo ? motivo : "");
+    list_state_.assign(file_list_.size(), kPendingList);
+    REXLOG_INFO("[nativo] C6 precalentado (build 186): {} pipelines en la lista de {}{}{}", file_list_.size(),
+                file_path.string(), reason ? ": " : "", reason ? reason : "");
   }
 
   // Ring only (GuardarCachePipelines): the file's list without the records the thread found missing their
   // shaders, followed by this session's new ones. Above kMaxRegistrosLista the oldest are dropped.
-  std::vector<uint8_t> SerializarListaPipelines() const {
-    const size_t hasta = precalentado_hasta_.load(std::memory_order_acquire);
-    std::vector<const RegistroPipeline*> registros;
-    registros.reserve(lista_archivo_.size() + lista_sesion_.size());
-    for (size_t i = 0; i < lista_archivo_.size(); ++i) {
-      if (i < hasta && estado_lista_[i] == kListaSinShader) {
+  std::vector<uint8_t> SerializePipelinesList() const {
+    const size_t hasta = prewarmed_until_.load(std::memory_order_acquire);
+    std::vector<const PipelineRecord*> regs;
+    regs.reserve(file_list_.size() + session_list_.size());
+    for (size_t i = 0; i < file_list_.size(); ++i) {
+      if (i < hasta && list_state_[i] == kListWithoutShader) {
         continue;
       }
-      registros.push_back(&lista_archivo_[i]);
+      regs.push_back(&file_list_[i]);
     }
-    for (const RegistroPipeline& r : lista_sesion_) {
-      registros.push_back(&r);
+    for (const PipelineRecord& r : session_list_) {
+      regs.push_back(&r);
     }
-    if (registros.size() > kMaxRegistrosLista) {
-      registros.erase(registros.begin(), registros.begin() + std::ptrdiff_t(registros.size() - kMaxRegistrosLista));
+    if (regs.size() > kMaxListRegs) {
+      regs.erase(regs.begin(), regs.begin() + std::ptrdiff_t(regs.size() - kMaxListRegs));
     }
-    std::vector<uint8_t> datos(kCabeceraLista + registros.size() * sizeof(RegistroPipeline));
-    const uint32_t cabecera[4] = {kMagiaListaPipelines, kVersionListaPipelines, uint32_t(sizeof(RegistroPipeline)),
-                                  uint32_t(registros.size())};
-    std::memcpy(datos.data(), cabecera, sizeof(cabecera));
-    for (size_t i = 0; i < registros.size(); ++i) {
-      std::memcpy(datos.data() + kCabeceraLista + i * sizeof(RegistroPipeline), registros[i], sizeof(RegistroPipeline));
+    std::vector<uint8_t> payload(kListHeader + regs.size() * sizeof(PipelineRecord));
+    const uint32_t hdr[4] = {kPipelinesListMagic, kPipelinesListVersion, uint32_t(sizeof(PipelineRecord)),
+                                  uint32_t(regs.size())};
+    std::memcpy(payload.data(), hdr, sizeof(hdr));
+    for (size_t i = 0; i < regs.size(); ++i) {
+      std::memcpy(payload.data() + kListHeader + i * sizeof(PipelineRecord), regs[i], sizeof(PipelineRecord));
     }
-    return datos;
+    return payload;
   }
 
   // Ring only (PipelineDe), with every pipeline it creates: the measurement for the report and the guard,
   // and new ones go to the list.
-  void AnotarPipelineCreado(const ClavePipeline& clave, const EntradaVertices& entrada, const PeticionDibujo& p,
+  void TrackPipelineCreated(const PipelineKey& key, const VertexInput& entry, const DrawRequest& p,
                             VkPipeline pipeline, uint64_t ns) {
-    const uint64_t huella = XXH3_64bits(&clave, sizeof(clave));
-    if (const auto it = indice_lista_.find(huella); it != indice_lista_.end()) {
+    const uint64_t fingerprint = XXH3_64bits(&key, sizeof(key));
+    if (const auto it = list_index_.find(fingerprint); it != list_index_.end()) {
       const size_t j = it->second;
-      if (j < lista_archivo_.size() && j < precalentado_hasta_.load(std::memory_order_acquire) &&
-          estado_lista_[j] == kListaPrecalentado) {
-        ++anillo_precalentados_;
-        ns_anillo_precalentados_ += ns;
-        if (ns >= kNsLento) {
-          ++anillo_precalentados_lentos_;
+      if (j < file_list_.size() && j < prewarmed_until_.load(std::memory_order_acquire) &&
+          list_state_[j] == kPrewarmedList) {
+        ++prewarmed_ring_;
+        prewarmed_ring_ns_ += ns;
+        if (ns >= kSlowNs) {
+          ++slow_prewarmed_ring_;
         }
       } else {
-        ++anillo_de_lista_;
-        ns_anillo_de_lista_ += ns;
+        ++list_ring_;
+        list_ring_ns_ += ns;
       }
       return;
     }
-    ++anillo_nuevos_;
-    ns_anillo_nuevos_ += ns;
-    if (pipeline == VK_NULL_HANDLE || !p.vs || !p.vs->shader || (clave.ps && (!p.ps || !p.ps->shader)) ||
-        entrada.atributos.size() > RegistroPipeline::kMaxAtributos ||
-        entrada.enlaces.size() > RegistroPipeline::kMaxEnlaces ||
-        lista_archivo_.size() + lista_sesion_.size() >= kMaxRegistrosLista) {
+    ++new_ring_;
+    new_ring_ns_ += ns;
+    if (pipeline == VK_NULL_HANDLE || !p.vs || !p.vs->shader || (key.ps && (!p.ps || !p.ps->shader)) ||
+        entry.attributes.size() > PipelineRecord::kMaxAttributes ||
+        entry.bindings.size() > PipelineRecord::kMaxBindings ||
+        file_list_.size() + session_list_.size() >= kMaxListRegs) {
       return;
     }
-    RegistroPipeline r;
-    r.clave = clave;
-    r.huella_vs = p.vs->shader->huella;
-    r.huella_ps = clave.ps ? p.ps->shader->huella : 0;
-    r.n_atributos = uint32_t(entrada.atributos.size());
-    for (uint32_t k = 0; k < r.n_atributos; ++k) {
-      const AtributoVertices& a = entrada.atributos[k];
-      r.atributos[k] = {a.ubicacion, a.enlace, uint32_t(a.formato), a.offset};
+    PipelineRecord r;
+    r.key = key;
+    r.vs_fingerprint = p.vs->shader->fingerprint;
+    r.ps_fingerprint = key.ps ? p.ps->shader->fingerprint : 0;
+    r.n_attributes = uint32_t(entry.attributes.size());
+    for (uint32_t k = 0; k < r.n_attributes; ++k) {
+      const VertexAttribute& a = entry.attributes[k];
+      r.attributes[k] = {a.loc_index, a.bind_index, uint32_t(a.format_id), a.offset};
     }
-    r.n_enlaces = uint32_t(entrada.enlaces.size());
-    for (uint32_t k = 0; k < r.n_enlaces; ++k) {
-      r.zancadas[k] = entrada.enlaces[k].zancada;
+    r.n_bindings = uint32_t(entry.bindings.size());
+    for (uint32_t k = 0; k < r.n_bindings; ++k) {
+      r.strides[k] = entry.bindings[k].stride_bytes;
     }
-    indice_lista_.emplace(huella, SIZE_MAX);  // from this session: not recorded again
-    lista_sesion_.push_back(r);
-    ++lista_sin_guardar_;
-    ++anillo_a_lista_;
+    list_index_.emplace(fingerprint, SIZE_MAX);  // from this session: not recorded again
+    session_list_.push_back(r);
+    ++list_without_save_;
+    ++ring_to_list_;
   }
 
   // Ring only, on each submission: starts the thread once, as soon as the library is loaded.
-  void IntentarPrecalentar() {
-    if (precalentado_decidido_) {
+  void TryPrewarm() {
+    if (prewarmed_decided_) {
       return;
     }
-    if (lista_archivo_.empty() || cache_pipelines_ == VK_NULL_HANDLE ||
+    if (file_list_.empty() || cache_pipelines_ == VK_NULL_HANDLE ||
         !REXCVAR_GET(nfsmw_nativo_pipelines_precalentar)) {
-      precalentado_decidido_ = true;
-      if (!lista_archivo_.empty()) {
+      prewarmed_decided_ = true;
+      if (!file_list_.empty()) {
         REXLOG_INFO("[nativo] C6 precalentado (build 186): no se precalienta ({})",
                     cache_pipelines_ == VK_NULL_HANDLE ? "sin cache de pipelines"
                                                        : "nfsmw_nativo_pipelines_precalentar = false");
       }
       return;
     }
-    const ShadersNativos* biblioteca = BibliotecaActiva();
-    if (!biblioteca || !biblioteca->cargada() || layout_pipeline_ == VK_NULL_HANDLE) {
+    const NativeShaders* library = ActiveLibrary();
+    if (!library || !library->loaded() || layout_pipeline_ == VK_NULL_HANDLE) {
       return;  // not yet: check again on the next submission
     }
-    precalentado_decidido_ = true;
-    biblioteca_precalentado_ = biblioteca;
-    precalentado_eds_ = eds_modo_;  // the ring would not request those of another dynamic state mode
-    precalentado_inicio_ = std::chrono::steady_clock::now();
+    prewarmed_decided_ = true;
+    prewarmed_library_ = library;
+    prewarmed_eds_ = eds_mode_;  // the ring would not request those of another dynamic state mode
+    prewarmed_start_ = std::chrono::steady_clock::now();
     try {
-      precalentado_hilo_ = std::thread([this] { BuclePrecalentado(); });
+      prewarmed_thread_ = std::thread([this] { PrewarmedLoop(); });
       REXLOG_INFO("[nativo] C6 precalentado (build 186): hilo creado para {} pipelines de la lista",
-                  lista_archivo_.size());
+                  file_list_.size());
     } catch (const std::system_error& error) {
       REXLOG_WARN("[nativo] C6 precalentado (build 186): no se pudo crear el hilo ({}); sin precalentar", error.what());
     }
@@ -11923,542 +11923,542 @@ class DibujosVulkanImpl final : public DibujosVulkan {
   // The thread. It only reads lista_archivo_, the library, the layout and the cache; it writes
   // estado_lista_[i] before publishing precalentado_hasta_ = i + 1, and its atomic counters. Its modules
   // and render pass are its own and it destroys them when done.
-  void BuclePrecalentado() {
+  void PrewarmedLoop() {
     rex::thread::set_current_thread_name("NFSMW precalentado de pipelines");
-    int32_t prioridad = -1;
+    int32_t priority = -1;
 #if REX_PLATFORM_SWITCH
     // The lowest priority the system accepts, and never above the guest's (0x3B): compiling at the priority
     // threads are born with would take the core from the game and the ring. If none is accepted, nothing is
     // compiled.
-    for (const int32_t candidata : {0x3F, 0x3E, 0x3D, 0x3C, 0x3B}) {
-      if (RexSwitchSetCurrentThreadPriorityOk(int(candidata))) {
-        prioridad = candidata;
+    for (const int32_t candidate_item : {0x3F, 0x3E, 0x3D, 0x3C, 0x3B}) {
+      if (RexSwitchSetCurrentThreadPriorityOk(int(candidate_item))) {
+        priority = candidate_item;
         break;
       }
     }
-    if (prioridad < 0) {
+    if (priority < 0) {
       REXLOG_WARN("[nativo] C6 precalentado (build 186): el sistema no acepta ninguna prioridad de 0x3B a 0x3F: sin "
                   "precalentar");
-      precalentado_terminado_.store(true, std::memory_order_release);
+      prewarmed_finished_.store(true, std::memory_order_release);
       return;
     }
 #endif
-    precalentado_prioridad_.store(prioridad, std::memory_order_relaxed);
-    const ShadersNativos& biblioteca = *biblioteca_precalentado_;
-    std::unordered_map<uint64_t, VkShaderModule> modulos;  // (variante << 32) | numero
-    std::unordered_map<uint64_t, VkRenderPass> pases;       // by formats
-    const auto crear = [&](const uint32_t* spirv, size_t bytes) {
+    prewarmed_priority_.store(priority, std::memory_order_relaxed);
+    const NativeShaders& library = *prewarmed_library_;
+    std::unordered_map<uint64_t, VkShaderModule> modules;  // (variante << 32) | numero
+    std::unordered_map<uint64_t, VkRenderPass> passes;       // by formats
+    const auto create = [&](const uint32_t* spirv, size_t bytes) {
       VkShaderModuleCreateInfo info{};
       info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
       info.codeSize = bytes;
       info.pCode = spirv;
-      VkShaderModule modulo = VK_NULL_HANDLE;
-      if (dfn_.vkCreateShaderModule(device_, &info, nullptr, &modulo) != VK_SUCCESS) {
-        modulo = VK_NULL_HANDLE;
+      VkShaderModule spv_module = VK_NULL_HANDLE;
+      if (dfn_.vkCreateShaderModule(device_, &info, nullptr, &spv_module) != VK_SUCCESS) {
+        spv_module = VK_NULL_HANDLE;
       }
-      return modulo;
+      return spv_module;
     };
     // ModuloDe: the library's SPIR-V as is.
-    const auto normal = [&](const EntradaShader& e) {
-      auto it = modulos.find(e.numero);
-      if (it == modulos.end()) {
-        it = modulos.emplace(e.numero, crear(e.shader->spirv.data(), e.shader->spirv.size() * sizeof(uint32_t))).first;
+    const auto normal = [&](const ShaderEntry& e) {
+      auto it = modules.find(e.number);
+      if (it == modules.end()) {
+        it = modules.emplace(e.number, create(e.shader->spirv.data(), e.shader->spirv.size() * sizeof(uint32_t))).first;
       }
       return it->second;
     };
     // The pixel shader PipelineDe would choose, in the same order: the bright pass variants
     // (ModuloVariante), without color writes (ModuloSoloAlfa) and with early tests (ModuloZTemprana); the
     // latter two with the same fallback: if it cannot be pruned or patched, the normal one.
-    const auto pixel = [&](const ClavePipeline& clave, const EntradaShader& e) {
-      const uint32_t spec = clave.especializacion;
-      const uint32_t variante = (spec & kSpecResplandorNatural) ? 1
-                                : (spec & kSpecResplandorSuave) ? 2
-                                : (spec & kSpecSoloAlfa)        ? 3
-                                : (spec & kSpecZTemprana)       ? 4
+    const auto pixel = [&](const PipelineKey& key, const ShaderEntry& e) {
+      const uint32_t spec = key.specialization;
+      const uint32_t variant = (spec & kSpecGlowNatural) ? 1
+                                : (spec & kSpecGlowSmooth) ? 2
+                                : (spec & kSpecOnlyAlpha)        ? 3
+                                : (spec & kSpecZEarly)       ? 4
                                                                 : 0;
-      if (variante == 0) {
+      if (variant == 0) {
         return normal(e);
       }
-      const uint64_t clave_modulo = (uint64_t(variante) << 32) | (variante <= 2 ? 0xFFFFFFFFull : uint64_t(e.numero));
-      auto it = modulos.find(clave_modulo);
-      if (it == modulos.end()) {
-        VkShaderModule modulo = VK_NULL_HANDLE;
-        if (variante == 1) {
-          modulo = crear(kSpirvResplandorEnergia, sizeof(kSpirvResplandorEnergia));
-        } else if (variante == 2) {
-          modulo = crear(kSpirvResplandorSuave, sizeof(kSpirvResplandorSuave));
-        } else if (variante == 3) {
-          uint32_t quitadas = 0;
-          const std::vector<uint32_t> podado = PodarEscriturasDeColor(e.shader->spirv, quitadas);
-          if (!podado.empty()) {
-            modulo = crear(podado.data(), podado.size() * sizeof(uint32_t));
+      const uint64_t module_key = (uint64_t(variant) << 32) | (variant <= 2 ? 0xFFFFFFFFull : uint64_t(e.number));
+      auto it = modules.find(module_key);
+      if (it == modules.end()) {
+        VkShaderModule spv_module = VK_NULL_HANDLE;
+        if (variant == 1) {
+          spv_module = create(kSpirvGlowEnergy, sizeof(kSpirvGlowEnergy));
+        } else if (variant == 2) {
+          spv_module = create(kSpirvGlowSmooth, sizeof(kSpirvGlowSmooth));
+        } else if (variant == 3) {
+          uint32_t removed = 0;
+          const std::vector<uint32_t> pruned = PruneColorWrites(e.shader->spirv, removed);
+          if (!pruned.empty()) {
+            spv_module = create(pruned.data(), pruned.size() * sizeof(uint32_t));
           }
         } else {
-          const char* motivo = "";
-          const std::vector<uint32_t> parcheado = ConPruebasTempranas(e.shader->spirv, motivo);
-          if (!parcheado.empty()) {
-            modulo = crear(parcheado.data(), parcheado.size() * sizeof(uint32_t));
+          const char* reason = "";
+          const std::vector<uint32_t> patched = WithEarlyTests(e.shader->spirv, reason);
+          if (!patched.empty()) {
+            spv_module = create(patched.data(), patched.size() * sizeof(uint32_t));
           }
         }
-        it = modulos.emplace(clave_modulo, modulo).first;
+        it = modules.emplace(module_key, spv_module).first;
       }
-      if (it->second != VK_NULL_HANDLE || variante <= 2) {
+      if (it->second != VK_NULL_HANDLE || variant <= 2) {
         return it->second;
       }
       return normal(e);
     };
-    uint32_t hechos = 0, compilados = 0, sin_shader = 0, otro_modo = 0, fallidos = 0;
+    uint32_t done_items = 0, compilados = 0, without_shader = 0, other_mode = 0, failed_items = 0;
     uint64_t ns_compilados = 0;
-    const size_t n = lista_archivo_.size();
+    const size_t n = file_list_.size();
     for (size_t i = 0; i < n; ++i) {
-      if (precalentado_parar_.load(std::memory_order_relaxed)) {
+      if (prewarmed_stop_.load(std::memory_order_relaxed)) {
         break;
       }
-      const RegistroPipeline& r = lista_archivo_[i];
-      uint8_t estado = kListaFallido;
-      const EntradaShader* vs = r.clave.vs ? biblioteca.PorNumero(r.clave.vs - 1) : nullptr;
-      const EntradaShader* ps = r.clave.ps ? biblioteca.PorNumero(r.clave.ps - 1) : nullptr;
-      if (!vs || !vs->vertices || !vs->shader || vs->shader->huella != r.huella_vs ||
-          (r.clave.ps && (!ps || ps->vertices || !ps->shader || ps->shader->huella != r.huella_ps))) {
-        estado = kListaSinShader;
-        ++sin_shader;
-      } else if (r.clave.relleno2 != precalentado_eds_) {
-        estado = kListaOtroModo;
-        ++otro_modo;
+      const PipelineRecord& r = file_list_[i];
+      uint8_t state = kFailedList;
+      const ShaderEntry* vs = r.key.vs ? library.ByNumber(r.key.vs - 1) : nullptr;
+      const ShaderEntry* ps = r.key.ps ? library.ByNumber(r.key.ps - 1) : nullptr;
+      if (!vs || !vs->vertices || !vs->shader || vs->shader->fingerprint != r.vs_fingerprint ||
+          (r.key.ps && (!ps || ps->vertices || !ps->shader || ps->shader->fingerprint != r.ps_fingerprint))) {
+        state = kListWithoutShader;
+        ++without_shader;
+      } else if (r.key.fill2 != prewarmed_eds_) {
+        state = kModeOtherList;
+        ++other_mode;
       } else {
-        const VkShaderModule modulo_vs = normal(*vs);
-        const VkShaderModule modulo_ps = r.clave.ps ? pixel(r.clave, *ps) : VK_NULL_HANDLE;
-        const uint64_t clave_pase = XXH3_64bits(r.clave.formatos, sizeof(r.clave.formatos));
-        auto it_pase = pases.find(clave_pase);
-        if (it_pase == pases.end()) {
-          it_pase = pases.emplace(clave_pase, CrearPase(r.clave.formatos, kCargaLeer)).first;
+        const VkShaderModule vs_module = normal(*vs);
+        const VkShaderModule ps_module = r.key.ps ? pixel(r.key, *ps) : VK_NULL_HANDLE;
+        const uint64_t pass_key = XXH3_64bits(r.key.formats, sizeof(r.key.formats));
+        auto it_pass = passes.find(pass_key);
+        if (it_pass == passes.end()) {
+          it_pass = passes.emplace(pass_key, CreatePass(r.key.formats, kReadLoad)).first;
         }
-        EntradaVertices entrada;
-        for (uint32_t k = 0; k < r.n_atributos; ++k) {
-          const AtributoRegistro& a = r.atributos[k];
-          entrada.atributos.push_back({a.ubicacion, a.enlace, VkFormat(a.formato), a.offset});
+        VertexInput entry;
+        for (uint32_t k = 0; k < r.n_attributes; ++k) {
+          const AttributeRecord& a = r.attributes[k];
+          entry.attributes.push_back({a.loc_index, a.bind_index, VkFormat(a.format_id), a.offset});
         }
-        for (uint32_t k = 0; k < r.n_enlaces; ++k) {
-          entrada.enlaces.push_back({0, r.zancadas[k]});
+        for (uint32_t k = 0; k < r.n_bindings; ++k) {
+          entry.bindings.push_back({0, r.strides[k]});
         }
-        if (modulo_vs != VK_NULL_HANDLE && (!r.clave.ps || modulo_ps != VK_NULL_HANDLE) &&
-            it_pase->second != VK_NULL_HANDLE) {
+        if (vs_module != VK_NULL_HANDLE && (!r.key.ps || ps_module != VK_NULL_HANDLE) &&
+            it_pass->second != VK_NULL_HANDLE) {
           VkPipeline pipeline = VK_NULL_HANDLE;
           uint32_t n_colores = 0;
           const auto t0 = std::chrono::steady_clock::now();
-          const VkResult resultado =
-              CrearPipelineVulkan(r.clave, entrada, modulo_vs, modulo_ps, it_pase->second, false, pipeline, n_colores);
+          const VkResult result =
+              CreateVulkanPipeline(r.key, entry, vs_module, ps_module, it_pass->second, false, pipeline, n_colores);
           const uint64_t ns = uint64_t(
               std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count());
-          if (resultado == VK_SUCCESS && pipeline != VK_NULL_HANDLE) {
+          if (result == VK_SUCCESS && pipeline != VK_NULL_HANDLE) {
             dfn_.vkDestroyPipeline(device_, pipeline, nullptr);
-            estado = kListaPrecalentado;
-            ++hechos;
+            state = kPrewarmedList;
+            ++done_items;
             if (ns >= kNsCompilado) {
               ++compilados;
               ns_compilados += ns;
             }
           } else {
-            ++fallidos;
+            ++failed_items;
           }
         } else {
-          ++fallidos;
+          ++failed_items;
         }
       }
-      estado_lista_[i] = estado;
-      precalentado_hechos_.store(hechos, std::memory_order_relaxed);
-      precalentado_compilados_.store(compilados, std::memory_order_relaxed);
-      precalentado_ns_compilados_.store(ns_compilados, std::memory_order_relaxed);
-      precalentado_sin_shader_.store(sin_shader, std::memory_order_relaxed);
-      precalentado_otro_modo_.store(otro_modo, std::memory_order_relaxed);
-      precalentado_fallidos_.store(fallidos, std::memory_order_relaxed);
-      precalentado_hasta_.store(i + 1, std::memory_order_release);
+      list_state_[i] = state;
+      prewarmed_done_.store(done_items, std::memory_order_relaxed);
+      prewarmed_compiled_.store(compilados, std::memory_order_relaxed);
+      prewarmed_compiled_ns_.store(ns_compilados, std::memory_order_relaxed);
+      prewarmed_without_shader_.store(without_shader, std::memory_order_relaxed);
+      prewarmed_other_mode_.store(other_mode, std::memory_order_relaxed);
+      prewarmed_failed_.store(failed_items, std::memory_order_relaxed);
+      prewarmed_until_.store(i + 1, std::memory_order_release);
     }
-    for (const auto& [clave, modulo] : modulos) {
-      if (modulo != VK_NULL_HANDLE) {
-        dfn_.vkDestroyShaderModule(device_, modulo, nullptr);
+    for (const auto& [key, spv_module] : modules) {
+      if (spv_module != VK_NULL_HANDLE) {
+        dfn_.vkDestroyShaderModule(device_, spv_module, nullptr);
       }
     }
-    for (const auto& [clave, pase] : pases) {
-      if (pase != VK_NULL_HANDLE) {
-        dfn_.vkDestroyRenderPass(device_, pase, nullptr);
+    for (const auto& [key, pass] : passes) {
+      if (pass != VK_NULL_HANDLE) {
+        dfn_.vkDestroyRenderPass(device_, pass, nullptr);
       }
     }
-    const double segundos =
-        std::chrono::duration<double>(std::chrono::steady_clock::now() - precalentado_inicio_).count();
+    const double secs =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - prewarmed_start_).count();
     REXLOG_INFO("[nativo] C6 precalentado (build 186): {} en {:.1f} s, prioridad {:#x}: {} de {} pipelines "
                 "precalentados, {} compilados de verdad ({:.0f} ms, {:.1f} ms cada uno; el resto ya estaba en la cache), "
                 "{} saltados porque la biblioteca ya no tiene sus shaders, {} de otro modo de estado dinamico y {} "
                 "fallidos",
-                precalentado_parar_.load(std::memory_order_relaxed) ? "parado" : "terminado", segundos, prioridad,
-                hechos, n, compilados, double(ns_compilados) / 1e6,
-                compilados ? double(ns_compilados) / 1e6 / double(compilados) : 0.0, sin_shader, otro_modo, fallidos);
-    precalentado_terminado_.store(true, std::memory_order_release);
+                prewarmed_stop_.load(std::memory_order_relaxed) ? "parado" : "terminado", secs, priority,
+                done_items, n, compilados, double(ns_compilados) / 1e6,
+                compilados ? double(ns_compilados) / 1e6 / double(compilados) : 0.0, without_shader, other_mode, failed_items);
+    prewarmed_finished_.store(true, std::memory_order_release);
   }
 
   // Ring only, every 10 s if anything changed: the thread's progress, what the ring had to create, and
   // the guard (see above).
-  void InformePrecalentado(std::chrono::steady_clock::time_point ahora) {
-    if (ahora - precalentado_informe_ < std::chrono::seconds(10)) {
+  void PrewarmedReport(std::chrono::steady_clock::time_point now_time) {
+    if (now_time - prewarmed_report_ < std::chrono::seconds(10)) {
       return;
     }
-    precalentado_informe_ = ahora;
-    if (!precalentado_diferencia_ && anillo_precalentados_ >= 8 &&
-        anillo_precalentados_lentos_ * 2 >= anillo_precalentados_) {
-      precalentado_diferencia_ = true;
-      precalentado_parar_.store(true, std::memory_order_relaxed);
+    prewarmed_report_ = now_time;
+    if (!prewarmed_difference_ && prewarmed_ring_ >= 8 &&
+        slow_prewarmed_ring_ * 2 >= prewarmed_ring_) {
+      prewarmed_difference_ = true;
+      prewarmed_stop_.store(true, std::memory_order_relaxed);
       REXLOG_ERROR("[nativo] C6 precalentado (build 186): DIFERENCIA: de {} pipelines que el anillo pidio ya "
                    "precalentados, {} tardaron como uno compilado (20 ms o mas): lo que precalienta el hilo no es lo "
                    "que pide el anillo. Se para el hilo; no cambia nada mas",
-                   anillo_precalentados_, anillo_precalentados_lentos_);
+                   prewarmed_ring_, slow_prewarmed_ring_);
     }
-    const size_t hasta = precalentado_hasta_.load(std::memory_order_acquire);
-    const bool terminado = precalentado_terminado_.load(std::memory_order_acquire);
-    const uint64_t cambios = uint64_t(hasta) + anillo_precalentados_ + anillo_de_lista_ + anillo_nuevos_ +
-                             (terminado ? 1 : 0) + (precalentado_decidido_ ? 1 : 0);
-    if (cambios == precalentado_cambios_previos_) {
+    const size_t hasta = prewarmed_until_.load(std::memory_order_acquire);
+    const bool done_flag = prewarmed_finished_.load(std::memory_order_acquire);
+    const uint64_t changes = uint64_t(hasta) + prewarmed_ring_ + list_ring_ + new_ring_ +
+                             (done_flag ? 1 : 0) + (prewarmed_decided_ ? 1 : 0);
+    if (changes == prewarmed_changes_previous_) {
       return;
     }
-    precalentado_cambios_previos_ = cambios;
+    prewarmed_changes_previous_ = changes;
     const auto media = [](uint64_t ns, uint64_t k) { return k ? double(ns) / double(k) / 1e6 : 0.0; };
-    const uint32_t compilados = precalentado_compilados_.load(std::memory_order_relaxed);
-    NFSMW_INFORME_ANILLO(
+    const uint32_t compilados = prewarmed_compiled_.load(std::memory_order_relaxed);
+    NFSMW_RING_REPORT(
         "[nativo] C6 precalentado de pipelines (build 186): lista de {}; hilo {} (prioridad {:#x}): {} recorridos, {} "
         "precalentados, {} compilados de verdad ({:.0f} ms), {} sin sus shaders, {} de otro modo, {} fallidos | el "
         "anillo creo {} de la lista ya precalentados ({:.1f} ms de media, {} lentos), {} de la lista sin precalentar "
         "({:.1f} ms de media) y {} nuevos ({:.1f} ms de media; {} a la lista)",
-        lista_archivo_.size(),
-        !precalentado_hilo_.joinable() ? (precalentado_decidido_ ? "sin lanzar" : "esperando a la biblioteca")
-        : terminado                    ? (precalentado_parar_.load(std::memory_order_relaxed) ? "parado" : "terminado")
+        file_list_.size(),
+        !prewarmed_thread_.joinable() ? (prewarmed_decided_ ? "sin lanzar" : "esperando a la biblioteca")
+        : done_flag                    ? (prewarmed_stop_.load(std::memory_order_relaxed) ? "parado" : "terminado")
                                        : "en marcha",
-        uint32_t(precalentado_prioridad_.load(std::memory_order_relaxed)), hasta,
-        precalentado_hechos_.load(std::memory_order_relaxed), compilados,
-        double(precalentado_ns_compilados_.load(std::memory_order_relaxed)) / 1e6,
-        precalentado_sin_shader_.load(std::memory_order_relaxed), precalentado_otro_modo_.load(std::memory_order_relaxed),
-        precalentado_fallidos_.load(std::memory_order_relaxed), anillo_precalentados_,
-        media(ns_anillo_precalentados_, anillo_precalentados_), anillo_precalentados_lentos_, anillo_de_lista_,
-        media(ns_anillo_de_lista_, anillo_de_lista_), anillo_nuevos_, media(ns_anillo_nuevos_, anillo_nuevos_),
-        anillo_a_lista_);
+        uint32_t(prewarmed_priority_.load(std::memory_order_relaxed)), hasta,
+        prewarmed_done_.load(std::memory_order_relaxed), compilados,
+        double(prewarmed_compiled_ns_.load(std::memory_order_relaxed)) / 1e6,
+        prewarmed_without_shader_.load(std::memory_order_relaxed), prewarmed_other_mode_.load(std::memory_order_relaxed),
+        prewarmed_failed_.load(std::memory_order_relaxed), prewarmed_ring_,
+        media(prewarmed_ring_ns_, prewarmed_ring_), slow_prewarmed_ring_, list_ring_,
+        media(list_ring_ns_, list_ring_), new_ring_, media(new_ring_ns_, new_ring_),
+        ring_to_list_);
   }
 
-  void PararPrecalentado() {
-    precalentado_parar_.store(true, std::memory_order_relaxed);
-    if (precalentado_hilo_.joinable()) {
-      precalentado_hilo_.join();  // at most, as long as the pipeline being compiled takes
+  void StopPrewarmed() {
+    prewarmed_stop_.store(true, std::memory_order_relaxed);
+    if (prewarmed_thread_.joinable()) {
+      prewarmed_thread_.join();  // at most, as long as the pipeline being compiled takes
     }
   }
 
-  void DestruirImagen(ImagenNativa& imagen) {
-    if (imagen.vista != VK_NULL_HANDLE) dfn_.vkDestroyImageView(device_, imagen.vista, nullptr);
-    if (imagen.imagen != VK_NULL_HANDLE) dfn_.vkDestroyImage(device_, imagen.imagen, nullptr);
+  void DestroyImage(NativeImage& img) {
+    if (img.view != VK_NULL_HANDLE) dfn_.vkDestroyImageView(device_, img.view, nullptr);
+    if (img.img != VK_NULL_HANDLE) dfn_.vkDestroyImage(device_, img.img, nullptr);
     // The pool chunk is returned after destroying the image that used it, and in that case `memoria` is
     // NULL on purpose: the memory belongs to a shared slab and is not freed on its own.
-    if (imagen.pool_bloque != 0xFFFFFFFFu) pool_texturas_.Liberar(imagen.pool_bloque);
-    if (imagen.memoria != VK_NULL_HANDLE) dfn_.vkFreeMemory(device_, imagen.memoria, nullptr);
-    imagen = ImagenNativa{};
+    if (img.block_pool != 0xFFFFFFFFu) textures_pool_.Dispose(img.block_pool);
+    if (img.mem != VK_NULL_HANDLE) dfn_.vkFreeMemory(device_, img.mem, nullptr);
+    img = NativeImage{};
   }
 
-  struct Monton {
-    uint32_t capacidad = 0;
-    uint32_t siguiente = 1;
-    std::vector<uint32_t> libres;
+  struct Heap {
+    uint32_t cap_bytes = 0;
+    uint32_t next = 1;
+    std::vector<uint32_t> free_items;
   };
 
-  const VulkanDevice* dispositivo_;
+  const VulkanDevice* vk_device_;
   const VulkanDevice::Functions& dfn_;
   VkDevice device_;
-  rex::memory::Memory* memoria_;
-  ContextoDestinos* contexto_;
-  FnDireccionBufer direccion_bufer_ = nullptr;
-  FnCopiarImagen copiar_imagen_ = nullptr;  // resolved faces of the dynamic cubemaps
+  rex::memory::Memory* mem_;
+  TargetsContext* contexto_;
+  BufferAddressFn buffer_address_ = nullptr;
+  CopyImageFn copy_image_ = nullptr;  // resolved faces of the dynamic cubemaps
 
-  VkBuffer subida_ = VK_NULL_HANDLE;
-  VkDeviceMemory subida_memoria_ = VK_NULL_HANDLE;
-  uint32_t subida_tipo_ = UINT32_MAX;
-  VkDeviceSize subida_tamano_real_ = 0;
-  uint8_t* subida_datos_ = nullptr;
-  VkDeviceAddress subida_direccion_ = 0;
-  VkDeviceSize subida_usado_ = 0;
-  bool subida_coherente_ = false;
-  uint64_t epoca_subida_ = 0;
-  uint64_t fotograma_ = 0;
+  VkBuffer upload_ = VK_NULL_HANDLE;
+  VkDeviceMemory memory_upload_ = VK_NULL_HANDLE;
+  uint32_t type_upload_ = UINT32_MAX;
+  VkDeviceSize real_size_upload_ = 0;
+  uint8_t* data_upload_ = nullptr;
+  VkDeviceAddress address_upload_ = 0;
+  VkDeviceSize used_upload_ = 0;
+  bool coherent_upload_ = false;
+  uint64_t upload_epoch_ = 0;
+  uint64_t frame_ = 0;
   // Fast untiling and its guard (see LeerNivel).
-  static constexpr uint32_t kNivelesAComprobar = 200;  // it used to be 2000
-  static constexpr uint32_t kComprobarUnaDeCada = 64;   // after the first ones, by sampling
-  uint64_t niveles_vistos_ = 0;
-  uint64_t ordenes_vistos_ = 0;
-  int mosaico_rapido_ = -1;
-  uint32_t niveles_comprobados_ = 0;
-  uint32_t ordenes_comprobados_ = 0;
-  std::vector<uint8_t> comprobacion_mosaico_;
+  static constexpr uint32_t kLevelsToCheck = 200;  // it used to be 2000
+  static constexpr uint32_t kCheckEvery = 64;   // after the first ones, by sampling
+  uint64_t seen_levels_ = 0;
+  uint64_t seen_commands_ = 0;
+  int fast_tile_ = -1;
+  uint32_t checked_levels_ = 0;
+  uint32_t checked_commands_ = 0;
+  std::vector<uint8_t> tile_check_;
   // Texture check budget (see PrepararTextura).
-  static constexpr uint32_t kAplazamientoMax = 8;
-  int32_t presupuesto_huellas_ = -1;
-  uint64_t fotograma_huellas_ = UINT64_MAX;
-  uint64_t bytes_huella_fotograma_ = 0;
+  static constexpr uint32_t kDeferralMax = 8;
+  int32_t fingerprints_budget_ = -1;
+  uint64_t fingerprints_frame_ = UINT64_MAX;
+  uint64_t frame_fingerprint_bytes_ = 0;
   // Sampled recheck of stable textures (see PrepararTextura and HuellaMuestra).
-  static constexpr uint64_t kMuestrasAComprobar = 3000;  // the first ones, with both hashes: the guard
-  int32_t muestreo_huellas_ = -1;      // -1 cvar not read; 0 off; N: 1 in N rechecks is full
-  uint64_t muestras_comprobadas_ = 0;  // stable rechecks with both hashes, since start-up
-  uint64_t muestras_con_las_dos_ = 0;  // the same, since the last report line
-  uint64_t muestras_aciertos_ = 0;     // decided on the sample alone
-  uint64_t muestras_distintas_ = 0;    // the sample changed and the full path followed
-  uint64_t bytes_muestra_ = 0;
-  uint64_t bytes_ahorrados_muestra_ = 0;
-  std::chrono::steady_clock::time_point informe_muestreo_{};
+  static constexpr uint64_t kSamplesToCheck = 3000;  // the first ones, with both hashes: the guard
+  int32_t fingerprints_sampling_ = -1;      // -1 cvar not read; 0 off; N: 1 in N rechecks is full
+  uint64_t checked_samples_ = 0;  // stable rechecks with both hashes, since start-up
+  uint64_t samples_with_two_ = 0;  // the same, since the last report line
+  uint64_t hits_samples_ = 0;     // decided on the sample alone
+  uint64_t distinct_samples_ = 0;    // the sample changed and the full path followed
+  uint64_t sample_bytes_ = 0;
+  uint64_t sample_saved_bytes_ = 0;
+  std::chrono::steady_clock::time_point sampling_report_{};
   // Vertex copies on a separate thread (EncolarCopia). Power-of-2 capacity.
-  const bool copias_activas_ = REXCVAR_GET(nfsmw_nativo_subidas_hilo);
-  std::array<TrabajoCopia, 8192> copias_{};
-  std::atomic<size_t> copias_escritas_{0};
+  const bool active_copies_ = REXCVAR_GET(nfsmw_nativo_subidas_hilo);
+  std::array<CopyJob, 8192> copies_{};
+  std::atomic<size_t> written_copies_{0};
   // How many copies are done, whether by the thread or the ring (see EsperarSubidas). Outside
   // EsperarSubidas they finish in order, and then it is also the index of the first one not done.
-  std::atomic<size_t> copias_hechas_{0};
-  bool copias_durmiendo_ = false;   // under copias_mutex_: the copy thread sleeps or is about to
-  bool copias_esperando_ = false;   // under copias_mutex_: the ring waits in EsperarSubidas
-  std::mutex copias_mutex_;
-  std::condition_variable copias_cv_;
-  std::condition_variable copias_hechas_cv_;
-  bool copias_parar_ = false;  // con copias_mutex_
-  std::thread copias_hilo_;
-  uint64_t copias_en_linea_ = 0;
-  uint64_t esperas_copias_ = 0;
-  uint64_t ns_esperando_copias_ = 0;
-  std::atomic<size_t> copias_progreso_{0};  // copies done by the thread, one by one (diagnostic)
-  std::thread::id copias_productor_;
-  bool copias_otro_hilo_avisado_ = false;
+  std::atomic<size_t> done_copies_{0};
+  bool sleeping_copies_ = false;   // under copias_mutex_: the copy thread sleeps or is about to
+  bool waiting_copies_ = false;   // under copias_mutex_: the ring waits in EsperarSubidas
+  std::mutex mutex_copies_;
+  std::condition_variable cv_copies_;
+  std::condition_variable cv_done_copies_;
+  bool stop_copies_ = false;  // con copias_mutex_
+  std::thread thread_copies_;
+  uint64_t copies_in_line_ = 0;
+  uint64_t copies_waits_ = 0;
+  uint64_t copies_waiting_ns_ = 0;
+  std::atomic<size_t> progress_copies_{0};  // copies done by the thread, one by one (diagnostic)
+  std::thread::id producer_copies_;
+  bool warned_thread_other_copies_ = false;
   // The ring's help (nfsmw_nativo_subidas_ayuda) and its guard. See EsperarSubidas.
-  const bool copias_ayuda_pedida_ = REXCVAR_GET(nfsmw_nativo_subidas_ayuda);
-  int32_t copias_fase_ = 0;         // FaseCopias; ring only
-  bool copias_sin_hilo_ = false;    // off after a DIFERENCIA: copies go on the ring; ring only
-  std::atomic<size_t> copias_tomadas_{0};  // how many were taken, in order, by the thread or the ring (with CAS)
-  std::mutex copias_trozo_mutex_;          // held by the thread while it copies what it took (lends priority)
-  std::array<std::atomic<uint32_t>, 8192> copias_marcas_{};  // index + 1 of the last copy done in each slot
-  std::atomic<uint64_t> copias_hilo_n_{0};  // copies done by the thread, for the report
-  std::atomic<uint64_t> copias_hilo_bytes_{0};
-  size_t copias_verificadas_ = 0;  // marks checked up to here; ring only
-  uint64_t copias_comprobadas_ = 0;
-  uint64_t copias_esperas_mirando_ = 0;
-  uint64_t copias_ayudadas_ = 0;
-  uint64_t copias_bytes_ayudados_ = 0;
-  uint64_t copias_ns_ayudando_ = 0;
-  uint64_t copias_diferencias_ = 0;
-  struct InformeCopiasCifras {  // the last 10 s (InformeCopias); ring only
-    uint64_t encoladas = 0, bytes_encolados = 0, en_linea = 0, bytes_en_linea = 0;
-    uint64_t ayudadas = 0, bytes_ayudados = 0, ns_ayudando = 0, esperas_con_ayuda = 0;
-    uint64_t esperas = 0, sin_tomar = 0, esperas_trozo = 0, ns_trozo = 0, ns_trozo_peor = 0;
-    uint64_t esperas_enteras = 0, ns_espera = 0, ns_espera_peor = 0, comprobadas = 0;
+  const bool requested_help_copies_ = REXCVAR_GET(nfsmw_nativo_subidas_ayuda);
+  int32_t phase_copies_ = 0;         // FaseCopias; ring only
+  bool copies_without_thread_ = false;    // off after a DIFERENCIA: copies go on the ring; ring only
+  std::atomic<size_t> taken_copies_{0};  // how many were taken, in order, by the thread or the ring (with CAS)
+  std::mutex mutex_chunk_copies_;          // held by the thread while it copies what it took (lends priority)
+  std::array<std::atomic<uint32_t>, 8192> marks_copies_{};  // index + 1 of the last copy done in each slot
+  std::atomic<uint64_t> n_thread_copies_{0};  // copies done by the thread, for the report
+  std::atomic<uint64_t> thread_copies_bytes_{0};
+  size_t verified_copies_ = 0;  // marks checked up to here; ring only
+  uint64_t checked_copies_ = 0;
+  uint64_t peeking_waits_copies_ = 0;
+  uint64_t assisted_copies_ = 0;
+  uint64_t assisted_bytes_copies_ = 0;
+  uint64_t helping_ns_copies_ = 0;
+  uint64_t differences_copies_ = 0;
+  struct CopiesReportFigures {  // the last 10 s (InformeCopias); ring only
+    uint64_t queued = 0, queued_bytes = 0, in_line = 0, in_line_bytes = 0;
+    uint64_t assisted = 0, assisted_bytes = 0, helping_ns = 0, waits_with_help = 0;
+    uint64_t waits = 0, without_take = 0, chunk_waits = 0, chunk_ns = 0, worst_chunk_ns = 0;
+    uint64_t ints_waits = 0, wait_ns = 0, worst_wait_ns = 0, checked = 0;
   };
-  InformeCopiasCifras copias_inf_{};
-  std::chrono::steady_clock::time_point copias_informe_{};
-  uint64_t copias_hilo_n_previo_ = 0;
-  uint64_t copias_hilo_bytes_previo_ = 0;
-  struct BuferSubida {
-    VkBuffer bufer = VK_NULL_HANDLE;
-    VkDeviceMemory memoria = VK_NULL_HANDLE;
-    VkDeviceSize tamano_real = 0;
-    uint8_t* datos = nullptr;
-    VkDeviceAddress direccion = 0;
+  CopiesReportFigures inf_copies_{};
+  std::chrono::steady_clock::time_point copies_report_{};
+  uint64_t n_thread_copies_previous_ = 0;
+  uint64_t thread_copies_previous_bytes_ = 0;
+  struct UploadBuffer {
+    VkBuffer buf = VK_NULL_HANDLE;
+    VkDeviceMemory mem = VK_NULL_HANDLE;
+    VkDeviceSize real_size = 0;
+    uint8_t* payload = nullptr;
+    VkDeviceAddress address = 0;
   };
   // One per work slot (there are 3). With fewer than there are slots, two slots would share a buffer and
   // the CPU would write over what the GPU is still reading.
-  std::array<BuferSubida, kRanurasDeTrabajo> subidas_{};  // subida_* are the current slot's
+  std::array<UploadBuffer, kJobSlots> uploads_{};  // subida_* are the current slot's
   // Separate shared constants, CPU-cached (nfsmw_nativo_compartidas_cache).
-  std::array<BuferSubida, kRanurasDeTrabajo> compartidas_bufs_{};
-  bool compartidas_aparte_ = false;
-  bool compartidas_coherente_ = true;
-  uint32_t compartidas_tipo_ = 0;
-  uint8_t* compartidas_datos_ = nullptr;
-  VkDeviceMemory compartidas_memoria_ = VK_NULL_HANDLE;
-  VkDeviceSize compartidas_tamano_real_ = 0;
-  VkDeviceSize compartidas_usado_ = 0;
-  uint64_t compartidas_bytes_publicados_ = 0;
+  std::array<UploadBuffer, kJobSlots> bufs_shared_{};
+  bool separately_shared_ = false;
+  bool coherent_shared_ = true;
+  uint32_t type_shared_ = 0;
+  uint8_t* data_shared_ = nullptr;
+  VkDeviceMemory memory_shared_ = VK_NULL_HANDLE;
+  VkDeviceSize real_size_shared_ = 0;
+  VkDeviceSize used_shared_ = 0;
+  uint64_t published_bytes_shared_ = 0;
 
   std::array<VkDescriptorSetLayout, 4> layouts_{};
   VkDescriptorPool pool_ = VK_NULL_HANDLE;
   std::array<VkDescriptorSet, 4> sets_{};
   VkPipelineLayout layout_pipeline_ = VK_NULL_HANDLE;
   // Set 4, the constants through dynamic UBOs. One set per upload slot (each one is a VkBuffer).
-  bool usar_ubo_ = false;
-  VkDeviceSize alineacion_ubo_ = 256;
+  bool use_ubo_ = false;
+  VkDeviceSize ubo_alignment_ = 256;
   VkDescriptorSetLayout layout_ubo_ = VK_NULL_HANDLE;
   VkDescriptorPool pool_ubo_ = VK_NULL_HANDLE;
-  std::array<VkDescriptorSet, kRanurasDeTrabajo> sets_ubo_{};  // one per work slot
-  uint32_t ranura_actual_ = 0;
-  bool ubo_enlazado_ = false;
-  uint32_t ranura_ubo_enlazada_ = UINT32_MAX;
-  std::array<uint32_t, 3> offsets_ubo_enlazados_{};
+  std::array<VkDescriptorSet, kJobSlots> sets_ubo_{};  // one per work slot
+  uint32_t current_slot_ = 0;
+  bool bound_ubo_ = false;
+  uint32_t bound_ubo_slot_ = UINT32_MAX;
+  std::array<uint32_t, 3> bound_offsets_ubo_{};
   // Set 4 by differences (ControlSet4, InformeSet4).
-  std::array<uint64_t, 8> set4_cambios_{};  // binds by what changes: bit 0 VS, bit 1 PS, bit 2 shared
-  uint64_t set4_primeros_ = 0;              // binds after a new command buffer, a new slot or the sky
-  uint64_t set4_dibujos_ = 0;
-  std::array<uint64_t, 3> resubidas_vs_{};  // constants uploaded again: by generation, by epoch, because they grow
-  std::array<uint64_t, 3> resubidas_ps_{};
-  std::chrono::steady_clock::time_point set4_informe_{};
-  std::chrono::steady_clock::time_point set4_inicio_alternancia_ = std::chrono::steady_clock::now();
-  bool set4_pedido_ = true;
-  bool set4_pedido_anotado_ = false;
+  std::array<uint64_t, 8> set4_changes_{};  // binds by what changes: bit 0 VS, bit 1 PS, bit 2 shared
+  uint64_t set4_first_ = 0;              // binds after a new command buffer, a new slot or the sky
+  uint64_t set4_draws_ = 0;
+  std::array<uint64_t, 3> vs_reuploaded_{};  // constants uploaded again: by generation, by epoch, because they grow
+  std::array<uint64_t, 3> ps_reuploaded_{};
+  std::chrono::steady_clock::time_point set4_report_{};
+  std::chrono::steady_clock::time_point set4_toggle_start_ = std::chrono::steady_clock::now();
+  bool set4_request_ = true;
+  bool set4_tracked_request_ = false;
 #if REX_PLATFORM_SWITCH
-  bool set4_diferencia_avisada_ = false;
-  uint64_t set4_nvk_previo_[9] = {};  // NVK counts at the previous report
+  bool set4_warned_difference_ = false;
+  uint64_t set4_nvk_previous_[9] = {};  // NVK counts at the previous report
 #endif
   // The draw path in NVK (ControlDibujoNvk and InformeDibujoNvk). Ring only.
-  bool nvk_precarga_app_ = false;  // hand the pipeline to NVK after PipelineDe
-  bool nvk_dibujo_anotado_ = false;
-  bool nvk_mejoras_pedidas_ = true;
-  bool nvk_apagado_avisado_[5] = {};
-  std::chrono::steady_clock::time_point nvk_dibujo_inicio_ = std::chrono::steady_clock::now();
-  std::chrono::steady_clock::time_point nvk_informe_{};
-  uint64_t nvk_partes_previas_[16][2] = {};
-  uint64_t nvk_cuentas_previas_[13] = {};
-  uint64_t nvk_mejoras_previas_[5][4] = {};
+  bool nvk_app_preload_ = false;  // hand the pipeline to NVK after PipelineDe
+  bool nvk_tracked_draw_ = false;
+  bool nvk_requested_improvements_ = true;
+  bool nvk_warned_disabled_[5] = {};
+  std::chrono::steady_clock::time_point nvk_start_draw_ = std::chrono::steady_clock::now();
+  std::chrono::steady_clock::time_point nvk_report_{};
+  uint64_t nvk_parts_previous_[16][2] = {};
+  uint64_t nvk_counts_previous_[13] = {};
+  uint64_t nvk_improvements_previous_[5][4] = {};
   int32_t alternar_ubo_s_ = 0;
-  uint64_t envios_ = 0;
-  uint64_t envios_ubo_ = 0;
-  std::chrono::steady_clock::time_point inicio_ubo_ = std::chrono::steady_clock::now();
-  std::array<Monton, 4> montones_{};
-  std::array<ImagenNativa, 3> vacias_{};
-  VkSampler sampler_vacio_ = VK_NULL_HANDLE;
-  bool vacias_preparadas_ = false;
+  uint64_t sends_ = 0;
+  uint64_t ubo_sends_ = 0;
+  std::chrono::steady_clock::time_point ubo_start_ = std::chrono::steady_clock::now();
+  std::array<Heap, 4> heaps_{};
+  std::array<NativeImage, 3> empty_{};
+  VkSampler empty_sampler_ = VK_NULL_HANDLE;
+  bool prepared_empty_ = false;
 
-  std::unordered_map<const EntradaShader*, VkShaderModule> modulos_;
-  std::array<VkShaderModule, 3> modulos_variantes_{};  // 1 natural, 2 soft
-  std::array<bool, 3> modulos_variantes_creados_{};
-  int resplandor_anotado_ = 0;
-  std::unordered_map<uint64_t, std::pair<ClavePipeline, VkPipeline>> pipelines_;
+  std::unordered_map<const ShaderEntry*, VkShaderModule> modules_;
+  std::array<VkShaderModule, 3> variants_modules_{};  // 1 natural, 2 soft
+  std::array<bool, 3> created_variants_modules_{};
+  int glow_tracked_ = 0;
+  std::unordered_map<uint64_t, std::pair<PipelineKey, VkPipeline>> pipelines_;
   // One-entry shortcut for PipelineDe (see the comment there).
-  ClavePipeline ultima_clave_{};
-  VkPipeline ultima_pipeline_ = VK_NULL_HANDLE;
-  bool ultima_clave_valida_ = false;
+  PipelineKey last_key_{};
+  VkPipeline last_pipeline_ = VK_NULL_HANDLE;
+  bool last_valid_key_ = false;
   // direct cache in front of pipelines_ (nfsmw_nativo_pipelines_directa).
-  struct CasillaPipeline {
-    ClavePipeline clave{};
+  struct PipelineSlot {
+    PipelineKey key{};
     VkPipeline pipeline = VK_NULL_HANDLE;  // VK_NULL_HANDLE = casilla vacia
   };
-  static constexpr size_t kCasillasPipeline = 256;  // potencia de 2; 256 x 88 bytes = 22 KB contiguos
-  std::array<CasillaPipeline, kCasillasPipeline> casillas_pipeline_{};
-  bool pipelines_directa_ = true;           // the cvar, once per frame
-  bool pipelines_directa_apagada_ = false;  // the guard saw a difference
-  uint64_t pipelines_directa_aciertos_ = 0;
-  uint64_t pipelines_directa_fallos_ = 0;
-  uint64_t pipelines_directa_comprobadas_ = 0;
-  uint64_t pipelines_directa_aciertos_previos_ = 0;
-  uint64_t pipelines_directa_fallos_previos_ = 0;
-  std::chrono::steady_clock::time_point pipelines_directa_informe_{};
-  static constexpr uint64_t kPipelinesAComprobar = 200000;
+  static constexpr size_t kPipelineSlots = 256;  // potencia de 2; 256 x 88 bytes = 22 KB contiguos
+  std::array<PipelineSlot, kPipelineSlots> pipeline_slots_{};
+  bool direct_pipelines_ = true;           // the cvar, once per frame
+  bool direct_pipelines_disabled_ = false;  // the guard saw a difference
+  uint64_t hits_direct_pipelines_ = 0;
+  uint64_t failures_direct_pipelines_ = 0;
+  uint64_t checked_direct_pipelines_ = 0;
+  uint64_t hits_direct_pipelines_previous_ = 0;
+  uint64_t failures_direct_pipelines_previous_ = 0;
+  std::chrono::steady_clock::time_point direct_pipelines_report_{};
+  static constexpr uint64_t kPipelinesToCheck = 200000;
   // nfsmw_nativo_contar_cambios_pipeline (ContarCambioPipeline and InformeCambiosPipeline).
   enum : uint32_t {
-    kCambioEnlaces = 0,        // vkCmdBindPipeline de Dibujar contados
-    kCambioTrasPase,           // of those, the first of a pass (EmpezarPase forgets the bound pipeline)
-    kCambioPrimero,            // no previous key in the buffer (new buffer or after the deferred sky)
-    kCambioIdentica,           // the same key: only after EmpezarPase
-    kCambioShaders,            // another VS or PS
-    kCambioEntrada,            // same shaders, different vertex input
-    kCambioFormatos,           // same shaders and input, different formats (another pass)
-    kCambioSpecAlfa,           // all the above equal; specialization only changes the alpha test (bits 1, 16-18)
-    kCambioSpecZTemprana,      // ... the alpha test and the early Z (bit 20)
-    kCambioSpecOtra,           // ... other specialization bits
-    kCambioSinEfecto,          // state only, in bits PipelineDe does not read: effectively the same pipeline
-    kCambioSinEfectoTrasPase,  // ... and the first of a pass
-    kCambioSoloEstado,         // real state-only changes: what dynamic state would avoid
-    kCambioEstadoTrasPase,     // ... and the first of a pass
-    kCambioEds12,              // ... without blending, masks or another topology class (EDS1/EDS2, core 1.3)
-    kCambioEds12TrasPase,      // ... and the first of a pass
-    kCampoTopologia,           // per field, on the canonical state (one bind may change several)
-    kCampoClaseTopologia,
-    kCampoMezcla,
-    kCampoMascaras,
-    kCampoZ,
-    kCampoEstencil,
-    kCampoCara,
-    kCampoReinicio,
-    kCampoSesgo,
-    kCambiosN
+    kBindingsChange = 0,        // vkCmdBindPipeline de Dibujar contados
+    kChangeAfterPass,           // of those, the first of a pass (EmpezarPase forgets the bound pipeline)
+    kChangeFirst,            // no previous key in the buffer (new buffer or after the deferred sky)
+    kIdenticalChange,           // the same key: only after EmpezarPase
+    kShadersChange,            // another VS or PS
+    kEntryChange,            // same shaders, different vertex input
+    kFormatsChange,           // same shaders and input, different formats (another pass)
+    kAlphaSpecChange,           // all the above equal; specialization only changes the alpha test (bits 1, 16-18)
+    kEarlySpecZChange,      // ... the alpha test and the early Z (bit 20)
+    kOtherSpecChange,           // ... other specialization bits
+    kChangeWithoutEffect,          // state only, in bits PipelineDe does not read: effectively the same pipeline
+    kChangeWithoutEffectAfterPass,  // ... and the first of a pass
+    kStateOnlyChange,         // real state-only changes: what dynamic state would avoid
+    kStateChangeAfterPass,     // ... and the first of a pass
+    kEds12Change,              // ... without blending, masks or another topology class (EDS1/EDS2, core 1.3)
+    kEds12ChangeAfterPass,      // ... and the first of a pass
+    kTopologyField,           // per field, on the canonical state (one bind may change several)
+    kTopologyClassField,
+    kBlendField,
+    kMasksField,
+    kFieldZ,
+    kStencilField,
+    kFaceField,
+    kResetField,
+    kBiasField,
+    kNChanges
   };
-  std::array<uint64_t, kCambiosN> cambios_pipeline_{};
-  ClavePipeline clave_enlazada_{};       // the last key bound in this command buffer
-  bool clave_enlazada_valida_ = false;   // false: new buffer, after the deferred sky, or not counting
-  bool contar_cambios_pipeline_ = true;  // the cvar, once per frame (InformeCambiosPipeline)
-  uint64_t cambios_dibujos_previos_ = 0;
-  uint64_t cambios_fotogramas_previos_ = 0;
-  std::chrono::steady_clock::time_point cambios_informe_{};
+  std::array<uint64_t, kNChanges> pipeline_changes_{};
+  PipelineKey bound_key_{};       // the last key bound in this command buffer
+  bool valid_bound_key_ = false;   // false: new buffer, after the deferred sky, or not counting
+  bool count_pipeline_changes_ = true;  // the cvar, once per frame (InformeCambiosPipeline)
+  uint64_t draws_changes_previous_ = 0;
+  uint64_t frames_changes_previous_ = 0;
+  std::chrono::steady_clock::time_point changes_report_{};
   // Dynamic state, phase 0a (nfsmw_nativo_clave_canonica, ClaveDeBusqueda).
-  static constexpr uint64_t kCanonicasAComprobar = 200000;
-  bool clave_canonica_ = true;           // the cvar, once per command buffer (UsarRanura)
-  bool clave_canonica_apagada_ = false;  // the guard saw a difference
-  bool canonica_valida_ = false;         // canonica_cruda_ -> canonica_resultado_ is the previous draw's
-  ClavePipeline canonica_cruda_{};
-  ClavePipeline canonica_resultado_{};
-  uint64_t canonica_cambiadas_ = 0;      // keys Canonizar changes (not counting consecutive repeats)
-  uint64_t canonica_comprobadas_ = 0;
-  uint64_t canonica_cambiadas_previas_ = 0;
-  uint64_t canonica_pipelines_previos_ = 0;
-  std::chrono::steady_clock::time_point canonica_informe_{};
+  static constexpr uint64_t kCanonicalToCheck = 200000;
+  bool canonical_key_ = true;           // the cvar, once per command buffer (UsarRanura)
+  bool canonical_key_disabled_ = false;  // the guard saw a difference
+  bool valid_canonical_ = false;         // canonica_cruda_ -> canonica_resultado_ is the previous draw's
+  PipelineKey raw_canonical_{};
+  PipelineKey result_canonical_{};
+  uint64_t changed_canonical_ = 0;      // keys Canonizar changes (not counting consecutive repeats)
+  uint64_t checked_canonical_ = 0;
+  uint64_t changed_canonical_previous_ = 0;
+  uint64_t pipelines_canonical_previous_ = 0;
+  std::chrono::steady_clock::time_point canonical_report_{};
   // Dynamic state, phase 0b (nfsmw_nativo_pipeline_entre_pases).
-  bool pipeline_entre_pases_ = true;  // the cvar, once per command buffer (UsarRanura)
-  bool pipeline_entre_pases_anotado_ = false;
-  uint64_t pases_con_pipeline_ = 0;   // passes started with a bound pipeline that is kept
-  uint64_t entre_pases_pases_previos_ = 0;
-  uint64_t entre_pases_conservados_previos_ = 0;
-  std::chrono::steady_clock::time_point entre_pases_informe_{};
+  bool pipeline_between_passes_ = true;  // the cvar, once per command buffer (UsarRanura)
+  bool pipeline_between_tracked_passes_ = false;
+  uint64_t passes_with_pipeline_ = 0;   // passes started with a bound pipeline that is kept
+  uint64_t between_passes_passes_previous_ = 0;
+  uint64_t between_kept_passes_previous_ = 0;
+  std::chrono::steady_clock::time_point between_passes_report_{};
   // Dynamic state phases 1 and 2 (FijarEstadoDinamico, its guard and its report).
   enum : uint32_t { kEds12 = 1, kEds3 = 2 };  // bits of eds_modo_ and of ClavePipeline::relleno2
-  static constexpr VkDynamicState kDinamicosEds12[10] = {
+  static constexpr VkDynamicState kEds12Dynamic[10] = {
       VK_DYNAMIC_STATE_CULL_MODE,           VK_DYNAMIC_STATE_FRONT_FACE,
       VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY,  VK_DYNAMIC_STATE_PRIMITIVE_RESTART_ENABLE,
       VK_DYNAMIC_STATE_DEPTH_BIAS_ENABLE,   VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE,
       VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE,  VK_DYNAMIC_STATE_DEPTH_COMPARE_OP,
       VK_DYNAMIC_STATE_STENCIL_TEST_ENABLE, VK_DYNAMIC_STATE_STENCIL_OP};
-  static constexpr uint64_t kEdsAComprobar = 200000;
+  static constexpr uint64_t kEdsToCheck = 200000;
   enum : uint32_t {
-    kEdsCara = 0,
-    kEdsFrente,
-    kEdsTopologia,
-    kEdsReinicio,
-    kEdsSesgo,
-    kEdsPruebaZ,
-    kEdsEscribeZ,
-    kEdsFuncionZ,
-    kEdsEstencil,
-    kEdsEstencilOps,
-    kEdsMezclaActiva,  // fase 2
-    kEdsEcuacion,      // fase 2
-    kEdsMascara,       // fase 2
-    kEdsTodo,          // times everything is set (not a call)
+    kEdsFace = 0,
+    kEdsFront,
+    kEdsTopology,
+    kEdsReset,
+    kEdsBias,
+    kEdsTestZ,
+    kEdsWriteZ,
+    kEdsFunctionZ,
+    kEdsStencil,
+    kEdsOpsStencil,
+    kEdsActiveBlend,  // fase 2
+    kEdsEquation,      // fase 2
+    kEdsMask,       // fase 2
+    kEdsAll,          // times everything is set (not a call)
     kEdsN
   };
-  PFN_vkCmdSetCullMode set_cara_ = nullptr;  // nucleo de Vulkan 1.3 (CargarEstadoDinamico)
-  PFN_vkCmdSetFrontFace set_frente_ = nullptr;
-  PFN_vkCmdSetPrimitiveTopology set_topologia_ = nullptr;
-  PFN_vkCmdSetPrimitiveRestartEnable set_reinicio_ = nullptr;
-  PFN_vkCmdSetDepthBiasEnable set_sesgo_ = nullptr;
-  PFN_vkCmdSetDepthTestEnable set_prueba_z_ = nullptr;
-  PFN_vkCmdSetDepthWriteEnable set_escribe_z_ = nullptr;
-  PFN_vkCmdSetDepthCompareOp set_funcion_z_ = nullptr;
-  PFN_vkCmdSetStencilTestEnable set_estencil_ = nullptr;
-  PFN_vkCmdSetStencilOp set_estencil_ops_ = nullptr;
-  bool eds12_disponible_ = false;  // API 1.3 and the ten functions
-  bool eds_apagado_ = false;       // the guard saw a difference: for the rest of the session, everything in the pipeline
-  bool eds_modo_anotado_ = false;
-  uint32_t eds_modo_ = 0;          // kEds12 | kEds3 of this command buffer (UsarRanura; the guard sets it to 0)
-  bool eds_valido_ = false;        // eds_grabado_ is what is set in this buffer (false: new buffer, sky or pass)
-  EstadoEds eds_grabado_{};
-  ClavePipeline eds_clave_{};      // raw key of the last state set
-  uint64_t eds_dibujos_ = 0;       // draws with dynamic state
-  uint64_t eds_repetidos_ = 0;     // ... with the same raw key as the previous one: nothing to set or check
-  uint64_t eds_comprobables_ = 0;  // ... with something to set (what the guard counts)
-  uint64_t eds_comprobados_ = 0;
-  uint64_t eds_dibujos_previos_ = 0;
-  uint64_t eds_repetidos_previos_ = 0;
-  uint64_t eds_fotogramas_previos_ = 0;
-  std::array<uint64_t, kEdsN> eds_llamadas_{};    // vkCmdSet* recorded per state since the last report
-  std::array<uint64_t, 4> pipelines_por_modo_{};  // pipelines created per mode (relleno2) since start-up
-  std::chrono::steady_clock::time_point eds_informe_{};
+  PFN_vkCmdSetCullMode set_face_ = nullptr;  // nucleo de Vulkan 1.3 (CargarEstadoDinamico)
+  PFN_vkCmdSetFrontFace set_front_ = nullptr;
+  PFN_vkCmdSetPrimitiveTopology set_topology_ = nullptr;
+  PFN_vkCmdSetPrimitiveRestartEnable set_reset_ = nullptr;
+  PFN_vkCmdSetDepthBiasEnable set_bias_ = nullptr;
+  PFN_vkCmdSetDepthTestEnable set_z_test_ = nullptr;
+  PFN_vkCmdSetDepthWriteEnable set_write_z_ = nullptr;
+  PFN_vkCmdSetDepthCompareOp set_z_func_ = nullptr;
+  PFN_vkCmdSetStencilTestEnable set_stencil_ = nullptr;
+  PFN_vkCmdSetStencilOp set_ops_stencil_ = nullptr;
+  bool eds12_available_ = false;  // API 1.3 and the ten functions
+  bool eds_disabled_ = false;       // the guard saw a difference: for the rest of the session, everything in the pipeline
+  bool eds_tracked_mode_ = false;
+  uint32_t eds_mode_ = 0;          // kEds12 | kEds3 of this command buffer (UsarRanura; the guard sets it to 0)
+  bool eds_valid_ = false;        // eds_grabado_ is what is set in this buffer (false: new buffer, sky or pass)
+  EdsState eds_recorded_{};
+  PipelineKey eds_key_{};      // raw key of the last state set
+  uint64_t eds_draws_ = 0;       // draws with dynamic state
+  uint64_t eds_repeated_ = 0;     // ... with the same raw key as the previous one: nothing to set or check
+  uint64_t eds_checkable_ = 0;  // ... with something to set (what the guard counts)
+  uint64_t eds_checked_ = 0;
+  uint64_t eds_draws_previous_ = 0;
+  uint64_t eds_repeated_previous_ = 0;
+  uint64_t eds_frames_previous_ = 0;
+  std::array<uint64_t, kEdsN> eds_calls_{};    // vkCmdSet* recorded per state since the last report
+  std::array<uint64_t, 4> pipelines_per_mode_{};  // pipelines created per mode (relleno2) since start-up
+  std::chrono::steady_clock::time_point eds_report_{};
   // Dynamic state, phase 2 (VK_EXT_extended_dynamic_state3).
-  static constexpr VkDynamicState kDinamicosEds3[3] = {VK_DYNAMIC_STATE_COLOR_BLEND_ENABLE_EXT,
+  static constexpr VkDynamicState kEds3Dynamic[3] = {VK_DYNAMIC_STATE_COLOR_BLEND_ENABLE_EXT,
                                                        VK_DYNAMIC_STATE_COLOR_BLEND_EQUATION_EXT,
                                                        VK_DYNAMIC_STATE_COLOR_WRITE_MASK_EXT};
   // The same mapping as kFactores in RellenarEstadoFijo (fields 2, 3 and 17-31 give ZERO).
-  static constexpr VkBlendFactor kFactoresMezcla[32] = {
+  static constexpr VkBlendFactor kBlendFactors[32] = {
       VK_BLEND_FACTOR_ZERO,
       VK_BLEND_FACTOR_ONE,
       VK_BLEND_FACTOR_ZERO,
@@ -12477,160 +12477,160 @@ class DibujosVulkanImpl final : public DibujosVulkan {
       VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA,
       VK_BLEND_FACTOR_SRC_ALPHA_SATURATE,
   };
-  PFN_vkCmdSetColorBlendEnableEXT set_mezcla_activa_ = nullptr;
-  PFN_vkCmdSetColorBlendEquationEXT set_ecuacion_ = nullptr;
-  PFN_vkCmdSetColorWriteMaskEXT set_mascara_ = nullptr;
-  bool eds3_disponible_ = false;  // the SDK enables the extension and its three features; the driver provides the functions
-  std::unordered_map<uint64_t, VkRenderPass> pases_;
+  PFN_vkCmdSetColorBlendEnableEXT set_blend_enabled_ = nullptr;
+  PFN_vkCmdSetColorBlendEquationEXT set_equation_ = nullptr;
+  PFN_vkCmdSetColorWriteMaskEXT set_mask_ = nullptr;
+  bool eds3_available_ = false;  // the SDK enables the extension and its three features; the driver provides the functions
+  std::unordered_map<uint64_t, VkRenderPass> passes_;
   std::unordered_map<uint64_t, VkFramebuffer> framebuffers_;
   // nfsmw_nativo_framebuffers_olvidan_vistas. The views of each cached framebuffer (by the same key), the
   // ones retired by the guard, and the counts for the warning.
-  std::unordered_map<uint64_t, std::array<VkImageView, 5>> framebuffers_vistas_;
-  std::vector<VkFramebuffer> fb_retirados_;
-  bool fb_retirar_ = false;
-  uint64_t fb_vistas_olvidadas_ = 0;
-  uint64_t fb_olvidados_ = 0;
-  std::unordered_map<uint64_t, Textura> texturas_;
+  std::unordered_map<uint64_t, std::array<VkImageView, 5>> views_framebuffers_;
+  std::vector<VkFramebuffer> fb_retired_;
+  bool fb_retire_ = false;
+  uint64_t fb_forgotten_views_ = 0;
+  uint64_t fb_forgotten_ = 0;
+  std::unordered_map<uint64_t, Texture> textures_;
   // Measurement only (nfsmw_nativo_diag_reutilizar): textures with a hash, by content key (content key ->
   // texture key; see AnotarContenidoTextura), and the counts for the 10 s report.
-  std::unordered_multimap<uint64_t, uint64_t> vivas_por_contenido_;
-  uint64_t contenidos_distintos_ = 0;
-  int32_t diag_reutilizar_ = -1;  // -1 = cvar not read
-  uint64_t reutilizar_nuevas_ = 0;
-  uint64_t reutilizar_coinciden_ = 0;
-  uint64_t reutilizar_frias_ = 0;
-  uint64_t reutilizar_sin_mirar_ = 0;
-  uint64_t reutilizar_bytes_nuevas_ = 0;
-  uint64_t reutilizar_bytes_coinciden_ = 0;
-  uint64_t reutilizar_bytes_frias_ = 0;
-  uint32_t reutilizar_detalles_ = 0;
-  std::chrono::steady_clock::time_point informe_reutilizar_{};
-  std::unordered_map<uint64_t, Vista> vistas_;
+  std::unordered_multimap<uint64_t, uint64_t> alive_per_content_;
+  uint64_t distinct_contents_ = 0;
+  int32_t diag_reuse_ = -1;  // -1 = cvar not read
+  uint64_t reuse_new_ = 0;
+  uint64_t reuse_match_ = 0;
+  uint64_t reuse_cold_ = 0;
+  uint64_t reuse_without_peek_ = 0;
+  uint64_t reuse_new_bytes_ = 0;
+  uint64_t reuse_match_bytes_ = 0;
+  uint64_t reuse_cold_bytes_ = 0;
+  uint32_t reuse_details_ = 0;
+  std::chrono::steady_clock::time_point reuse_report_{};
+  std::unordered_map<uint64_t, View> views_;
   // The vistas_ keys of each image. InvalidarImagenes (every resolve and every copy) used to walk all of
   // vistas_: 2.7 % of the ring thread in a race. Maintained together with vistas_ in RanuraVista
   // (insertion) and in QuitarVista (every removal).
-  std::unordered_map<VkImage, std::vector<uint64_t>> vistas_por_imagen_;
+  std::unordered_map<VkImage, std::vector<uint64_t>> views_per_image_;
   std::unordered_map<uint32_t, std::pair<VkSampler, uint32_t>> samplers_;
   // Diagnostic: filter values already logged (RanuraSampler).
-  uint32_t aniso_vistos_ = 0;
-  bool aniso_anotado_ = false;  // nfsmw_nativo_anisotropico, one line when the first one is created
-  uint32_t diag_mip_minimo_ = 0;  // nfsmw_nativo_diag_mip_minimo, read once per frame
+  uint32_t seen_aniso_ = 0;
+  bool tracked_aniso_ = false;  // nfsmw_nativo_anisotropico, one line when the first one is created
+  uint32_t diag_mip_min_ = 0;  // nfsmw_nativo_diag_mip_minimo, read once per frame
   // nfsmw_nativo_sombras_sesgo_*, read once per frame.
-  int32_t sombras_sesgo_constante_ = 0;
-  int32_t sombras_sesgo_pendiente_ = 0;
-  bool sombras_sesgo_anotado_ = false;
-  uint32_t mip_max_vistos_ = 0;
-  std::array<bool, 1024> sesgos_vistos_{};
-  std::vector<Textura*> texturas_a_subir_;
+  int32_t shadows_constant_bias_ = 0;
+  int32_t shadows_slope_bias_ = 0;
+  bool shadows_tracked_bias_ = false;
+  uint32_t seen_mip_max_ = 0;
+  std::array<bool, 1024> seen_biases_{};
+  std::vector<Texture*> textures_to_upload_;
   std::vector<uint8_t> temporal_;
-  std::vector<uint32_t, SinInicializar<uint32_t>> indices_;
-  std::vector<uint32_t, SinInicializar<uint32_t>> convertidos_;
-  std::vector<uint16_t, SinInicializar<uint16_t>> indices16_;  // camino rapido: 16 bits sin convertir
+  std::vector<uint32_t, NoInitAllocator<uint32_t>> indices_;
+  std::vector<uint32_t, NoInitAllocator<uint32_t>> converted_;
+  std::vector<uint16_t, NoInitAllocator<uint16_t>> indices16_;  // camino rapido: 16 bits sin convertir
   // IndicesDe16 (nfsmw_nativo_indices_neon). Ring only.
   int32_t indices_neon_ = -1;  // -1 cvar not read, 0 plain loop, 1 NEON
-  uint64_t indices_neon_dibujos_ = 0;
-  uint64_t indices_neon_comprobados_ = 0;
-  std::vector<uint16_t, SinInicializar<uint16_t>> indices_neon_prueba_;
+  uint64_t draws_indices_neon_ = 0;
+  uint64_t checked_indices_neon_ = 0;
+  std::vector<uint16_t, NoInitAllocator<uint16_t>> test_indices_neon_;
   // Dynamic state already recorded in the current command buffer and pass.
-  bool estado_grabado_ = false;
-  uint64_t push_grabado_[3] = {};
-  VkViewport viewport_grabado_{};
-  VkRect2D tijera_grabada_{};
-  float mezcla_grabada_[4] = {};
-  float sesgo_grabado_[2] = {};  // depth bias: constant and slope
-  float sesgo_avisado_[2] = {};
-  uint32_t avisos_sesgo_ = 0;
-  std::string omitir_texto_;  // nfsmw_nativo_diag_omitir_ps ya leido
-  std::unordered_set<uint32_t> omitir_ps_;
-  uint32_t stencil_grabado_[2] = {};  // RB_STENCILREFMASK for front and back
-  bool stencil_grabado_valido_ = false;
-  VkIndexType tipo_indices_grabado_ = VK_INDEX_TYPE_MAX_ENUM;
+  bool recorded_state_ = false;
+  uint64_t recorded_push_[3] = {};
+  VkViewport recorded_viewport_{};
+  VkRect2D recorded_scissor_{};
+  float recorded_blend_[4] = {};
+  float recorded_bias_[2] = {};  // depth bias: constant and slope
+  float warned_bias_[2] = {};
+  uint32_t bias_warnings_ = 0;
+  std::string skip_text_;  // nfsmw_nativo_diag_omitir_ps ya leido
+  std::unordered_set<uint32_t> skip_ps_;
+  uint32_t recorded_stencil_[2] = {};  // RB_STENCILREFMASK for front and back
+  bool valid_recorded_stencil_ = false;
+  VkIndexType recorded_indices_type_ = VK_INDEX_TYPE_MAX_ENUM;
   // Shared constants of the previous draw and where they were uploaded.
-  uint32_t compartidas_previas_[kPalabrasCompartidas] = {};
-  uint64_t compartidas_miradas_ = 0;    // C6 report, to decide how to make the block cheaper
-  uint64_t compartidas_cambiadas_ = 0;
-  VkDeviceSize compartidas_offset_ = 0;
-  uint64_t compartidas_epoca_ = UINT64_MAX;
+  uint32_t shared_previous_[kSharedWords] = {};
+  uint64_t peeked_shared_ = 0;    // C6 report, to decide how to make the block cheaper
+  uint64_t changed_shared_ = 0;
+  VkDeviceSize offset_shared_ = 0;
+  uint64_t epoch_shared_ = UINT64_MAX;
 
-  EntradaVertices entrada_;
-  const EntradaVertices* entrada_actual_ = &entrada_;  // entrada_ or a cache element
-  std::unordered_map<uint64_t, EntradaVertices> entradas_cache_;
-  uint64_t entradas_cache_aciertos_ = 0;
-  const EntradaShader* entrada_vs_ = nullptr;
-  uint64_t entrada_generacion_ = UINT64_MAX;
-  bool entrada_valida_ = false;
+  VertexInput entry_;
+  const VertexInput* current_entry_ = &entry_;  // entrada_ or a cache element
+  std::unordered_map<uint64_t, VertexInput> cache_entries_;
+  uint64_t hits_cache_entries_ = 0;
+  const ShaderEntry* vs_entry_ = nullptr;
+  uint64_t generation_entry_ = UINT64_MAX;
+  bool valid_entry_ = false;
 
   uint64_t constantes_vs_generacion_ = UINT64_MAX;
-  uint64_t constantes_vs_epoca_ = UINT64_MAX;
+  uint64_t epoch_vs_constants_ = UINT64_MAX;
   VkDeviceSize constantes_vs_offset_ = 0;
   uint64_t constantes_ps_generacion_ = UINT64_MAX;
-  uint64_t constantes_ps_epoca_ = UINT64_MAX;
+  uint64_t epoch_ps_constants_ = UINT64_MAX;
   VkDeviceSize constantes_ps_offset_ = 0;
   uint32_t constantes_vs_bytes_ = 0;
   uint32_t constantes_ps_bytes_ = 0;
 
-  bool pase_activo_ = false;
+  bool active_pass_ = false;
   // The game's open occlusion query and the host query counting this pass's span.
-  bool oclusion_abierta_ = false;
+  bool open_occlusion_ = false;
   // nfsmw_reflejo_visibilidad (see reflection_on_demand.h). The witness, every ~1 s at 30 FPS.
-  static constexpr uint64_t kTestigoCada = 32;
-  bool medir_visibilidad_ = false;
-  bool testigo_pendiente_ = false;
-  uint64_t testigo_siguiente_ = 0;
-  uint32_t consulta_oclusion_ = UINT32_MAX;
-  uint32_t categoria_pase_ = kGpuOtros;
-  bool enviado_tras_sombras_ = false;        // once per frame
+  static constexpr uint64_t kSentinelEvery = 32;
+  bool measure_visibility_ = false;
+  bool pending_sentinel_ = false;
+  uint64_t next_sentinel_ = 0;
+  uint32_t occlusion_query_ = UINT32_MAX;
+  uint32_t pass_category_ = kGpuOther;
+  bool sent_after_shadows_ = false;        // once per frame
   // Per-frame copies of the diagnostic cvars (see the comment at the Swap).
-  std::string diag_omitir_ps_texto_;
-  bool diag_vertices_repetidos_ = false;
-  bool diag_estadisticas_dibujo_ = false;
-  uint32_t tijera_prueba_ = 0;
-  std::array<VkBuffer, 16> bufers_vertices_{};
+  std::string diag_skip_text_ps_;
+  bool diag_repeated_vertices_ = false;
+  bool diag_draw_stats_ = false;
+  uint32_t test_scissor_ = 0;
+  std::array<VkBuffer, 16> vertices_buffers_{};
   // Height actually used by each render target, deduced from the scissor. It only grows.
-  std::unordered_map<uint32_t, uint32_t> alto_util_;
-  bool area_util_ = true;
+  std::unordered_map<uint32_t, uint32_t> usable_height_;
+  bool usable_area_ = true;
   // Small per-draw savings. See their cvars.
-  bool encuadre_cache_ = true;             // C1: the cvar, once per frame
-  bool encuadre_cache_apagada_ = false;    // C1: the guard saw a difference
-  bool encuadre_valido_ = false;
-  uint64_t encuadre_generacion_ = 0;
-  uint64_t encuadre_pase_serie_ = 0;
-  uint64_t pase_serie_ = 0;                // incremented on every EmpezarPase
-  VkViewport encuadre_viewport_{};
-  VkRect2D encuadre_tijera_{};
-  float encuadre_ndc_[4] = {};
-  uint32_t encuadre_vacio_ = 0;
-  uint64_t encuadre_aciertos_ = 0;         // since start-up (the guard)
-  uint64_t encuadre_comprobados_ = 0;
-  uint64_t encuadre_aciertos_informe_ = 0;
-  uint64_t encuadre_calculos_informe_ = 0;
-  static constexpr uint64_t kEncuadresAComprobar = 200000;
-  bool alto_util_memo_activo_ = true;      // C2
-  bool alto_util_memo_apagado_ = false;
-  uint32_t* alto_util_memo_ = nullptr;     // alto_util_ element of the last pitch (the map never erases)
-  uint32_t alto_util_memo_pitch_ = 0;
-  uint64_t alto_util_memo_aciertos_ = 0;
-  uint64_t alto_util_memo_aciertos_previos_ = 0;
-  static constexpr uint64_t kAltoUtilAComprobar = 200000;
-  bool clave_pase_rapida_ = true;          // C3
-  bool clave_pase_rapida_apagada_ = false;
-  uint64_t pase_claves_[5] = {};           // the render target bytes that produced pase_clave_
-  bool pase_claves_validas_ = false;
-  uint64_t claves_pase_rapidas_ = 0;
-  uint64_t claves_pase_rapidas_previas_ = 0;
-  static constexpr uint64_t kClavesPaseAComprobar = 200000;
-  bool cvars_por_fotograma_ = true;        // C5
-  bool ps_solo_alfa_fotograma_ = true;
-  bool sin_ps_sin_color_fotograma_ = true;
-  std::chrono::steady_clock::time_point minucias_informe_{};
-  bool sin_vegetacion_ = false;
+  bool framing_cache_ = true;             // C1: the cvar, once per frame
+  bool framing_cache_disabled_ = false;    // C1: the guard saw a difference
+  bool framing_valid_ = false;
+  uint64_t generation_framing_ = 0;
+  uint64_t framing_series_pass_ = 0;
+  uint64_t series_pass_ = 0;                // incremented on every EmpezarPase
+  VkViewport framing_viewport_{};
+  VkRect2D framing_scissor_{};
+  float framing_ndc_[4] = {};
+  uint32_t framing_empty_ = 0;
+  uint64_t framing_hits_ = 0;         // since start-up (the guard)
+  uint64_t framing_checked_ = 0;
+  uint64_t framing_hits_report_ = 0;
+  uint64_t framing_calculations_report_ = 0;
+  static constexpr uint64_t kFramingsToCheck = 200000;
+  bool active_memo_usable_height_ = true;      // C2
+  bool memo_usable_height_disabled_ = false;
+  uint32_t* memo_usable_height_ = nullptr;     // alto_util_ element of the last pitch (the map never erases)
+  uint32_t memo_pitch_usable_height_ = 0;
+  uint64_t hits_memo_usable_height_ = 0;
+  uint64_t hits_memo_usable_height_previous_ = 0;
+  static constexpr uint64_t kUsableHeightToCheck = 200000;
+  bool fast_pass_key_ = true;          // C3
+  bool fast_pass_key_disabled_ = false;
+  uint64_t keys_pass_[5] = {};           // the render target bytes that produced pase_clave_
+  bool valid_keys_pass_ = false;
+  uint64_t fast_pass_keys_ = 0;
+  uint64_t fast_pass_keys_previous_ = 0;
+  static constexpr uint64_t kPassKeysToCheck = 200000;
+  bool cvars_per_frame_ = true;        // C5
+  bool frame_alpha_only_ps_ = true;
+  bool without_ps_without_frame_color_ = true;
+  std::chrono::steady_clock::time_point details_report_{};
+  bool without_vegetation_ = false;
   // Shadow map vegetation draws discarded early (see the early discard in Dibujar).
-  uint64_t dibujos_vegetacion_pronto_ = 0;
+  uint64_t soon_vegetation_draws_ = 0;
   // VeredictoVegetacion (nfsmw_d3d_vegetacion_juego).
-  bool vegetacion_calculada_ = false;  // this draw carries the game's verdict and the ring's has been computed
-  bool vegetacion_anillo_ = false;     // what the early discard has to decide
-  uint16_t vegetacion_banderas_ = 0;
-  DetalleVegetacion vegetacion_detalle_;
+  bool vegetation_computed_ = false;  // this draw carries the game's verdict and the ring's has been computed
+  bool vegetation_ring_ = false;     // what the early discard has to decide
+  uint16_t vegetation_flags_ = 0;
+  VegetationDetail vegetation_detail_;
   /*
    * The sky draw, saved in full to replay later (nfsmw_nativo_cielo_aplazado).
    *
@@ -12640,51 +12640,51 @@ class DibujosVulkanImpl final : public DibujosVulkan {
    * UsarRanura resets it, always after the pass is closed.
    */
   enum : uint32_t {
-    kCieloPorMezcla = 0,  // a blended draw arrived: that one does read the background color
-    kCieloPorSinZ,        // an opaque draw without Z write arrived: it could not cover the sky
-    kCieloPorFinDePase,   // the pass closes (fallback path)
-    kCieloPorOtroCielo,   // a second sky in the same pass: the first one is emitted now
-    kCieloMotivos
+    kSkyPerBlend = 0,  // a blended draw arrived: that one does read the background color
+    kSkyPerWithoutZ,        // an opaque draw without Z write arrived: it could not cover the sky
+    kSkyPerPassEnd,   // the pass closes (fallback path)
+    kSkyPerOtherSky,   // a second sky in the same pass: the first one is emitted now
+    kSkyReasons
   };
-  struct CieloAplazado {
+  struct DeferredSky {
     VkPipeline pipeline = VK_NULL_HANDLE;
-    VkBuffer bufer = VK_NULL_HANDLE;   // the upload one: vertices and indices
+    VkBuffer buf = VK_NULL_HANDLE;   // the upload one: vertices and indices
     bool usa_ubo = false;
     uint64_t push[3] = {};             // only with constants through pointers
     std::array<uint32_t, 3> offsets_ubo{};
     uint32_t ranura_ubo = 0;
     VkViewport viewport{};
-    VkRect2D tijera{};
-    float mezcla[4] = {};
-    float sesgo[2] = {};
-    bool con_estencil = false;
+    VkRect2D scissor{};
+    float blend[4] = {};
+    float bias[2] = {};
+    bool with_stencil = false;
     uint32_t stencil[2] = {};          // RB_STENCILREFMASK for front and back
-    uint32_t n_enlaces = 0;
+    uint32_t n_bindings = 0;
     std::array<VkDeviceSize, 16> offsets_vertices{};
-    bool con_indices = false;
-    bool indices_de_16 = false;
+    bool with_indices = false;
+    bool indices16 = false;
     uint32_t indices = 0;
-    uint32_t primer_indice = 0;
+    uint32_t first_index = 0;
     uint32_t vmin = 0;
-    uint32_t cuenta = 0;               // sin indices
+    uint32_t num = 0;               // sin indices
     uint32_t ps_mas_uno = 0;           // for the diagnostic per-draw query
-    uint32_t categoria = 0;
-    uint64_t dibujos_al_aplazar = 0;   // position in the pass when it was deferred
-    uint32_t eds_modo = 0;  // phases 1 and 2 its pipeline was looked up with (eds_modo_)
-    EstadoEds eds{};        // and the state that pipeline lacks
+    uint32_t category = 0;
+    uint64_t draws_on_defer = 0;   // position in the pass when it was deferred
+    uint32_t eds_mode = 0;  // phases 1 and 2 its pipeline was looked up with (eds_modo_)
+    EdsState eds{};        // and the state that pipeline lacks
   };
-  CieloAplazado cielo_{};
-  bool cielo_pendiente_ = false;
-  bool cielo_aplazado_ = true;  // the cvar, read once per frame
-  bool cielo_anotado_ = false;
-  uint64_t dibujos_en_pase_ = 0;
-  uint64_t cielo_vistos_ = 0;
-  uint64_t cielo_vistos_previos_ = 0;
+  DeferredSky sky_{};
+  bool sky_pending_ = false;
+  bool sky_deferred_ = true;  // the cvar, read once per frame
+  bool sky_tracked_ = false;
+  uint64_t draws_in_pass_ = 0;
+  uint64_t sky_seen_ = 0;
+  uint64_t sky_seen_previous_ = 0;
   // The ones that pass both marks (480 indices and first of the pass). This is the number to watch: if it
   // is not 1.00 per frame, the criterion still does not isolate the dome and nothing should be deferred.
   // The fingerprint-only "detectados" once gave 7.00.
-  uint64_t cielo_candidatos_ = 0;
-  uint64_t cielo_candidatos_previos_ = 0;
+  uint64_t sky_candidates_ = 0;
+  uint64_t sky_candidates_previous_ = 0;
   /*
    * The self-checking guard.
    *
@@ -12702,355 +12702,355 @@ class DibujosVulkanImpl final : public DibujosVulkan {
    * So the worst case of this change is that it does nothing. Breaking the image is not among the
    * possible outcomes.
    */
-  enum : uint32_t { kCieloMirando = 0, kCieloAplazando = 1, kCieloDescartado = 2 };
-  uint32_t cielo_guardia_ = kCieloMirando;
-  uint32_t cielo_guardia_fotogramas_ = 0;
-  uint32_t cielo_guardia_con_uno_ = 0;
-  uint32_t cielo_guardia_en_fotograma_ = 0;
-  uint32_t cielo_guardia_max_ = 0;
-  uint64_t cielo_aplazados_ = 0;
-  uint64_t cielo_aplazados_previos_ = 0;
-  uint64_t cielo_no_aplazables_ = 0;
-  uint64_t cielo_dos_en_pase_ = 0;
-  uint64_t cielo_perdidos_ = 0;
-  std::array<uint64_t, kCieloMotivos> cielo_emitidos_{};
-  std::array<uint64_t, kCieloMotivos> cielo_emitidos_previos_{};
-  uint64_t cielo_posicion_suma_ = 0;
-  uint64_t cielo_posicion_suma_previa_ = 0;
-  uint64_t cielo_posicion_max_ = 0;
+  enum : uint32_t { kSkyPeeking = 0, kSkyDeferring = 1, kSkyDiscarded = 2 };
+  uint32_t sky_guard_ = kSkyPeeking;
+  uint32_t sky_frames_guard_ = 0;
+  uint32_t sky_guard_with_one_ = 0;
+  uint32_t sky_guard_in_frame_ = 0;
+  uint32_t sky_guard_max_ = 0;
+  uint64_t sky_deferred_count_ = 0;
+  uint64_t sky_deferred_previous_ = 0;
+  uint64_t sky_no_deferrable_ = 0;
+  uint64_t sky_two_in_pass_ = 0;
+  uint64_t sky_lost_ = 0;
+  std::array<uint64_t, kSkyReasons> sky_emitted_{};
+  std::array<uint64_t, kSkyReasons> sky_emitted_previous_{};
+  uint64_t sky_sum_position_ = 0;
+  uint64_t sky_sum_position_previous_ = 0;
+  uint64_t sky_position_max_ = 0;
   // The last binding made with vkCmdBindVertexBuffers, so it is not repeated.
-  std::array<VkDeviceSize, 16> offsets_grabados_{};
-  uint32_t enlaces_grabados_ = 0;
-  uint64_t enlaces_ahorrados_ = 0;
+  std::array<VkDeviceSize, 16> recorded_offsets_{};
+  uint32_t recorded_bindings_ = 0;
+  uint64_t saved_bindings_ = 0;
   // nfsmw_nativo_vertices_base_cero (see the cvar) and its guard.
-  bool vertices_base_cero_ = true;           // the cvar, read once per frame (UsarRanura)
-  bool vertices_base_cero_apagado_ = false;  // the guard saw a difference: the rest of the session, as before
-  uint64_t base_cero_comprobados_ = 0;       // draws on the base-zero path since start-up (the guard)
-  uint64_t base_cero_dibujos_ = 0;           // since the last report: without binding their own offset
-  uint64_t base_cero_total_ = 0;             // since the last report: draws recorded with vertices
-  uint64_t base_cero_varios_enlaces_ = 0;
-  uint64_t base_cero_desalineados_ = 0;      // one binding, but the dedupe gave a copy off a multiple
-  uint64_t base_cero_enlaces_grabados_ = 0;  // vkCmdBindVertexBuffers recorded since the last report
-  std::chrono::steady_clock::time_point base_cero_informe_{};
-  static constexpr uint64_t kBaseCeroAComprobar = 200000;
+  bool zero_vertices_base_ = true;           // the cvar, read once per frame (UsarRanura)
+  bool zero_vertices_base_disabled_ = false;  // the guard saw a difference: the rest of the session, as before
+  uint64_t checked_zero_base_ = 0;       // draws on the base-zero path since start-up (the guard)
+  uint64_t draws_zero_base_ = 0;           // since the last report: without binding their own offset
+  uint64_t zero_base_total_ = 0;             // since the last report: draws recorded with vertices
+  uint64_t bindings_several_zero_base_ = 0;
+  uint64_t misaligned_zero_base_ = 0;      // one binding, but the dedupe gave a copy off a multiple
+  uint64_t recorded_bindings_zero_base_ = 0;  // vkCmdBindVertexBuffers recorded since the last report
+  std::chrono::steady_clock::time_point zero_base_report_{};
+  static constexpr uint64_t kZeroBaseToCheck = 200000;
   std::array<uint64_t, 19> sub_ns_{};  // C6 subetapas, measurement only
   std::array<uint64_t, 19> sub_n_{};
-  uint64_t sub_muestras_ = 0;
-  std::chrono::steady_clock::time_point sub_siguiente_{};
-  uint64_t envios_tras_sombras_ = 0;         // for the report
-  uint32_t estadisticas_pase_ = UINT32_MAX;
-  uint32_t avisos_oclusion_dibujo_ = 0;  // diagnostic of the query draws
-  std::chrono::steady_clock::time_point ultimo_aviso_oclusion_dibujo_{};
-  VkCommandBuffer pase_comandos_ = VK_NULL_HANDLE;
-  uint64_t pase_clave_ = 0;
-  uint64_t pase_generacion_ = UINT64_MAX;
-  uint32_t pase_ancho_ = 0;
-  uint32_t pase_alto_ = 0;
-  float pase_escala_ = 1.0f;  // 1 except in the scaled shadow map
-  uint64_t borrados_profundidad_en_pase_ = 0;  // ZCULL
-  std::chrono::steady_clock::time_point inicio_pase_{};  // pass change breakdown
-  uint32_t pase_formatos_[5] = {};
-  VkRenderPass pase_rp_ = VK_NULL_HANDLE;
-  uint64_t grabacion_generacion_ = UINT64_MAX;
-  VkPipeline pipeline_enlazado_ = VK_NULL_HANDLE;
-  bool sets_enlazados_ = false;
+  uint64_t sub_samples_ = 0;
+  std::chrono::steady_clock::time_point sub_next_{};
+  uint64_t sends_after_shadows_ = 0;         // for the report
+  uint32_t pass_stats_ = UINT32_MAX;
+  uint32_t draw_occlusion_warnings_ = 0;  // diagnostic of the query draws
+  std::chrono::steady_clock::time_point last_draw_occlusion_warning_{};
+  VkCommandBuffer commands_pass_ = VK_NULL_HANDLE;
+  uint64_t key_pass_ = 0;
+  uint64_t generation_pass_ = UINT64_MAX;
+  uint32_t pass_width_ = 0;
+  uint32_t pass_height_ = 0;
+  float scale_pass_ = 1.0f;  // 1 except in the scaled shadow map
+  uint64_t depth_clears_in_pass_ = 0;  // ZCULL
+  std::chrono::steady_clock::time_point pass_start_{};  // pass change breakdown
+  uint32_t formats_pass_[5] = {};
+  VkRenderPass rp_pass_ = VK_NULL_HANDLE;
+  uint64_t generation_recording_ = UINT64_MAX;
+  VkPipeline bound_pipeline_ = VK_NULL_HANDLE;
+  bool bound_sets_ = false;
 
-  uint32_t diagnosticos_ = 0;
-  std::unordered_set<uint32_t> avisados_vs_;
-  uint32_t avisos_indices_ = 0;
-  uint32_t avisos_swizzle_ = 0;
-  std::unordered_set<uint64_t> diagnosticados_;
-  uint64_t dibujados_ = 0;
-  uint64_t dibujados_cronometrados_ = 0;  // of those, with the stage stopwatch
-  uint32_t cronometro_contador_ = 0;
-  bool cronometrar_ = false;  // the current draw carries the stage stopwatch
+  uint32_t diagnostics_ = 0;
+  std::unordered_set<uint32_t> vs_warned_;
+  uint32_t indices_warnings_ = 0;
+  uint32_t swizzle_warnings_ = 0;
+  std::unordered_set<uint64_t> diagnosed_;
+  uint64_t drawn_ = 0;
+  uint64_t timed_drawn_ = 0;  // of those, with the stage stopwatch
+  uint32_t counter_stopwatch_ = 0;
+  bool time_ = false;  // the current draw carries the stage stopwatch
   // Rear-view mirror diagnostic: cubemap refreshes from their resolved faces (report every 10 s).
-  uint64_t cubos_refrescados_ = 0;
-  uint64_t cubos_refrescados_previos_ = 0;
-  uint64_t fotograma_informe_cubos_ = 0;
-  std::chrono::steady_clock::time_point informe_cubos_{};
-  uint64_t rechazados_ = 0;
+  uint64_t refreshed_cubes_ = 0;
+  uint64_t refreshed_cubes_previous_ = 0;
+  uint64_t cubes_report_frame_ = 0;
+  std::chrono::steady_clock::time_point cubes_report_{};
+  uint64_t rejected_ = 0;
   // 8 stages. Stage 7 is the pass change, split from the pass stage to tell how much of the 3.9 us per
   // draw is the actual change (15 per frame at 162 us) and how much is what is done on every draw.
-  std::array<uint64_t, kEtapasDibujo> etapas_ns_{};
-  std::unordered_map<uint32_t, uint64_t> causas_;
-  uint32_t ultima_causa_ = 0;
-  uint32_t entrada_causa_ = 0;  // cause of the failed vertex input
-  uint64_t subidas_textura_ = 0;
+  std::array<uint64_t, kDrawStages> stages_ns_{};
+  std::unordered_map<uint32_t, uint64_t> causes_;
+  uint32_t last_cause_ = 0;
+  uint32_t cause_entry_ = 0;  // cause of the failed vertex input
+  uint64_t texture_uploads_ = 0;
   uint64_t megas_bytes_ = 0;
-  uint64_t bytes_texturas_ = 0;  // texture images created (C6 report)
-  int32_t texturas_mb_max_ = 0;   // nfsmw_nativo_texturas_mb_max
+  uint64_t textures_bytes_ = 0;  // texture images created (C6 report)
+  int32_t textures_max_mb_ = 0;   // nfsmw_nativo_texturas_mb_max
   // Large slabs from which textures take chunks, instead of a dedicated allocation per texture (1.9 ms of
   // CPU each on Horizon). Terminar() goes in the destructor after the DestruirImagen loops, never before.
-  PoolTexturas pool_texturas_;
+  TexturePool textures_pool_;
   // Texture bind thread (nfsmw_nativo_texturas_enlace_hilo). See the BucleEnlaces block.
-  struct PeticionEnlace {
-    VkImage imagen = VK_NULL_HANDLE;
-    VkDeviceMemory memoria = VK_NULL_HANDLE;
+  struct BindingRequest {
+    VkImage img = VK_NULL_HANDLE;
+    VkDeviceMemory mem = VK_NULL_HANDLE;
     VkDeviceSize offset = 0;
-    VkResult resultado = VK_NOT_READY;  // written by the thread, under enlaces_mutex_
+    VkResult result = VK_NOT_READY;  // written by the thread, under enlaces_mutex_
     uint64_t ns = 0;                    // wall time inside vkBindImageMemory, on the thread
   };
-  struct TexturaEnVuelo {  // ring thread only
-    Textura* textura = nullptr;
+  struct TextureInFlight {  // ring thread only
+    Texture* texture = nullptr;
     uint64_t ticket = 0;
-    VkImage imagen = VK_NULL_HANDLE;  // the queued one (to remove it from imagenes_en_vuelo_ and move its views)
-    VkResult resultado = VK_NOT_READY;
-    VkFormat formato = VK_FORMAT_UNDEFINED;  // the fields below, to recreate it through CrearTextura if the bind fails
-    uint32_t ancho = 0;
-    uint32_t alto = 0;
-    uint32_t capas = 1;
-    uint32_t fondo = 0;
-    uint32_t niveles = 1;
-    bool copia = false;  // SubirTextura already left its data in the upload buffer
-    VkDeviceSize copia_offset = 0;
-    uint64_t copia_epoca = 0;
-    VkCommandBuffer copia_comandos = VK_NULL_HANDLE;
+    VkImage img = VK_NULL_HANDLE;  // the queued one (to remove it from imagenes_en_vuelo_ and move its views)
+    VkResult result = VK_NOT_READY;
+    VkFormat format_id = VK_FORMAT_UNDEFINED;  // the fields below, to recreate it through CrearTextura if the bind fails
+    uint32_t width_px = 0;
+    uint32_t height_px = 0;
+    uint32_t layer_count = 1;
+    uint32_t background = 0;
+    uint32_t levels = 1;
+    bool copy_info = false;  // SubirTextura already left its data in the upload buffer
+    VkDeviceSize offset_copy = 0;
+    uint64_t epoch_copy = 0;
+    VkCommandBuffer commands_copy = VK_NULL_HANDLE;
   };
-  struct VistaEnVuelo {  // ring thread only
-    uint64_t clave = 0;
-    VkImage imagen = VK_NULL_HANDLE;
-    VkFormat formato = VK_FORMAT_UNDEFINED;
+  struct ViewInFlight {  // ring thread only
+    uint64_t key = 0;
+    VkImage img = VK_NULL_HANDLE;
+    VkFormat format_id = VK_FORMAT_UNDEFINED;
     uint32_t swizzle = 0;
     uint16_t swizzle_host = 0;
-    uint32_t monton = 0;
+    uint32_t heap = 0;
     uint32_t ranura = 0;
   };
-  static constexpr uint64_t kColaEnlaces = 256;  // potencia de 2
-  static constexpr uint64_t kEnlacesAComprobar = 64;
-  static constexpr int32_t kEnlacesSinDecidir = -1;
-  static constexpr int32_t kEnlacesApagado = 0;
-  static constexpr int32_t kEnlacesMirando = 1;
-  static constexpr int32_t kEnlacesAplicando = 2;
-  std::array<PeticionEnlace, kColaEnlaces> cola_enlaces_{};
-  std::mutex enlaces_mutex_;
-  std::condition_variable enlaces_cv_;         // there are requests or a stop request (the thread waits on it)
-  std::condition_variable enlaces_hechos_cv_;  // the thread finished one (the ring waits on it)
-  uint64_t enlaces_pedidos_ = 0;       // con enlaces_mutex_
-  uint64_t enlaces_hechos_ = 0;        // con enlaces_mutex_
-  uint64_t enlaces_recogidos_ = 0;     // con enlaces_mutex_
-  bool enlaces_durmiendo_ = false;     // con enlaces_mutex_
-  bool enlaces_esperando_ = false;     // con enlaces_mutex_
-  bool enlaces_parar_ = false;         // con enlaces_mutex_
-  bool enlaces_prioridad_ok_ = true;   // con enlaces_mutex_
-  uint64_t ns_enlaces_hilo_ = 0;       // con enlaces_mutex_
-  uint64_t ns_enlace_peor_ = 0;        // con enlaces_mutex_
-  uint64_t enlaces_cola_llena_ = 0;    // con enlaces_mutex_
-  std::thread enlaces_hilo_;
-  int32_t enlaces_prioridad_ = 0x2D;  // written by the ring before creating the thread
+  static constexpr uint64_t kBindingsQueue = 256;  // potencia de 2
+  static constexpr uint64_t kBindingsToCheck = 64;
+  static constexpr int32_t kBindingsWithoutDecide = -1;
+  static constexpr int32_t kBindingsDisabled = 0;
+  static constexpr int32_t kPeekingBindings = 1;
+  static constexpr int32_t kApplyingBindings = 2;
+  std::array<BindingRequest, kBindingsQueue> bindings_queue_{};
+  std::mutex mutex_bindings_;
+  std::condition_variable cv_bindings_;         // there are requests or a stop request (the thread waits on it)
+  std::condition_variable cv_done_bindings_;  // the thread finished one (the ring waits on it)
+  uint64_t requests_bindings_ = 0;       // con enlaces_mutex_
+  uint64_t done_bindings_ = 0;        // con enlaces_mutex_
+  uint64_t collected_bindings_ = 0;     // con enlaces_mutex_
+  bool sleeping_bindings_ = false;     // con enlaces_mutex_
+  bool waiting_bindings_ = false;     // con enlaces_mutex_
+  bool stop_bindings_ = false;         // con enlaces_mutex_
+  bool priority_bindings_ok_ = true;   // con enlaces_mutex_
+  uint64_t thread_bindings_ns_ = 0;       // con enlaces_mutex_
+  uint64_t worst_binding_ns_ = 0;        // con enlaces_mutex_
+  uint64_t full_queue_bindings_ = 0;    // con enlaces_mutex_
+  std::thread thread_bindings_;
+  int32_t priority_bindings_ = 0x2D;  // written by the ring before creating the thread
   // Ring thread only:
-  int32_t enlaces_fase_ = kEnlacesSinDecidir;
-  bool enlaces_atascado_ = false;
-  bool midiendo_creacion_ = false;
-  bool recogiendo_enlaces_ = false;
-  std::vector<TexturaEnVuelo> en_vuelo_;
-  std::vector<VistaEnVuelo> vistas_en_vuelo_;
-  std::unordered_set<VkImage> imagenes_en_vuelo_;
-  uint64_t enlaces_comprobados_ = 0;
-  uint64_t enlaces_hilo_total_ = 0;
-  uint64_t enlaces_fallidos_ = 0;
-  uint64_t vistas_aplazadas_ = 0;
-  uint64_t copias_aplazadas_ = 0;
-  uint64_t ranuras_perdidas_ = 0;
-  uint64_t ns_espera_enlaces_total_ = 0;
+  int32_t phase_bindings_ = kBindingsWithoutDecide;
+  bool stuck_bindings_ = false;
+  bool creation_measuring_ = false;
+  bool bindings_collecting_ = false;
+  std::vector<TextureInFlight> in_flight_;
+  std::vector<ViewInFlight> views_in_flight_;
+  std::unordered_set<VkImage> images_in_flight_;
+  uint64_t checked_bindings_ = 0;
+  uint64_t thread_bindings_total_ = 0;
+  uint64_t failed_bindings_ = 0;
+  uint64_t deferred_views_ = 0;
+  uint64_t deferred_copies_ = 0;
+  uint64_t lost_slots_ = 0;
+  uint64_t bindings_wait_total_ns_ = 0;
   // The 10 s report (InformeEnlaces):
-  std::chrono::steady_clock::time_point informe_enlaces_{};
-  uint64_t enlaces_hilo_informe_ = 0;
-  uint64_t esperas_enlaces_informe_ = 0;
-  uint64_t ns_espera_enlaces_informe_ = 0;
-  uint64_t ns_espera_enlaces_peor_ = 0;
-  uint64_t ns_crear_informe_ = 0;
-  uint64_t creadas_informe_previas_ = 0;
-  uint64_t vistas_aplazadas_informe_ = 0;
-  uint64_t copias_aplazadas_informe_ = 0;
-  uint64_t ns_enlaces_hilo_previo_ = 0;
-  uint64_t cola_llena_previa_ = 0;
-  uint32_t informes_sin_compensar_ = 0;
+  std::chrono::steady_clock::time_point bindings_report_{};
+  uint64_t thread_bindings_report_ = 0;
+  uint64_t bindings_waits_report_ = 0;
+  uint64_t bindings_wait_report_ns_ = 0;
+  uint64_t worst_bindings_wait_ns_ = 0;
+  uint64_t create_report_ns_ = 0;
+  uint64_t created_report_previous_ = 0;
+  uint64_t deferred_views_report_ = 0;
+  uint64_t deferred_copies_report_ = 0;
+  uint64_t thread_bindings_previous_ns_ = 0;
+  uint64_t full_queue_previous_ = 0;
+  uint32_t reports_without_compensate_ = 0;
   // Texture hash thread (nfsmw_nativo_texturas_huella_hilo). See the PlanearHuella block.
-  std::array<TrabajoHuella, kColaHuellas> cola_huellas_{};  // a slot belongs to the thread while it is EnHilo
-  std::mutex huellas_mutex_;
-  std::condition_variable huellas_cv_;         // there are jobs or a stop request (the thread waits on it)
-  std::condition_variable huellas_hechos_cv_;  // the thread finished one (the ring waits on it)
-  uint64_t huellas_publicados_ = 0;   // under huellas_mutex_ (only the ring writes it)
-  uint64_t huellas_tomados_ = 0;      // under huellas_mutex_: the thread has looked up to here
-  uint64_t huellas_hechos_ = 0;       // con huellas_mutex_
-  bool huellas_durmiendo_ = false;    // con huellas_mutex_
-  bool huellas_esperando_ = false;    // con huellas_mutex_
-  bool huellas_parar_ = false;        // con huellas_mutex_
-  bool huellas_prioridad_ok_ = true;  // con huellas_mutex_
-  bool huellas_nucleo_ok_ = true;     // con huellas_mutex_
-  int huellas_nucleo_real_ = -1;      // under huellas_mutex_: where the thread ran when starting
-  std::thread huellas_hilo_;
-  int32_t huellas_prioridad_ = 0x2E;  // written by the ring before creating the thread
-  int32_t huellas_nucleo_pedido_ = -2;
-  int32_t huellas_nucleo_ = -1;       // written by the ring before creating the thread
+  std::array<FingerprintJob, kFingerprintsQueue> fingerprints_queue_{};  // a slot belongs to the thread while it is EnHilo
+  std::mutex mutex_fingerprints_;
+  std::condition_variable cv_fingerprints_;         // there are jobs or a stop request (the thread waits on it)
+  std::condition_variable cv_done_fingerprints_;  // the thread finished one (the ring waits on it)
+  uint64_t published_fingerprints_ = 0;   // under huellas_mutex_ (only the ring writes it)
+  uint64_t taken_fingerprints_ = 0;      // under huellas_mutex_: the thread has looked up to here
+  uint64_t done_fingerprints_ = 0;       // con huellas_mutex_
+  bool sleeping_fingerprints_ = false;    // con huellas_mutex_
+  bool waiting_fingerprints_ = false;    // con huellas_mutex_
+  bool stop_fingerprints_ = false;        // con huellas_mutex_
+  bool priority_fingerprints_ok_ = true;  // con huellas_mutex_
+  bool core_fingerprints_ok_ = true;     // con huellas_mutex_
+  int real_core_fingerprints_ = -1;      // under huellas_mutex_: where the thread ran when starting
+  std::thread thread_fingerprints_;
+  int32_t priority_fingerprints_ = 0x2E;  // written by the ring before creating the thread
+  int32_t request_core_fingerprints_ = -2;
+  int32_t core_fingerprints_ = -1;       // written by the ring before creating the thread
   // The snapshots and the plans: the ring writes them before publishing each job; the thread only reads
   // them.
-  std::unique_ptr<uint8_t[]> instantaneas_;
-  std::unique_ptr<LecturaHuella[]> lecturas_huella_;
-  uint64_t instantaneas_bytes_ = 0;
+  std::unique_ptr<uint8_t[]> snapshots_;
+  std::unique_ptr<FingerprintReadback[]> fingerprint_reads_;
+  uint64_t snapshots_bytes_ = 0;
   // Ring thread only:
-  int32_t huellas_fase_ = kHuellasSinDecidir;
-  uint64_t huellas_recogidos_ = 0;
-  uint64_t instantaneas_usado_ = 0;
-  uint32_t lecturas_usadas_ = 0;
-  std::array<LecturaHuella, kLecturasPorTextura> lecturas_plan_{};
-  std::vector<TrabajoHuella> huellas_planeadas_;
-  uint64_t huellas_planeadas_pendientes_ = 0;
-  std::vector<TrabajoHuella> huellas_recogidas_;
-  std::array<ComparacionHuella, kColaHuellas> comparaciones_huella_{};
-  const Textura* comparacion_textura_ = nullptr;
-  uint64_t comparacion_secuencia_ = 0;
-  std::vector<uint8_t> huellas_datos_anillo_;
-  std::vector<uint8_t> huellas_comprobacion_anillo_;
-  bool huellas_rapido_apagado_anillo_ = false;
-  bool huellas_sin_hilo_ = false;
-  bool huellas_atascado_ = false;
-  bool huellas_sospechosas_ = false;
-  bool recogiendo_huellas_ = false;
-  uint64_t huellas_comparaciones_planeadas_ = 0;
-  uint64_t huellas_nuevas_aplicando_ = 0;
-  uint64_t huellas_hilo_total_ = 0;
-  uint64_t huellas_anillo_total_ = 0;
-  uint64_t huellas_comparadas_ = 0;
-  uint64_t huellas_sin_comparar_ = 0;
-  uint64_t huellas_descartadas_ = 0;
-  uint64_t huellas_resubidas_ = 0;
+  int32_t phase_fingerprints_ = kFingerprintsWithoutDecide;
+  uint64_t collected_fingerprints_ = 0;
+  uint64_t used_snapshots_ = 0;
+  uint32_t used_reads_ = 0;
+  std::array<FingerprintReadback, kReadsPerTexture> plan_reads_{};
+  std::vector<FingerprintJob> planned_fingerprints_;
+  uint64_t pending_planned_fingerprints_ = 0;
+  std::vector<FingerprintJob> gathered_fingerprints_;
+  std::array<FingerprintCompare, kFingerprintsQueue> fingerprint_comparisons_{};
+  const Texture* texture_comparison_ = nullptr;
+  uint64_t sequence_comparison_ = 0;
+  std::vector<uint8_t> ring_data_fingerprints_;
+  std::vector<uint8_t> ring_check_fingerprints_;
+  bool ring_disabled_fast_fingerprints_ = false;
+  bool fingerprints_without_thread_ = false;
+  bool stuck_fingerprints_ = false;
+  bool suspicious_fingerprints_ = false;
+  bool fingerprints_collecting_ = false;
+  uint64_t planned_comparisons_fingerprints_ = 0;
+  uint64_t applying_new_fingerprints_ = 0;
+  uint64_t thread_fingerprints_total_ = 0;
+  uint64_t ring_fingerprints_total_ = 0;
+  uint64_t compared_fingerprints_ = 0;
+  uint64_t fingerprints_without_compare_ = 0;
+  uint64_t discarded_fingerprints_ = 0;
+  uint64_t reuploaded_fingerprints_ = 0;
   // The 10 s report (InformeHuellas):
-  std::chrono::steady_clock::time_point informe_huellas_{};
-  uint64_t huellas_planeadas_informe_ = 0;
-  uint64_t huellas_comparacion_informe_ = 0;
-  uint64_t huellas_hilo_informe_ = 0;
-  uint64_t huellas_anillo_informe_ = 0;
-  uint64_t ns_huellas_hilo_informe_ = 0;
-  uint64_t ns_huella_cruda_hilo_informe_ = 0;
-  uint64_t ns_huellas_anillo_informe_ = 0;
-  uint64_t ns_instantaneas_informe_ = 0;
-  uint64_t bytes_instantaneas_informe_ = 0;
-  uint64_t ns_espera_huellas_informe_ = 0;
-  uint64_t ns_espera_huellas_peor_ = 0;
-  uint64_t esperas_huellas_informe_ = 0;
-  uint64_t huellas_sin_sitio_informe_ = 0;
-  uint32_t informes_sin_compensar_huellas_ = 0;
-  int32_t prueba_sin_memoria_cada_ = 0;  // nfsmw_nativo_prueba_sin_memoria_cada
-  uint64_t reservas_de_textura_ = 0;
-  bool soltando_por_falta_de_memoria_ = false;  // guard against reentry
-  uint64_t soltadas_poco_a_poco_ = 0;
-  uint64_t aviso_goteo_ = 0;
-  uint64_t intento_expulsion_ = 0;
-  uint64_t texturas_soltadas_ = 0;
+  std::chrono::steady_clock::time_point fingerprints_report_{};
+  uint64_t planned_fingerprints_report_ = 0;
+  uint64_t comparison_fingerprints_report_ = 0;
+  uint64_t thread_fingerprints_report_ = 0;
+  uint64_t ring_fingerprints_report_ = 0;
+  uint64_t thread_fingerprints_report_ns_ = 0;
+  uint64_t thread_raw_fingerprint_report_ns_ = 0;
+  uint64_t ring_fingerprints_report_ns_ = 0;
+  uint64_t snapshots_report_ns_ = 0;
+  uint64_t snapshots_report_bytes_ = 0;
+  uint64_t fingerprints_wait_report_ns_ = 0;
+  uint64_t worst_fingerprints_wait_ns_ = 0;
+  uint64_t fingerprints_waits_report_ = 0;
+  uint64_t fingerprints_without_room_report_ = 0;
+  uint32_t reports_without_fingerprints_compensate_ = 0;
+  int32_t test_without_memory_every_ = 0;  // nfsmw_nativo_prueba_sin_memoria_cada
+  uint64_t texture_reserves_ = 0;
+  bool releasing_per_memory_missing_ = false;  // guard against reentry
+  uint64_t few_released_to_few_ = 0;
+  uint64_t trickle_warning_ = 0;
+  uint64_t eviction_attempt_ = 0;
+  uint64_t released_textures_ = 0;
   // Diagnostic of why the cache grows: creations per address and last key per shape (address, format and
   // size). Only touched when a texture is created.
-  uint64_t texturas_creadas_ = 0;
-  uint64_t creadas_en_direccion_vista_ = 0;
-  uint64_t creadas_misma_forma_otra_clave_ = 0;
-  std::unordered_map<uint32_t, uint32_t> creadas_por_direccion_;
-  std::unordered_map<uint64_t, uint64_t> clave_por_forma_;
-  std::unordered_map<uint64_t, std::array<uint32_t, 5>> palabras_por_forma_;
-  uint64_t claves_incoherentes_ = 0;  // texture key guard (PrepararTextura)
-  uint32_t avisos_otra_clave_ = 0;
+  uint64_t created_textures_ = 0;
+  uint64_t created_in_view_address_ = 0;
+  uint64_t key_other_shape_same_created_ = 0;
+  std::unordered_map<uint32_t, uint32_t> created_per_address_;
+  std::unordered_map<uint64_t, uint64_t> key_per_shape_;
+  std::unordered_map<uint64_t, std::array<uint32_t, 5>> words_per_shape_;
+  uint64_t inconsistent_keys_ = 0;  // texture key guard (PrepararTextura)
+  uint32_t key_other_warnings_ = 0;
   // "C6 contadores".
-  uint64_t pases_empezados_ = 0;
-  uint64_t envios_llenos_ = 0;
-  uint64_t ns_envios_llenos_ = 0;
+  uint64_t started_passes_ = 0;
+  uint64_t full_sends_ = 0;
+  uint64_t full_sends_ns_ = 0;
   uint64_t bytes_vertices_ = 0;
-  uint64_t bytes_indices_subidos_ = 0;
-  uint64_t samplers_preparados_ = 0;
+  uint64_t uploaded_indices_bytes_ = 0;
+  uint64_t prepared_samplers_ = 0;
   uint64_t samplers_cache_ = 0;
-  uint64_t ns_pases_ = 0;
+  uint64_t passes_ns_ = 0;
   uint64_t ns_vertices_ = 0;
-  uint64_t entradas_calculadas_ = 0;
-  uint64_t ns_entradas_ = 0;
-  uint64_t entradas_reutilizadas_ = 0;
-  uint64_t pases_por_generacion_ = 0;
-  uint64_t pases_por_destino_ = 0;
-  uint64_t pases_reanudados_ = 0;
-  uint64_t texels_pases_ = 0;
-  std::array<uint64_t, kGpuCategorias> texels_por_categoria_{};
-  std::array<uint64_t, kGpuCategorias> dibujos_por_categoria_{};
-  std::chrono::steady_clock::time_point inicio_alternancia_ps_ = std::chrono::steady_clock::now();
-  bool alternancia_ps_anotada_ = false;
-  bool alternancia_solo_alfa_anotada_ = false;
-  bool inv_tamano_tex_ = false;
-  bool pcf_barato_ = false;                    // a single shadow map sample
-  bool pase_coches_sombra_ = false;            // nfsmw_nativo_sombra_minimo, car pass
-  bool sin_desenfoque_fotograma_ = true;       // nfsmw_nativo_sin_desenfoque, per frame
-  bool mip_puntual_prueba_ = false;            // Test: trilinear -> bilinear (measurement only)
+  uint64_t computed_entries_ = 0;
+  uint64_t entries_ns_ = 0;
+  uint64_t reused_entries_ = 0;
+  uint64_t passes_per_generation_ = 0;
+  uint64_t passes_per_target_ = 0;
+  uint64_t resumed_passes_ = 0;
+  uint64_t passes_texels_ = 0;
+  std::array<uint64_t, kGpuCategories> texels_per_category_{};
+  std::array<uint64_t, kGpuCategories> draws_per_category_{};
+  std::chrono::steady_clock::time_point ps_toggle_start_ = std::chrono::steady_clock::now();
+  bool tracked_ps_toggle_ = false;
+  bool tracked_alpha_only_toggle_ = false;
+  bool tex_size_inv_ = false;
+  bool cheap_pcf_ = false;                    // a single shadow map sample
+  bool shadow_cars_pass_ = false;            // nfsmw_nativo_sombra_minimo, car pass
+  bool without_frame_blur_ = true;       // nfsmw_nativo_sin_desenfoque, per frame
+  bool test_point_mip_ = false;            // Test: trilinear -> bilinear (measurement only)
   // Deduplication of vertex uploads within the frame.
   DedupeVertices dedupe_;
-  bool dedupe_activo_ = true;
-  uint32_t dedupe_sinc_vista_ = 0;  // last value seen of g_sincronizaciones_anillo
-  std::set<uint64_t> avisos_invtam_resuelta_;  // one trace per size
-  bool alternancia_tijera_anotada_ = false;
-  std::unordered_map<const EntradaShader*, VkShaderModule> modulos_solo_alfa_;
+  bool active_dedupe_ = true;
+  uint32_t view_sync_dedupe_ = 0;  // last value seen of g_sincronizaciones_anillo
+  std::set<uint64_t> resolved_invsize_warnings_;  // one trace per size
+  bool tracked_scissor_toggle_ = false;
+  std::unordered_map<const ShaderEntry*, VkShaderModule> alpha_only_modules_;
   // The same module with OpExecutionMode EarlyFragmentTests (nfsmw_nativo_z_temprana).
-  std::unordered_map<const EntradaShader*, VkShaderModule> modulos_z_temprana_;
-  uint64_t dibujos_ps_inutil_ = 0;     // no color and a PS that does not discard
-  uint64_t dibujos_ps_necesario_ = 0;  // no color, but the PS is needed
-  uint64_t sombras_alfa_activa_ = 0;
-  uint64_t escena_con_descarte_ = 0;
-  uint64_t escena_sin_descarte_ = 0;   // shadow map draws with the alpha test enabled
+  std::unordered_map<const ShaderEntry*, VkShaderModule> early_modules_z_;
+  uint64_t useless_ps_draws_ = 0;     // no color and a PS that does not discard
+  uint64_t required_ps_draws_ = 0;  // no color, but the PS is needed
+  uint64_t shadows_active_alpha_ = 0;
+  uint64_t scene_with_discard_ = 0;
+  uint64_t scene_without_discard_ = 0;   // shadow map draws with the alpha test enabled
   /*
    * nfsmw_nativo_z_temprana and nfsmw_nativo_saltar_invisibles. The first four split C6's "lo impiden"
    * in two: those fixed by testing earlier and those that cannot be fixed because they write depth or
    * stencil (the latter are the exact size of a depth pre-pass).
    */
   enum : uint32_t {
-    kZPuesta = 0,       // its depth test is moved earlier
-    kZEscribeZ,         // not possible: the draw writes depth
-    kZEstencil,         // not possible: stencil is involved
+    kZSet = 0,       // its depth test is moved earlier
+    kZWriteZ,         // not possible: the draw writes depth
+    kZStencil,         // not possible: stencil is involved
     kZOclusion,         // left alone: a game occlusion query is open
-    kZYaTemprano,       // no alpha test or kill: the GPU already tested early
-    kInvisibleMezcla,   // blending copies the destination: the draw paints nothing
+    kZEarlyAlready,       // no alpha test or kill: the GPU already tested early
+    kBlendInvisible,   // blending copies the destination: the draw paints nothing
     kInvisibleAlfa,     // alpha test with the NEVER function
-    kInvisibleSoloColor,  // invisible in color but writes Z: only its color is removed
-    kZCuentas
+    kColorOnlyInvisible,  // invisible in color but writes Z: only its color is removed
+    kZCounts
   };
-  std::array<uint64_t, kZCuentas> cuentas_z_{};
-  std::array<uint64_t, kZCuentas> cuentas_z_previas_{};
-  uint64_t z_temprana_sin_modulo_ = 0;
-  uint64_t fotogramas_z_ = 0;
-  uint64_t fotogramas_z_previos_ = 0;
-  std::chrono::steady_clock::time_point ultimo_informe_z_ = std::chrono::steady_clock::now();
-  std::chrono::steady_clock::time_point inicio_alternancia_z_ = std::chrono::steady_clock::now();
-  bool z_temprana_ = true;
-  bool alternancia_z_anotada_ = false;
-  bool saltar_invisibles_ = true;
-  uint64_t sombras_alfa_apagada_ = 0;  // ... and without it (the stage would be unnecessary)
-  std::array<uint64_t, kGpuCategorias> triangulos_por_categoria_{};
-  std::array<uint64_t, kGpuCategorias> pases_por_categoria_{};
+  std::array<uint64_t, kZCounts> counts_z_{};
+  std::array<uint64_t, kZCounts> counts_z_previous_{};
+  uint64_t z_early_without_module_ = 0;
+  uint64_t frames_z_ = 0;
+  uint64_t frames_z_previous_ = 0;
+  std::chrono::steady_clock::time_point last_report_z_ = std::chrono::steady_clock::now();
+  std::chrono::steady_clock::time_point toggle_z_start_ = std::chrono::steady_clock::now();
+  bool z_early_ = true;
+  bool tracked_toggle_z_ = false;
+  bool skip_invisible_ = true;
+  uint64_t shadows_alpha_disabled_ = 0;  // ... and without it (the stage would be unnecessary)
+  std::array<uint64_t, kGpuCategories> triangles_per_category_{};
+  std::array<uint64_t, kGpuCategories> passes_per_category_{};
   uint64_t ns_render_pass_ = 0;
   // Prueba nfsmw_nativo_omitir_sombras_alternar_s.
-  std::chrono::steady_clock::time_point inicio_sombras_ = std::chrono::steady_clock::now();
-  bool sombras_omitidas_ = false;
+  std::chrono::steady_clock::time_point shadows_start_ = std::chrono::steady_clock::now();
+  bool shadows_skipped_ = false;
   // Diagnostico nfsmw_nativo_diag_vertices_repetidos.
-  struct VerticesVistos {
-    uint64_t fotograma = UINT64_MAX;
-    uint64_t huella = 0;
+  struct SeenVertices {
+    uint64_t frame = UINT64_MAX;
+    uint64_t fingerprint = 0;
   };
-  std::unordered_map<uint64_t, VerticesVistos> vertices_vistos_;
-  uint64_t bytes_repetidos_fotograma_ = 0;
-  uint64_t bytes_iguales_anterior_ = 0;
+  std::unordered_map<uint64_t, SeenVertices> seen_vertices_;
+  uint64_t frame_repeated_bytes_ = 0;
+  uint64_t previous_equal_bytes_ = 0;
   uint64_t ns_hash_vertices_ = 0;
   // Last texture and sampler result of each PS sampler register.
   struct CacheSampler {
     std::array<uint32_t, 6> fetch{};
-    uint64_t fotograma = UINT64_MAX;
+    uint64_t frame = UINT64_MAX;
     uint64_t generacion = 0;
     uint32_t ranura = 0;
-    uint32_t monton = 0;
+    uint32_t heap = 0;
     uint32_t sampler = 0;
-    uint64_t valido_hasta = 0;  // last frame it is valid without going back to PrepararTextura
-    uint32_t ancho = 0;  // host image size, for 1/size
-    uint32_t alto = 0;
-    float escala = 1.0f;  // AirborneNX: value scale of the slot (kPalabraEscala)
+    uint64_t valid_until = 0;  // last frame it is valid without going back to PrepararTextura
+    uint32_t width_px = 0;  // host image size, for 1/size
+    uint32_t height_px = 0;
+    float scale = 1.0f;  // AirborneNX: value scale of the slot (kPalabraEscala)
   };
-  bool cache_entre_fotogramas_ = true;  // nfsmw_nativo_cache_texturas_entre_fotogramas
+  bool cache_between_frames_ = true;  // nfsmw_nativo_cache_texturas_entre_fotogramas
   bool mipmaps_ = true;                 // nfsmw_nativo_mipmaps
   bool diag_mips_ = false;              // nfsmw_nativo_diag_mips
-  uint64_t mips_revisadas_ = 0;
-  uint64_t mips_raras_ = 0;
-  uint64_t niveles_mip_subidos_ = 0;    // report: mip levels (without the base) in created textures
+  uint64_t reviewed_mips_ = 0;
+  uint64_t rare_mips_ = 0;
+  uint64_t uploaded_mip_levels_ = 0;    // report: mip levels (without the base) in created textures
   std::array<CacheSampler, 16> cache_samplers_{};
   // Second cache, by the whole fetch constant: a direct-mapped table (the hash picks the slot). It went
   // from 256 to 1024 slots because in a race there are ~340 distinct textures per frame and 256 slots
@@ -13065,92 +13065,92 @@ class DibujosVulkanImpl final : public DibujosVulkan {
    */
   std::array<CacheSampler, 4096> cache_fetch_{};
   uint64_t samplers_cache_fetch_ = 0;
-  uint64_t fetch_fallos_choque_ = 0;      // The slot held another fetch constant
-  uint64_t fetch_fallos_vacia_ = 0;       // casilla sin usar todavia
-  uint64_t fetch_fallos_generacion_ = 0;  // same fetch, but generacion_texturas_ changed
-  uint64_t fetch_fallos_caducada_ = 0;    // same fetch, but the texture is due for a check (valido_hasta)
-  std::array<uint64_t, 6> fetch_informe_previos_{};
-  std::chrono::steady_clock::time_point fetch_informe_{};
-  uint64_t generacion_texturas_ = 0;  // changes with every C2 copy and every retired image
+  uint64_t collision_failures_fetch_ = 0;      // The slot held another fetch constant
+  uint64_t empty_failures_fetch_ = 0;       // casilla sin usar todavia
+  uint64_t generation_failures_fetch_ = 0;  // same fetch, but generacion_texturas_ changed
+  uint64_t expired_failures_fetch_ = 0;    // same fetch, but the texture is due for a check (valido_hasta)
+  std::array<uint64_t, 6> fetch_report_previous_{};
+  std::chrono::steady_clock::time_point fetch_report_{};
+  uint64_t textures_generation_ = 0;  // changes with every C2 copy and every retired image
   // On-disk pipeline cache (CargarCachePipelines and GuardarCachePipelines).
-  using FnCrearCachePipelines = VkResult(VKAPI_PTR*)(VkDevice, const VkPipelineCacheCreateInfo*,
+  using CreatePipelineCacheFn = VkResult(VKAPI_PTR*)(VkDevice, const VkPipelineCacheCreateInfo*,
                                                      const VkAllocationCallbacks*,
                                                      VkPipelineCache*);
-  using FnDatosCachePipelines = VkResult(VKAPI_PTR*)(VkDevice, VkPipelineCache, size_t*, void*);
-  using FnDestruirCachePipelines = void(VKAPI_PTR*)(VkDevice, VkPipelineCache,
+  using PipelineCacheDataFn = VkResult(VKAPI_PTR*)(VkDevice, VkPipelineCache, size_t*, void*);
+  using DestroyPipelineCacheFn = void(VKAPI_PTR*)(VkDevice, VkPipelineCache,
                                                     const VkAllocationCallbacks*);
-  FnDatosCachePipelines datos_cache_ = nullptr;
-  FnDestruirCachePipelines destruir_cache_ = nullptr;
+  PipelineCacheDataFn cache_data_ = nullptr;
+  DestroyPipelineCacheFn destroy_cache_ = nullptr;
   VkPipelineCache cache_pipelines_ = VK_NULL_HANDLE;
-  uint32_t pipelines_sin_guardar_ = 0;
-  uint32_t guardados_cache_ = 0;
-  size_t bytes_cache_guardados_ = 0;  // size of the last file read or saved
-  std::chrono::steady_clock::time_point cache_guardada_{};
+  uint32_t pipelines_without_save_ = 0;
+  uint32_t cache_saved_ = 0;
+  size_t saved_cache_bytes_ = 0;  // size of the last file read or saved
+  std::chrono::steady_clock::time_point saved_cache_{};
   // Thread that writes the pipeline cache to disk (EscritorCacheMain). It is persistent, because on
   // Horizon detach() closes the game, and wake-ups are decided with the lock held.
-  std::thread escritor_cache_;
-  std::mutex escritor_mutex_;
-  std::condition_variable escritor_aviso_;
-  std::vector<uint8_t> escritor_datos_;
-  bool escritor_pendiente_ = false;
-  bool escritor_parar_ = false;
+  std::thread cache_writer_;
+  std::mutex mutex_writer_;
+  std::condition_variable warning_writer_;
+  std::vector<uint8_t> data_writer_;
+  bool pending_writer_ = false;
+  bool stop_writer_ = false;
   // The single pipelines file. The last written version of each part (or the one read at start-up): owned
   // by the writer thread once it is running, and by Inicializar before that. lista_leida_ goes from
   // CargarCachePipelines to CargarListaPipelines.
-  std::vector<uint8_t> escrito_cache_;
-  std::vector<uint8_t> escrito_lista_;
-  std::vector<uint8_t> lista_leida_;
-  bool ficheros_viejos_ = false;  // the two older files were read: deleted when the new one is written
+  std::vector<uint8_t> cache_written_;
+  std::vector<uint8_t> list_written_;
+  std::vector<uint8_t> read_list_;
+  bool old_files_ = false;  // the two older files were read: deleted when the new one is written
   uint64_t ns_pipelines_ = 0;  // creando pipelines (informe C6)
-  std::unordered_set<uint32_t> avisados_;
+  std::unordered_set<uint32_t> warned_;
   // Pipeline prewarm (BuclePrecalentado). lista_archivo_ and estado_lista_ are sized before the thread
   // starts and never change size; the thread writes estado_lista_[i] before publishing
   // precalentado_hasta_ > i. Anything not atomic and not marked otherwise belongs to the ring only.
-  std::vector<RegistroPipeline> lista_archivo_;         // the list read at start-up (walked by the thread)
-  std::vector<uint8_t> estado_lista_;                   // kLista* of each record of lista_archivo_
-  std::unordered_map<uint64_t, size_t> indice_lista_;   // XXH3 of the key -> index (SIZE_MAX: from this session)
-  std::vector<RegistroPipeline> lista_sesion_;          // this session's new ones
-  uint32_t lista_sin_guardar_ = 0;
-  std::vector<uint8_t> escritor_lista_;                 // con escritor_mutex_
-  std::thread precalentado_hilo_;
-  const ShadersNativos* biblioteca_precalentado_ = nullptr;
-  uint32_t precalentado_eds_ = 0;
-  bool precalentado_decidido_ = false;
-  bool precalentado_diferencia_ = false;
-  std::chrono::steady_clock::time_point precalentado_inicio_{};
-  std::chrono::steady_clock::time_point precalentado_informe_{};
-  uint64_t precalentado_cambios_previos_ = 0;
-  std::atomic<bool> precalentado_parar_{false};
-  std::atomic<bool> precalentado_terminado_{false};
-  std::atomic<size_t> precalentado_hasta_{0};
-  std::atomic<uint32_t> precalentado_hechos_{0};
-  std::atomic<uint32_t> precalentado_compilados_{0};
-  std::atomic<uint64_t> precalentado_ns_compilados_{0};
-  std::atomic<uint32_t> precalentado_sin_shader_{0};
-  std::atomic<uint32_t> precalentado_otro_modo_{0};
-  std::atomic<uint32_t> precalentado_fallidos_{0};
-  std::atomic<int32_t> precalentado_prioridad_{-1};
-  uint32_t precalentado_contados_ = 0;  // of precalentado_compilados_, already added to pipelines_sin_guardar_
-  uint64_t anillo_precalentados_ = 0, anillo_precalentados_lentos_ = 0, ns_anillo_precalentados_ = 0;
-  uint64_t anillo_de_lista_ = 0, ns_anillo_de_lista_ = 0;
-  uint64_t anillo_nuevos_ = 0, ns_anillo_nuevos_ = 0, anillo_a_lista_ = 0;
+  std::vector<PipelineRecord> file_list_;         // the list read at start-up (walked by the thread)
+  std::vector<uint8_t> list_state_;                   // kLista* of each record of lista_archivo_
+  std::unordered_map<uint64_t, size_t> list_index_;   // XXH3 of the key -> index (SIZE_MAX: from this session)
+  std::vector<PipelineRecord> session_list_;          // this session's new ones
+  uint32_t list_without_save_ = 0;
+  std::vector<uint8_t> list_writer_;                 // con escritor_mutex_
+  std::thread prewarmed_thread_;
+  const NativeShaders* prewarmed_library_ = nullptr;
+  uint32_t prewarmed_eds_ = 0;
+  bool prewarmed_decided_ = false;
+  bool prewarmed_difference_ = false;
+  std::chrono::steady_clock::time_point prewarmed_start_{};
+  std::chrono::steady_clock::time_point prewarmed_report_{};
+  uint64_t prewarmed_changes_previous_ = 0;
+  std::atomic<bool> prewarmed_stop_{false};
+  std::atomic<bool> prewarmed_finished_{false};
+  std::atomic<size_t> prewarmed_until_{0};
+  std::atomic<uint32_t> prewarmed_done_{0};
+  std::atomic<uint32_t> prewarmed_compiled_{0};
+  std::atomic<uint64_t> prewarmed_compiled_ns_{0};
+  std::atomic<uint32_t> prewarmed_without_shader_{0};
+  std::atomic<uint32_t> prewarmed_other_mode_{0};
+  std::atomic<uint32_t> prewarmed_failed_{0};
+  std::atomic<int32_t> prewarmed_priority_{-1};
+  uint32_t prewarmed_counted_ = 0;  // of precalentado_compilados_, already added to pipelines_sin_guardar_
+  uint64_t prewarmed_ring_ = 0, slow_prewarmed_ring_ = 0, prewarmed_ring_ns_ = 0;
+  uint64_t list_ring_ = 0, list_ring_ns_ = 0;
+  uint64_t new_ring_ = 0, new_ring_ns_ = 0, ring_to_list_ = 0;
 };
 
 }  // namespace
 
-std::unique_ptr<DibujosVulkan> DibujosVulkan::Crear(const VulkanDevice* dispositivo,
-                                                    rex::memory::Memory* memoria,
-                                                    ContextoDestinos* contexto) {
-  if (!dispositivo || !memoria || !contexto) {
+std::unique_ptr<VulkanDrawer> VulkanDrawer::Make(const VulkanDevice* dev,
+                                                    rex::memory::Memory* mem,
+                                                    TargetsContext* contexto) {
+  if (!dev || !mem || !contexto) {
     return nullptr;
   }
-  auto dibujos = std::make_unique<DibujosVulkanImpl>(dispositivo, memoria, contexto);
-  if (!dibujos->Inicializar()) {
+  auto draws = std::make_unique<VulkanDrawerImpl>(dev, mem, contexto);
+  if (!draws->Initialize()) {
     REXLOG_ERROR("[nativo] C6: no se pudieron preparar los dibujos nativos");
     return nullptr;
   }
   REXLOG_INFO("[nativo] C6: dibujos nativos preparados");
-  return dibujos;
+  return draws;
 }
 
 }  // namespace nfsmw::nativo

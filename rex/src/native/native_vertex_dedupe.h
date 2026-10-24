@@ -71,7 +71,7 @@
 #include <array>
 #include <cstdint>
 
-namespace nfsmw::nativo {
+namespace nfsmw::native_renderer {
 
 // Deduplication of vertex bindings within a frame. Single thread (the ring thread).
 class DedupeVertices {
@@ -95,16 +95,16 @@ class DedupeVertices {
   static constexpr size_t kRanuras = 16384;
 
   // A frame starts: everything recorded before becomes invalid (the upload buffer has been reset).
-  void NuevoFotograma(uint64_t fotograma) {
+  void NewFrame(uint64_t frame) {
     // fotograma_ can never equal kVacia, which marks an unused entry.
-    fotograma_ = fotograma == kVacia ? 0 : fotograma;
+    frame_ = frame == kEmpty ? 0 : frame;
   }
 
   // The guest may have synchronized with the GPU and rewritten memory: what was recorded
   // becomes invalid even within the same frame. O(1): it only moves the generation.
-  void Olvidar() {
+  void Forget() {
     ++generacion_;
-    ++olvidos_;
+    ++forgets_;
   }
 
   // true if that range is already copied in this frame's upload buffer. 'offset' then holds
@@ -114,87 +114,87 @@ class DedupeVertices {
   // is stored when recording and compared when looking up; on a mismatch it is counted in
   // discrepancias() and false is returned (the data is copied as usual). It proves in a real
   // race that deduplication never serves stale data, without risking a single pixel.
-  bool Buscar(uint64_t direccion, uint32_t bytes, uint32_t orden, uint64_t& offset,
-              uint64_t huella = 0) {
-    ++consultas_;
-    const uint64_t clave = Clave(direccion, orden);
-    const Entrada& e = tabla_[Indice(clave, bytes)];
-    if (e.fotograma != fotograma_ || e.generacion != generacion_ || e.clave != clave ||
+  bool Lookup(uint64_t address, uint32_t bytes, uint32_t orden, uint64_t& offset,
+              uint64_t fingerprint = 0) {
+    ++queries_;
+    const uint64_t key = Key(address, orden);
+    const Entry& e = table_[Index(key, bytes)];
+    if (e.frame != frame_ || e.generacion != generacion_ || e.key != key ||
         e.bytes != bytes) {
       return false;
     }
-    if (huella != 0 && e.huella != huella) {
-      ++discrepancias_;
+    if (fingerprint != 0 && e.fingerprint != fingerprint) {
+      ++discrepancies_;
       return false;
     }
-    ++aciertos_;
-    bytes_ahorrados_ += bytes;
+    ++hits_;
+    saved_bytes_ += bytes;
     offset = e.offset;
     return true;
   }
 
   // Records a copy just made. 'huella' is only used in the paranoid mode of Buscar.
-  void Anotar(uint64_t direccion, uint32_t bytes, uint32_t orden, uint64_t offset,
-              uint64_t huella = 0) {
-    const uint64_t clave = Clave(direccion, orden);
-    Entrada& e = tabla_[Indice(clave, bytes)];
-    if (e.fotograma == fotograma_ && e.generacion == generacion_ &&
-        (e.clave != clave || e.bytes != bytes)) {
-      ++colisiones_;  // another live entry loses its slot: the table is too small
+  void Track(uint64_t address, uint32_t bytes, uint32_t orden, uint64_t offset,
+              uint64_t fingerprint = 0) {
+    const uint64_t key = Key(address, orden);
+    Entry& e = table_[Index(key, bytes)];
+    if (e.frame == frame_ && e.generacion == generacion_ &&
+        (e.key != key || e.bytes != bytes)) {
+      ++collisions_;  // another live entry loses its slot: the table is too small
     }
-    e.clave = clave;
+    e.key = key;
     e.bytes = bytes;
     e.offset = offset;
-    e.huella = huella;
-    e.fotograma = fotograma_;
+    e.fingerprint = fingerprint;
+    e.frame = frame_;
     e.generacion = generacion_;
   }
 
   // Counters for the C6 report (deltas between reports, like the others).
-  uint64_t consultas() const { return consultas_; }
-  uint64_t aciertos() const { return aciertos_; }
-  uint64_t bytes_ahorrados() const { return bytes_ahorrados_; }
-  uint64_t colisiones() const { return colisiones_; }
-  uint64_t olvidos() const { return olvidos_; }
-  uint64_t discrepancias() const { return discrepancias_; }
+  uint64_t queries() const { return queries_; }
+  uint64_t hits() const { return hits_; }
+  uint64_t saved_bytes() const { return saved_bytes_; }
+  uint64_t collisions() const { return collisions_; }
+  uint64_t forgets() const { return forgets_; }
+  uint64_t discrepancies() const { return discrepancies_; }
 
  private:
-  static constexpr uint64_t kVacia = ~uint64_t(0);
+  static constexpr uint64_t kEmpty = ~uint64_t(0);
 
-  struct Entrada {
-    uint64_t clave = 0;           // (direccion << 2) | orden
+  struct Entry {
+    uint64_t key = 0;           // (direccion << 2) | orden
     uint64_t offset = 0;          // offset inside the upload buffer
-    uint64_t huella = 0;          // paranoid mode only
-    uint64_t fotograma = kVacia;  // kVacia = never used
+    uint64_t fingerprint = 0;          // paranoid mode only
+    uint64_t frame = kEmpty;  // kVacia = never used
     uint32_t bytes = 0;
     uint32_t generacion = 0;      // incremented by every Olvidar()
   };
-  static_assert(sizeof(Entrada) == 40, "la entrada tiene que caber en 40 bytes");
+  static_assert(sizeof(Entry) == 40, "la entrada tiene que caber en 40 bytes");
 
-  static uint64_t Clave(uint64_t direccion, uint32_t orden) {
-    return (direccion << 2) | (uint64_t(orden) & 0x3);
+  static uint64_t Key(uint64_t address, uint32_t orden) {
+    return (address << 2) | (uint64_t(orden) & 0x3);
   }
 
   // Multiply-and-shift mix (splitmix). Cheap, and it spreads aligned addresses well, which is
   // exactly what arrives here.
-  static size_t Indice(uint64_t clave, uint32_t bytes) {
-    uint64_t x = clave ^ (uint64_t(bytes) * 0x9E3779B97F4A7C15ull);
+  static size_t Index(uint64_t key, uint32_t bytes) {
+    uint64_t x = key ^ (uint64_t(bytes) * 0x9E3779B97F4A7C15ull);
     x ^= x >> 30;
     x *= 0xBF58476D1CE4E5B9ull;
     x ^= x >> 27;
     return size_t(x) & (kRanuras - 1);
   }
 
-  std::array<Entrada, kRanuras> tabla_{};
-  uint64_t fotograma_ = 0;
+  std::array<Entry, kRanuras> table_{};
+  uint64_t frame_ = 0;
   uint32_t generacion_ = 0;
 
-  uint64_t consultas_ = 0;
-  uint64_t aciertos_ = 0;
-  uint64_t bytes_ahorrados_ = 0;
-  uint64_t colisiones_ = 0;
-  uint64_t olvidos_ = 0;
-  uint64_t discrepancias_ = 0;
+  uint64_t queries_ = 0;
+  uint64_t hits_ = 0;
+  uint64_t saved_bytes_ = 0;
+  uint64_t collisions_ = 0;
+  uint64_t forgets_ = 0;
+  uint64_t discrepancies_ = 0;
 };
 
 }  // namespace nfsmw::nativo

@@ -98,33 +98,33 @@
 #include <string>
 #include <vector>
 
-namespace nfsmw::nativo {
+namespace nfsmw::native_renderer {
 
 // Opaque identifier of a pool block. This value means "not from the pool" and is the
 // default value ImagenNativa::pool_bloque must hold.
-inline constexpr uint32_t kBloquePoolInvalido = UINT32_MAX;
+inline constexpr uint32_t kInvalidPoolBlock = UINT32_MAX;
 
 // Pool granularity. Horizon binds with 64 KiB alignment
 // (NOUVEAU_HORIZON_BIND_ALIGN_B, horizon/nouveau_horizon_private.h:21) and NVK already
 // rounds image sizes to that value, so no memory is lost: it is the same rounding the
 // dedicated allocation already pays.
-inline constexpr uint64_t kUnidadPoolBytes = 64ull * 1024ull;
+inline constexpr uint64_t kPoolUnitBytes = 64ull * 1024ull;
 
 // For the AnotarMemoriaDeLaGpu report.
-struct EstadoPoolTexturas {
-  bool activo = false;
-  uint32_t tipo_memoria = UINT32_MAX;
+struct TexturePoolState {
+  bool active = false;
+  uint32_t memory_type = UINT32_MAX;
   uint32_t slabs = 0;
-  uint64_t bytes_reservados = 0;  // sum of the slab sizes
-  uint64_t bytes_en_uso = 0;      // space used by live textures
-  uint64_t bytes_libres = 0;
-  uint64_t bytes_mayor_hueco = 0;  // largest contiguous free range: measures fragmentation
-  uint64_t texturas_vivas = 0;
-  uint64_t texturas_colocadas = 0;   // running total that went into the pool
-  uint64_t texturas_dedicadas = 0;   // running total that fell back to the dedicated path
-  uint64_t huecos_fallados = 0;      // times it did not fit in any slab
-  uint64_t slabs_en_caliente = 0;    // slabs created after prewarming
-  uint64_t slabs_fallados = 0;       // times vkAllocateMemory refused a slab
+  uint64_t reserved_bytes = 0;  // sum of the slab sizes
+  uint64_t in_use_bytes = 0;      // space used by live textures
+  uint64_t free_bytes = 0;
+  uint64_t slot_greater_bytes = 0;  // largest contiguous free range: measures fragmentation
+  uint64_t alive_textures = 0;
+  uint64_t placed_textures = 0;   // running total that went into the pool
+  uint64_t dedicated_textures = 0;   // running total that fell back to the dedicated path
+  uint64_t failed_slots = 0;      // times it did not fit in any slab
+  uint64_t slabs_in_hot = 0;    // slabs created after prewarming
+  uint64_t failed_slabs = 0;       // times vkAllocateMemory refused a slab
 };
 
 /*
@@ -138,13 +138,13 @@ struct EstadoPoolTexturas {
  *   Liberar(bloque)                         in DestruirImagen
  *   Terminar()                              in the destructor, after the images are destroyed
  */
-class PoolTexturas {
+class TexturePool {
  public:
-  PoolTexturas() = default;
-  ~PoolTexturas();
+  TexturePool() = default;
+  ~TexturePool();
 
-  PoolTexturas(const PoolTexturas&) = delete;
-  PoolTexturas& operator=(const PoolTexturas&) = delete;
+  TexturePool(const TexturePool&) = delete;
+  TexturePool& operator=(const TexturePool&) = delete;
 
   /*
    * Prepares the pool and prewarms the slabs for the steady state.
@@ -156,12 +156,12 @@ class PoolTexturas {
    * slab could be created. In that case Reservar() always fails and everything keeps using
    * the usual dedicated path, exactly the behavior without the pool.
    */
-  bool Iniciar(const rex::ui::vulkan::VulkanDevice* dispositivo, int32_t mb_cache_max);
+  bool Start(const rex::ui::vulkan::VulkanDevice* dev, int32_t mb_cache_max);
 
   // Frees every slab. The images must already be destroyed.
-  void Terminar();
+  void Finish();
 
-  bool Activo() const { return activo_; }
+  bool Active() const { return active_; }
 
   /*
    * Finds room for an already created image.
@@ -174,11 +174,11 @@ class PoolTexturas {
    * offset_out) and store bloque_out in ImagenNativa::pool_bloque.
    * If it returns false, nothing has been touched: the caller uses the dedicated path.
    */
-  bool Reservar(const VkMemoryRequirements& requisitos, VkDeviceMemory& memoria_out,
-                VkDeviceSize& offset_out, uint32_t& bloque_out);
+  bool Reserve(const VkMemoryRequirements& requirements, VkDeviceMemory& memory_out,
+                VkDeviceSize& offset_out, uint32_t& block_out);
 
   // Returns the block to the pool. Accepts kBloquePoolInvalido and does nothing with it.
-  void Liberar(uint32_t bloque);
+  void Dispose(uint32_t block);
 
   /*
    * Growth with headroom. Called once per frame.
@@ -188,51 +188,51 @@ class PoolTexturas {
    * (:612-620), and 32 MB of that in the middle of a race would be a 10-15 ms stutter, the
    * very problem this pool solves. It also creates at most one every kFotogramasEntreSlabs.
    */
-  void PorFotograma(uint64_t fotograma);
+  void PerFrame(uint64_t frame);
 
   // A texture did not fit (or the pool is off) and took the dedicated path.
-  void AnotarDedicada() { ++texturas_dedicadas_; }
+  void TrackDedicated() { ++dedicated_textures_; }
 
-  EstadoPoolTexturas Estado() const;
+  TexturePoolState State() const;
 
   // Line for the C3 report of AnotarMemoriaDeLaGpu. No trailing newline.
-  std::string Resumen() const;
+  std::string Summary() const;
 
  private:
   struct Slab {
-    VkDeviceMemory memoria = VK_NULL_HANDLE;
-    uint32_t unidades = 0;
-    uint32_t unidades_en_uso = 0;
-    std::vector<uint64_t> ocupadas;  // bitmap, one unit per bit
+    VkDeviceMemory mem = VK_NULL_HANDLE;
+    uint32_t units = 0;
+    uint32_t units_in_use = 0;
+    std::vector<uint64_t> occupied_items;  // bitmap, one unit per bit
     std::vector<uint32_t> largo;     // units reserved from each start (0 = not a start)
   };
 
   // 8 MB of headroom: below that a new slab is requested.
-  static constexpr uint64_t kHolguraBytes = 8ull << 20;
+  static constexpr uint64_t kSlackBytes = 8ull << 20;
   // Never two slabs in a row: gives eviction time to free memory before growing further.
-  static constexpr uint64_t kFotogramasEntreSlabs = 120;
+  static constexpr uint64_t kFramesBetweenSlabs = 120;
   // The slab index goes in the top 8 bits of the block identifier.
   static constexpr uint32_t kMaxSlabs = 255;
 
-  bool CrearSlab(bool en_caliente);
-  bool ElegirTipoDeMemoria(uint32_t& tipo_out, uint64_t& alineacion_vista_out) const;
+  bool CreateSlab(bool in_hot);
+  bool PickMemoryType(uint32_t& type_out, uint64_t& view_alignment_out) const;
 
-  const rex::ui::vulkan::VulkanDevice* dispositivo_ = nullptr;
+  const rex::ui::vulkan::VulkanDevice* vk_device_ = nullptr;
   VkDevice device_ = VK_NULL_HANDLE;
-  bool activo_ = false;
-  uint32_t tipo_memoria_ = UINT32_MAX;
+  bool active_ = false;
+  uint32_t memory_type_ = UINT32_MAX;
   uint64_t slab_bytes_ = 0;
-  uint32_t slab_unidades_ = 0;
-  uint32_t slabs_tope_ = 0;
-  uint64_t ultimo_crecimiento_ = 0;
+  uint32_t units_slab_ = 0;
+  uint32_t cap_slabs_ = 0;
+  uint64_t last_growth_ = 0;
   std::vector<Slab> slabs_;
 
-  uint64_t texturas_vivas_ = 0;
-  uint64_t texturas_colocadas_ = 0;
-  uint64_t texturas_dedicadas_ = 0;
-  uint64_t huecos_fallados_ = 0;
-  uint64_t slabs_en_caliente_ = 0;
-  uint64_t slabs_fallados_ = 0;
+  uint64_t alive_textures_ = 0;
+  uint64_t placed_textures_ = 0;
+  uint64_t dedicated_textures_ = 0;
+  uint64_t failed_slots_ = 0;
+  uint64_t slabs_in_hot_ = 0;
+  uint64_t failed_slabs_ = 0;
 };
 
 }  // namespace nfsmw::nativo

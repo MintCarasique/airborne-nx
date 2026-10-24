@@ -11,11 +11,11 @@ namespace rex::ui {
 class Presenter;
 }
 
-namespace nfsmw::captura {
+namespace nfsmw::capture {
 
 // Starts the capture thread if the cvar asks for it. The presenter is requested
 // on every capture: it may not exist yet at startup.
-void Arrancar(std::function<rex::ui::Presenter*()> obtener_presentador);
+void Boot(std::function<rex::ui::Presenter*()> get_presenter);
 
 // Stops the thread (idempotent).
 void Parar();

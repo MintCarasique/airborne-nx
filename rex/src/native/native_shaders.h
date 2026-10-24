@@ -24,98 +24,98 @@ namespace nfsmw::native {
 struct Shader;
 }
 
-namespace nfsmw::nativo {
+namespace nfsmw::native_renderer {
 
 // Vertex declaration element of the container (XenosRecomp shader.h).
-struct ElementoVertice {
-  uint16_t instruccion = 0;  // index of the fetch instruction in the microcode
-  uint8_t uso = 0;           // DeclUsage: 0 posicion, 3 normal, 5 texcoord, 10 color...
-  uint8_t indice_uso = 0;
+struct VertexElement {
+  uint16_t instruction = 0;  // index of the fetch instruction in the microcode
+  uint8_t use = 0;           // DeclUsage: 0 posicion, 3 normal, 5 texcoord, 10 color...
+  uint8_t use_index = 0;
   // AirborneNX: the container's destination swizzle of the fetch (12 bits), kept before kFetchConserva masks
   // it out of the microcode (MoH:A's D3D rewrites it, so it is not part of the identity).
   uint16_t swizzle = 0;
   // AirborneNX: and the fetch's destination register (also masked out of the microcode copy).
-  uint8_t registro = 0;
+  uint8_t reg_index = 0;
 };
 
 // Sampler from the constant table: the register is the texture's fetch constant
 // in pixel shaders.
 struct SamplerShader {
-  uint16_t registro = 0;
-  uint16_t tipo = 0;  // D3DXPARAMETER_TYPE: 10-12 = 2D, 13 = 3D, 14 = cubo
+  uint16_t reg_index = 0;
+  uint16_t type = 0;  // D3DXPARAMETER_TYPE: 10-12 = 2D, 13 = 3D, 14 = cubo
   // It is called SHADOWMAP_SAMPLER in the constant table: it is the shadow map sampling the library rewrites
   // (tfetch2DSombra and tfetch2DSombraMin). nfsmw_nativo_sombra_minimo.
-  bool mapa_sombras = false;
+  bool shadows_map = false;
 };
 
-struct EntradaShader {
+struct ShaderEntry {
   const nfsmw::native::Shader* shader = nullptr;  // contenedor original y SPIR-V
   bool vertices = false;
-  uint32_t numero = 0;  // position in the library, for the reports
-  std::vector<uint32_t> microcodigo;  // in host byte order, with the fetches masked
-  uint64_t huella = 0;                // XXH3 of that masked microcode
-  std::vector<ElementoVertice> elementos;
+  uint32_t number = 0;  // position in the library, for the reports
+  std::vector<uint32_t> ucode;  // in host byte order, with the fetches masked
+  uint64_t fingerprint = 0;                // XXH3 of that masked microcode
+  std::vector<VertexElement> elements;
   std::vector<SamplerShader> samplers;
   // AirborneNX: how many of them come from the constant table (the rest from the microcode's fetches).
-  uint32_t samplers_tabla = 0;
-  uint32_t salidas = 0;  // pixel shader: bits COLOR0..3 y DEPTH (PixelShaderOutputs)
+  uint32_t table_samplers = 0;
+  uint32_t outputs = 0;  // pixel shader: bits COLOR0..3 y DEPTH (PixelShaderOutputs)
   // OpKill in the SPIR-V. XenosRecomp puts one in every pixel shader for the alpha test (guarded by
   // SPEC_CONSTANT_ALPHA_TEST), so it only really discards if there is more than one.
   uint32_t kills = 0;
-  bool descarta = false;
+  bool discards = false;
   // Its SPIR-V has tfetch2DSombraMin (the NFSMW_MARCA_SOMBRA_MINIMO constant from shader_common.h): with
   // kSpecSombraMinimo it takes the minimum of the shadow map and its pair. nfsmw_nativo_sombra_minimo.
-  bool sombra_minimo = false;
+  bool shadow_min = false;
   // Bytes of its float constant buffer that the SPIR-V reads (16 per register).
   uint32_t constantes_bytes = 256 * 16;
 };
 
-struct EstadisticasShaders {
-  uint64_t cargas = 0;           // IM_LOAD recibidos
-  uint64_t distintos = 0;        // microcodigos distintos (con sus parches)
-  uint64_t identificados = 0;    // of the distinct ones
-  uint64_t sin_identificar = 0;  // of the distinct ones
+struct ShaderStats {
+  uint64_t loads = 0;           // IM_LOAD recibidos
+  uint64_t distinct_items = 0;        // microcodigos distintos (con sus parches)
+  uint64_t identified = 0;    // of the distinct ones
+  uint64_t without_identify = 0;  // of the distinct ones
   uint64_t ambiguos = 0;         // distinct ones with more than one possible container
-  uint64_t exportes_anulados = 0;  // AirborneNX: VS identified despite exports the XDK turned into no-ops
+  uint64_t overridden_exports = 0;  // AirborneNX: VS identified despite exports the XDK turned into no-ops
 };
 
-class ShadersNativos {
+class NativeShaders {
  public:
-  ShadersNativos();
-  ~ShadersNativos();
+  NativeShaders();
+  ~NativeShaders();
 
   // false, with a warning in the log, if the library is missing or damaged.
-  bool Cargar(const std::filesystem::path& archivo);
-  bool cargada() const;
+  bool Load(const std::filesystem::path& fname);
+  bool loaded() const;
 
   // Full original container (the one the D3D constructors receive).
   // nullptr if it is not in the library. Can be called from any thread
   // once the library is loaded.
-  const EntradaShader* IdentificarContenedor(std::span<const uint8_t> contenedor) const;
+  const ShaderEntry* IdentifyContainer(std::span<const uint8_t> container) const;
 
   // The entry with that number (its position in the library), or nullptr. Like IdentificarContenedor, from any
   // thread once loaded: entries do not change after Cargar. Pipeline prewarming (nfsmw_nativo_dibujos.cpp) uses
   // it to recreate the pipelines of the previous session.
-  const EntradaShader* PorNumero(uint32_t numero) const;
+  const ShaderEntry* ByNumber(uint32_t number) const;
 
   // Microcode already in host byte order. nullptr if it is not in the library.
   // Only the ring thread uses it.
-  const EntradaShader* Identificar(bool vertices, std::span<const uint32_t> microcodigo);
+  const ShaderEntry* Identify(bool vertices, std::span<const uint32_t> ucode);
 
-  EstadisticasShaders Estadisticas() const;
+  ShaderStats Stats() const;
 
  private:
-  struct Datos;
-  std::unique_ptr<Datos> datos_;
+  struct Impl;
+  std::unique_ptr<Impl> payload_;
 };
 
 // Short name of a DeclUsage for the reports.
-const char* NombreUso(uint8_t uso);
+const char* UseName(uint8_t use);
 
 // Whether a patched microcode from the ring can belong to that vertex shader: every
 // declaration element has, at one of the element positions, a fetch that writes the
 // same temporary register as the original. D3D reorders the fetches and changes
 // formats and swizzles, but not the registers.
-bool FetchCoherentes(const EntradaShader& vs, std::span<const uint32_t> parcheado);
+bool FetchCoherentes(const ShaderEntry& vs, std::span<const uint32_t> patched);
 
 }  // namespace nfsmw::nativo

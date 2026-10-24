@@ -23,39 +23,39 @@ REXCVAR_DEFINE_INT32(nfsmw_nativo_texturas_pool_slab_mb, 32, "NFSMW",
     .range(4, 256)
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
-namespace nfsmw::nativo {
+namespace nfsmw::native_renderer {
 namespace {
 
-uint32_t AlinearArriba(uint32_t valor, uint32_t paso) {
-  if (paso <= 1) {
-    return valor;
+uint32_t AlignUp(uint32_t value, uint32_t step) {
+  if (step <= 1) {
+    return value;
   }
-  return ((valor + paso - 1) / paso) * paso;
+  return ((value + step - 1) / step) * step;
 }
 
-bool BitOcupado(const std::vector<uint64_t>& mapa, uint32_t i) {
-  return ((mapa[i >> 6] >> (i & 63)) & 1ull) != 0ull;
+bool OccupiedBit(const std::vector<uint64_t>& map_table, uint32_t i) {
+  return ((map_table[i >> 6] >> (i & 63)) & 1ull) != 0ull;
 }
 
 // Returns true if [inicio, inicio+n) is entirely free. Otherwise it stores in `primera_ocupada`
 // the first used unit it found, so the search can jump past it.
-bool RangoLibre(const std::vector<uint64_t>& mapa, uint32_t inicio, uint32_t n,
-                uint32_t& primera_ocupada) {
-  for (uint32_t i = inicio; i < inicio + n; ++i) {
-    if (BitOcupado(mapa, i)) {
-      primera_ocupada = i;
+bool FreeRange(const std::vector<uint64_t>& map_table, uint32_t start, uint32_t n,
+                uint32_t& first_occupied) {
+  for (uint32_t i = start; i < start + n; ++i) {
+    if (OccupiedBit(map_table, i)) {
+      first_occupied = i;
       return false;
     }
   }
   return true;
 }
 
-void MarcarRango(std::vector<uint64_t>& mapa, uint32_t inicio, uint32_t n, bool ocupado) {
-  for (uint32_t i = inicio; i < inicio + n; ++i) {
-    if (ocupado) {
-      mapa[i >> 6] |= 1ull << (i & 63);
+void MarkRange(std::vector<uint64_t>& map_table, uint32_t start, uint32_t n, bool busy) {
+  for (uint32_t i = start; i < start + n; ++i) {
+    if (busy) {
+      map_table[i >> 6] |= 1ull << (i & 63);
     } else {
-      mapa[i >> 6] &= ~(1ull << (i & 63));
+      map_table[i >> 6] &= ~(1ull << (i & 63));
     }
   }
 }
@@ -68,49 +68,49 @@ void MarcarRango(std::vector<uint64_t>& mapa, uint32_t inicio, uint32_t n, bool 
  * this does not show up in measurements; a rover would only add a second pass and more places
  * to get it wrong.
  */
-bool BuscarHueco(const std::vector<uint64_t>& mapa, uint32_t unidades_totales, uint32_t n,
-                 uint32_t paso, uint32_t& inicio_out) {
-  if (n == 0 || n > unidades_totales) {
+bool FindSlot(const std::vector<uint64_t>& map_table, uint32_t total_units, uint32_t n,
+                 uint32_t step, uint32_t& start_out) {
+  if (n == 0 || n > total_units) {
     return false;
   }
-  uint32_t inicio = 0;
-  while (inicio + n <= unidades_totales) {
-    uint32_t ocupada = 0;
-    if (RangoLibre(mapa, inicio, n, ocupada)) {
-      inicio_out = inicio;
+  uint32_t start = 0;
+  while (start + n <= total_units) {
+    uint32_t occupied = 0;
+    if (FreeRange(map_table, start, n, occupied)) {
+      start_out = start;
       return true;
     }
-    inicio = AlinearArriba(ocupada + 1, paso);
+    start = AlignUp(occupied + 1, step);
   }
   return false;
 }
 
 // The largest contiguous free range, in units. It is the fragmentation measure in the report.
-uint32_t MayorHueco(const std::vector<uint64_t>& mapa, uint32_t unidades_totales) {
-  uint32_t mejor = 0;
-  uint32_t actual = 0;
-  for (uint32_t i = 0; i < unidades_totales; ++i) {
-    if (BitOcupado(mapa, i)) {
-      actual = 0;
+uint32_t SlotGreater(const std::vector<uint64_t>& map_table, uint32_t total_units) {
+  uint32_t best = 0;
+  uint32_t current = 0;
+  for (uint32_t i = 0; i < total_units; ++i) {
+    if (OccupiedBit(map_table, i)) {
+      current = 0;
     } else {
-      ++actual;
-      mejor = std::max(mejor, actual);
+      ++current;
+      best = std::max(best, current);
     }
   }
-  return mejor;
+  return best;
 }
 
 }  // namespace
 
-PoolTexturas::~PoolTexturas() { Terminar(); }
+TexturePool::~TexturePool() { Finish(); }
 
-bool PoolTexturas::ElegirTipoDeMemoria(uint32_t& tipo_out, uint64_t& alineacion_vista_out) const {
+bool TexturePool::PickMemoryType(uint32_t& type_out, uint64_t& view_alignment_out) const {
   /*
    * A sample image with the same usage and tiling as the real textures, only to ask the
    * driver which memory types it accepts and with what alignment. It is destroyed right
    * away; it does not allocate memory.
    */
-  const auto& dfn = dispositivo_->functions();
+  const auto& dfn = vk_device_->functions();
   VkImageCreateInfo info{};
   info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
   info.imageType = VK_IMAGE_TYPE_2D;
@@ -124,51 +124,51 @@ bool PoolTexturas::ElegirTipoDeMemoria(uint32_t& tipo_out, uint64_t& alineacion_
   info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
   info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
-  VkImage muestra = VK_NULL_HANDLE;
-  if (dfn.vkCreateImage(device_, &info, nullptr, &muestra) != VK_SUCCESS) {
+  VkImage sample = VK_NULL_HANDLE;
+  if (dfn.vkCreateImage(device_, &info, nullptr, &sample) != VK_SUCCESS) {
     return false;
   }
-  VkMemoryRequirements requisitos{};
-  dfn.vkGetImageMemoryRequirements(device_, muestra, &requisitos);
-  dfn.vkDestroyImage(device_, muestra, nullptr);
+  VkMemoryRequirements requirements{};
+  dfn.vkGetImageMemoryRequirements(device_, sample, &requirements);
+  dfn.vkDestroyImage(device_, sample, nullptr);
 
   // The same criterion CreateDedicatedAllocationImage uses for textures, so the slab lands
   // in the same memory type the dedicated allocation would.
-  const uint32_t tipo = rex::ui::vulkan::util::ChooseMemoryType(
-      dispositivo_->memory_types(), requisitos.memoryTypeBits,
+  const uint32_t type = rex::ui::vulkan::util::ChooseMemoryType(
+      vk_device_->memory_types(), requirements.memoryTypeBits,
       rex::ui::vulkan::util::MemoryPurpose::kDeviceLocal);
-  if (tipo == UINT32_MAX) {
+  if (type == UINT32_MAX) {
     return false;
   }
-  tipo_out = tipo;
-  alineacion_vista_out = requisitos.alignment;
+  type_out = type;
+  view_alignment_out = requirements.alignment;
   return true;
 }
 
-bool PoolTexturas::Iniciar(const rex::ui::vulkan::VulkanDevice* dispositivo, int32_t mb_cache_max) {
+bool TexturePool::Start(const rex::ui::vulkan::VulkanDevice* dev, int32_t mb_cache_max) {
   if (!REXCVAR_GET(nfsmw_nativo_texturas_pool)) {
     REXLOG_INFO("[nativo] C3: pool de texturas (nfsmw_nativo_texturas_pool) = no; cada textura pedira su "
                 "reserva dedicada, como antes del 22/09");
     return false;
   }
-  if (dispositivo == nullptr) {
+  if (dev == nullptr) {
     return false;
   }
-  dispositivo_ = dispositivo;
-  device_ = dispositivo->device();
+  vk_device_ = dev;
+  device_ = dev->device();
 
-  uint64_t alineacion_vista = 0;
-  if (!ElegirTipoDeMemoria(tipo_memoria_, alineacion_vista)) {
+  uint64_t view_alignment = 0;
+  if (!PickMemoryType(memory_type_, view_alignment)) {
     REXLOG_WARN("[nativo] C3: pool de texturas: no hay un tipo de memoria local valido; se sigue con la "
                 "reserva dedicada por textura");
-    dispositivo_ = nullptr;
+    vk_device_ = nullptr;
     device_ = VK_NULL_HANDLE;
     return false;
   }
 
   const int32_t slab_mb = std::max<int32_t>(REXCVAR_GET(nfsmw_nativo_texturas_pool_slab_mb), 4);
   slab_bytes_ = uint64_t(slab_mb) << 20;
-  slab_unidades_ = uint32_t(slab_bytes_ / kUnidadPoolBytes);
+  units_slab_ = uint32_t(slab_bytes_ / kPoolUnitBytes);
 
   /*
    * How much to prewarm and how far to grow.
@@ -178,15 +178,15 @@ bool PoolTexturas::Iniciar(const rex::ui::vulkan::VulkanDevice* dispositivo, int
    * race. The cap is one slab above the cache limit to leave room for fragmentation.
    */
   const int32_t mb_max = mb_cache_max > 0 ? mb_cache_max : 384;
-  const int32_t mb_inicial = std::clamp<int32_t>(mb_max / 2, 64, 256);
-  const uint64_t bytes_tope = (uint64_t(mb_max) << 20) + slab_bytes_;
-  slabs_tope_ = uint32_t(std::min<uint64_t>((bytes_tope + slab_bytes_ - 1) / slab_bytes_, kMaxSlabs));
-  const uint32_t slabs_iniciales =
-      uint32_t(std::min<uint64_t>(((uint64_t(mb_inicial) << 20) + slab_bytes_ - 1) / slab_bytes_, slabs_tope_));
+  const int32_t initial_mb = std::clamp<int32_t>(mb_max / 2, 64, 256);
+  const uint64_t bytes_cap = (uint64_t(mb_max) << 20) + slab_bytes_;
+  cap_slabs_ = uint32_t(std::min<uint64_t>((bytes_cap + slab_bytes_ - 1) / slab_bytes_, kMaxSlabs));
+  const uint32_t initial_slabs =
+      uint32_t(std::min<uint64_t>(((uint64_t(initial_mb) << 20) + slab_bytes_ - 1) / slab_bytes_, cap_slabs_));
 
-  activo_ = true;  // CrearSlab lo necesita puesto
-  for (uint32_t i = 0; i < slabs_iniciales; ++i) {
-    if (!CrearSlab(false)) {
+  active_ = true;  // CrearSlab lo necesita puesto
+  for (uint32_t i = 0; i < initial_slabs; ++i) {
+    if (!CreateSlab(false)) {
       break;
     }
   }
@@ -194,22 +194,22 @@ bool PoolTexturas::Iniciar(const rex::ui::vulkan::VulkanDevice* dispositivo, int
     REXLOG_WARN("[nativo] C3: pool de texturas: no se pudo crear ni un bloque de {} MB; se sigue con la "
                 "reserva dedicada por textura",
                 slab_mb);
-    activo_ = false;
-    dispositivo_ = nullptr;
+    active_ = false;
+    vk_device_ = nullptr;
     device_ = VK_NULL_HANDLE;
     return false;
   }
 
   REXLOG_INFO("[nativo] C3: pool de texturas ENCENDIDO: {} bloques de {} MB precalentados ({} MB), tope {} "
               "bloques ({} MB); tipo de memoria {}, unidad {} KB, alineacion que pide el driver {} KB",
-              slabs_.size(), slab_mb, (slabs_.size() * slab_bytes_) >> 20, slabs_tope_,
-              (uint64_t(slabs_tope_) * slab_bytes_) >> 20, tipo_memoria_, kUnidadPoolBytes >> 10,
-              alineacion_vista >> 10);
+              slabs_.size(), slab_mb, (slabs_.size() * slab_bytes_) >> 20, cap_slabs_,
+              (uint64_t(cap_slabs_) * slab_bytes_) >> 20, memory_type_, kPoolUnitBytes >> 10,
+              view_alignment >> 10);
   return true;
 }
 
-bool PoolTexturas::CrearSlab(bool en_caliente) {
-  if (!activo_ || slabs_.size() >= slabs_tope_ || slabs_.size() >= kMaxSlabs) {
+bool TexturePool::CreateSlab(bool in_hot) {
+  if (!active_ || slabs_.size() >= cap_slabs_ || slabs_.size() >= kMaxSlabs) {
     return false;
   }
   /*
@@ -218,67 +218,67 @@ bool PoolTexturas::CrearSlab(bool en_caliente) {
    * (nvkmd/switch/nvkmd_switch_dev.c:787-795) and the block accepts aliased images with any
    * pte_kind (horizon/nouveau_horizon_memory.c:1056-1073).
    */
-  VkMemoryAllocateInfo reserva{};
-  reserva.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-  reserva.allocationSize = slab_bytes_;
-  reserva.memoryTypeIndex = tipo_memoria_;
+  VkMemoryAllocateInfo reservation{};
+  reservation.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+  reservation.allocationSize = slab_bytes_;
+  reservation.memoryTypeIndex = memory_type_;
 
-  VkDeviceMemory memoria = VK_NULL_HANDLE;
-  if (dispositivo_->functions().vkAllocateMemory(device_, &reserva, nullptr, &memoria) != VK_SUCCESS) {
-    ++slabs_fallados_;
+  VkDeviceMemory mem = VK_NULL_HANDLE;
+  if (vk_device_->functions().vkAllocateMemory(device_, &reservation, nullptr, &mem) != VK_SUCCESS) {
+    ++failed_slabs_;
     return false;
   }
 
   Slab slab;
-  slab.memoria = memoria;
-  slab.unidades = slab_unidades_;
-  slab.ocupadas.assign((slab_unidades_ + 63) / 64, 0ull);
-  slab.largo.assign(slab_unidades_, 0u);
+  slab.mem = mem;
+  slab.units = units_slab_;
+  slab.occupied_items.assign((units_slab_ + 63) / 64, 0ull);
+  slab.largo.assign(units_slab_, 0u);
   slabs_.push_back(std::move(slab));
-  if (en_caliente) {
-    ++slabs_en_caliente_;
+  if (in_hot) {
+    ++slabs_in_hot_;
     REXLOG_INFO("[nativo] C3: pool de texturas: bloque {} nuevo en caliente; ya van {} MB reservados",
                 slabs_.size() - 1, (slabs_.size() * slab_bytes_) >> 20);
   }
   return true;
 }
 
-void PoolTexturas::Terminar() {
+void TexturePool::Finish() {
   if (device_ != VK_NULL_HANDLE) {
-    const auto& dfn = dispositivo_->functions();
+    const auto& dfn = vk_device_->functions();
     for (Slab& slab : slabs_) {
-      if (slab.memoria != VK_NULL_HANDLE) {
-        dfn.vkFreeMemory(device_, slab.memoria, nullptr);
+      if (slab.mem != VK_NULL_HANDLE) {
+        dfn.vkFreeMemory(device_, slab.mem, nullptr);
       }
     }
   }
   slabs_.clear();
-  activo_ = false;
-  dispositivo_ = nullptr;
+  active_ = false;
+  vk_device_ = nullptr;
   device_ = VK_NULL_HANDLE;
 }
 
-bool PoolTexturas::Reservar(const VkMemoryRequirements& requisitos, VkDeviceMemory& memoria_out,
-                            VkDeviceSize& offset_out, uint32_t& bloque_out) {
-  if (!activo_) {
+bool TexturePool::Reserve(const VkMemoryRequirements& requirements, VkDeviceMemory& memory_out,
+                            VkDeviceSize& offset_out, uint32_t& block_out) {
+  if (!active_) {
     return false;
   }
   // The slab's type must be among the ones this image accepts. On NVK for Tegra it always
   // is, but if some format said otherwise, falling back to the dedicated path is better than
   // binding something invalid.
-  if (((requisitos.memoryTypeBits >> tipo_memoria_) & 1u) == 0u) {
+  if (((requirements.memoryTypeBits >> memory_type_) & 1u) == 0u) {
     return false;
   }
-  if (requisitos.size == 0) {
+  if (requirements.size == 0) {
     return false;
   }
 
-  const uint64_t unidades64 = (requisitos.size + kUnidadPoolBytes - 1) / kUnidadPoolBytes;
-  if (unidades64 > slab_unidades_) {
-    ++huecos_fallados_;
+  const uint64_t units64 = (requirements.size + kPoolUnitBytes - 1) / kPoolUnitBytes;
+  if (units64 > units_slab_) {
+    ++failed_slots_;
     return false;  // does not fit even in an empty block: use the dedicated path
   }
-  const uint32_t unidades = uint32_t(unidades64);
+  const uint32_t units = uint32_t(units64);
 
   /*
    * The alignment is honored exactly; it is not assumed to be 64 KiB.
@@ -289,117 +289,117 @@ bool PoolTexturas::Reservar(const VkMemoryRequirements& requisitos, VkDeviceMemo
    * bind fail on a driver assert (nvk_image.c:1692), a rare and late failure. Converted to
    * units, the alignment is the step used to search for candidate starts.
    */
-  const uint64_t alineacion = std::max<uint64_t>(requisitos.alignment, kUnidadPoolBytes);
-  const uint32_t paso = uint32_t(std::max<uint64_t>(1, alineacion / kUnidadPoolBytes));
+  const uint64_t align_bytes = std::max<uint64_t>(requirements.alignment, kPoolUnitBytes);
+  const uint32_t step = uint32_t(std::max<uint64_t>(1, align_bytes / kPoolUnitBytes));
 
   for (uint32_t s = 0; s < slabs_.size(); ++s) {
     Slab& slab = slabs_[s];
-    uint32_t inicio = 0;
-    if (!BuscarHueco(slab.ocupadas, slab.unidades, unidades, paso, inicio)) {
+    uint32_t start = 0;
+    if (!FindSlot(slab.occupied_items, slab.units, units, step, start)) {
       continue;
     }
-    MarcarRango(slab.ocupadas, inicio, unidades, true);
-    slab.largo[inicio] = unidades;
-    slab.unidades_en_uso += unidades;
+    MarkRange(slab.occupied_items, start, units, true);
+    slab.largo[start] = units;
+    slab.units_in_use += units;
 
-    memoria_out = slab.memoria;
-    offset_out = VkDeviceSize(inicio) * kUnidadPoolBytes;
-    bloque_out = (s << 24) | inicio;
-    ++texturas_vivas_;
-    ++texturas_colocadas_;
+    memory_out = slab.mem;
+    offset_out = VkDeviceSize(start) * kPoolUnitBytes;
+    block_out = (s << 24) | start;
+    ++alive_textures_;
+    ++placed_textures_;
     return true;
   }
 
-  ++huecos_fallados_;
+  ++failed_slots_;
   return false;
 }
 
-void PoolTexturas::Liberar(uint32_t bloque) {
-  if (bloque == kBloquePoolInvalido || !activo_) {
+void TexturePool::Dispose(uint32_t block) {
+  if (block == kInvalidPoolBlock || !active_) {
     return;
   }
-  const uint32_t s = bloque >> 24;
-  const uint32_t inicio = bloque & 0x00FFFFFFu;
+  const uint32_t s = block >> 24;
+  const uint32_t start = block & 0x00FFFFFFu;
   if (s >= slabs_.size()) {
-    REXLOG_ERROR("[nativo] C3: pool de texturas: bloque {:08X} con un bloque grande que no existe", bloque);
+    REXLOG_ERROR("[nativo] C3: pool de texturas: bloque {:08X} con un bloque grande que no existe", block);
     return;
   }
   Slab& slab = slabs_[s];
-  if (inicio >= slab.unidades || slab.largo[inicio] == 0u) {
+  if (start >= slab.units || slab.largo[start] == 0u) {
     REXLOG_ERROR("[nativo] C3: pool de texturas: bloque {:08X} que no era el inicio de nada (doble liberacion?)",
-                 bloque);
+                 block);
     return;
   }
-  const uint32_t unidades = slab.largo[inicio];
-  MarcarRango(slab.ocupadas, inicio, unidades, false);
-  slab.largo[inicio] = 0u;
-  slab.unidades_en_uso -= std::min(slab.unidades_en_uso, unidades);
-  if (texturas_vivas_ > 0) {
-    --texturas_vivas_;
+  const uint32_t units = slab.largo[start];
+  MarkRange(slab.occupied_items, start, units, false);
+  slab.largo[start] = 0u;
+  slab.units_in_use -= std::min(slab.units_in_use, units);
+  if (alive_textures_ > 0) {
+    --alive_textures_;
   }
 }
 
-void PoolTexturas::PorFotograma(uint64_t fotograma) {
-  if (!activo_ || slabs_.size() >= slabs_tope_) {
+void TexturePool::PerFrame(uint64_t frame) {
+  if (!active_ || slabs_.size() >= cap_slabs_) {
     return;
   }
-  if (fotograma < ultimo_crecimiento_ + kFotogramasEntreSlabs) {
+  if (frame < last_growth_ + kFramesBetweenSlabs) {
     return;
   }
-  uint64_t libres = 0;
+  uint64_t free_items = 0;
   for (const Slab& slab : slabs_) {
-    libres += uint64_t(slab.unidades - slab.unidades_en_uso) * kUnidadPoolBytes;
+    free_items += uint64_t(slab.units - slab.units_in_use) * kPoolUnitBytes;
   }
-  if (libres >= kHolguraBytes) {
+  if (free_items >= kSlackBytes) {
     return;
   }
-  ultimo_crecimiento_ = fotograma;
-  CrearSlab(true);
+  last_growth_ = frame;
+  CreateSlab(true);
 }
 
-EstadoPoolTexturas PoolTexturas::Estado() const {
-  EstadoPoolTexturas e;
-  e.activo = activo_;
-  e.tipo_memoria = tipo_memoria_;
+TexturePoolState TexturePool::State() const {
+  TexturePoolState e;
+  e.active = active_;
+  e.memory_type = memory_type_;
   e.slabs = uint32_t(slabs_.size());
-  e.bytes_reservados = uint64_t(slabs_.size()) * slab_bytes_;
-  uint32_t mayor = 0;
+  e.reserved_bytes = uint64_t(slabs_.size()) * slab_bytes_;
+  uint32_t larger = 0;
   for (const Slab& slab : slabs_) {
-    e.bytes_en_uso += uint64_t(slab.unidades_en_uso) * kUnidadPoolBytes;
-    mayor = std::max(mayor, MayorHueco(slab.ocupadas, slab.unidades));
+    e.in_use_bytes += uint64_t(slab.units_in_use) * kPoolUnitBytes;
+    larger = std::max(larger, SlotGreater(slab.occupied_items, slab.units));
   }
-  e.bytes_libres = e.bytes_reservados - e.bytes_en_uso;
-  e.bytes_mayor_hueco = uint64_t(mayor) * kUnidadPoolBytes;
-  e.texturas_vivas = texturas_vivas_;
-  e.texturas_colocadas = texturas_colocadas_;
-  e.texturas_dedicadas = texturas_dedicadas_;
-  e.huecos_fallados = huecos_fallados_;
-  e.slabs_en_caliente = slabs_en_caliente_;
-  e.slabs_fallados = slabs_fallados_;
+  e.free_bytes = e.reserved_bytes - e.in_use_bytes;
+  e.slot_greater_bytes = uint64_t(larger) * kPoolUnitBytes;
+  e.alive_textures = alive_textures_;
+  e.placed_textures = placed_textures_;
+  e.dedicated_textures = dedicated_textures_;
+  e.failed_slots = failed_slots_;
+  e.slabs_in_hot = slabs_in_hot_;
+  e.failed_slabs = failed_slabs_;
   return e;
 }
 
-std::string PoolTexturas::Resumen() const {
-  if (!activo_) {
-    return std::string("pool de texturas apagado (") + std::to_string(texturas_dedicadas_) +
+std::string TexturePool::Summary() const {
+  if (!active_) {
+    return std::string("pool de texturas apagado (") + std::to_string(dedicated_textures_) +
            " texturas con reserva dedicada)";
   }
-  const EstadoPoolTexturas e = Estado();
+  const TexturePoolState e = State();
   /*
    * Fragmentation is what needs watching: if plenty is free but the largest free range is
    * small, large textures start falling back to the dedicated path and the savings vanish
    * without anything failing. That is why both figures are printed together.
    */
-  const uint64_t frag = e.bytes_libres > 0 ? 100u - (e.bytes_mayor_hueco * 100u / e.bytes_libres) : 0u;
+  const uint64_t frag = e.free_bytes > 0 ? 100u - (e.slot_greater_bytes * 100u / e.free_bytes) : 0u;
   return std::string("pool de texturas: ") + std::to_string(e.slabs) + " bloques (" +
-         std::to_string(e.bytes_reservados >> 20) + " MB), " + std::to_string(e.bytes_en_uso >> 20) +
-         " MB en uso por " + std::to_string(e.texturas_vivas) + " texturas; libres " +
-         std::to_string(e.bytes_libres >> 20) + " MB con el mayor hueco en " +
-         std::to_string(e.bytes_mayor_hueco >> 20) + " MB (fragmentacion " + std::to_string(frag) +
-         " %); " + std::to_string(e.texturas_colocadas) + " colocadas y " +
-         std::to_string(e.texturas_dedicadas) + " a la ruta dedicada (" + std::to_string(e.huecos_fallados) +
-         " sin hueco); bloques en caliente " + std::to_string(e.slabs_en_caliente) + ", negados " +
-         std::to_string(e.slabs_fallados);
+         std::to_string(e.reserved_bytes >> 20) + " MB), " + std::to_string(e.in_use_bytes >> 20) +
+         " MB en uso por " + std::to_string(e.alive_textures) + " texturas; libres " +
+         std::to_string(e.free_bytes >> 20) + " MB con el mayor hueco en " +
+         std::to_string(e.slot_greater_bytes >> 20) + " MB (fragmentacion " + std::to_string(frag) +
+         " %); " + std::to_string(e.placed_textures) + " colocadas y " +
+         std::to_string(e.dedicated_textures) + " a la ruta dedicada (" + std::to_string(e.failed_slots) +
+         " sin hueco); bloques en caliente " + std::to_string(e.slabs_in_hot) + ", negados " +
+         std::to_string(e.failed_slabs);
 }
 
 }  // namespace nfsmw::nativo

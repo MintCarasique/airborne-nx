@@ -1,0 +1,961 @@
+word	english	flag
+k	k
+imagen	image
+alto	height
+destino	target
+informe	report	?
+nfsmw	nfsmw
+textura	texture
+copias	copies
+clave	key
+dibujo	draw
+ancho	width
+sin	without	?
+datos	data
+huellas	fingerprints
+huella	fingerprint
+ns	ns
+nativo	native
+registro	register
+entrada	entry
+direccion	address
+anillo	ring
+copia	copy
+g	g	?
+dibujos	draws
+indice	index
+texturas	textures
+profundidad	depth
+origen	source
+por	per	?
+bytes	bytes
+de	of
+inicio	start
+salida	output
+cache	cache
+hilo	thread
+modo	mode
+lista	list
+rampa	ramp
+fotograma	frame
+vertices	vertices
+leer	read
+cielo	sky
+esperas	waits
+tipo	type
+estadisticas	stats
+vector	vector
+memoria	memory
+pase	pass
+vista	view
+palabras	words
+bloque	block
+ps	ps
+antes	before
+pendiente	pending
+estado	state
+valor	value
+en	in
+z	z	?
+oclusion	occlusion
+sm	sm	?
+lectura	read
+indices	indices
+bloques	blocks
+cambio	change
+registros	registers
+lecturas	reads
+mascara	mask
+cuenta	count
+sombra	shadow
+ahora	now
+diag	diag
+pendientes	pending
+con	with
+microcodigo	microcode
+eds	eds	?
+fotogramas	frames
+tamano	size
+pipeline	pipeline
+vs	vs
+shader	shader
+mezcla	blend
+tiron	stall
+sombras	shadows
+enlaces	links
+alfa	alpha
+gpu	gpu
+espera	wait
+pipelines	pipelines
+claves	keys
+minimo	min
+vegetacion	vegetation
+presentados	presented
+mosaico	tile	?
+destinos	targets
+numero	number
+total	total
+max	max
+desplazamiento	offset
+muestra	sample
+previos	previous
+prueba	test
+version	version
+escribir	write
+crear	create
+subida	upload
+trabajo	job
+pool	pool
+escritura	write
+fetch	fetch
+i	i	?
+cuentas	counts
+ultimo	last
+escrituras	writes
+set	set
+solo	only
+borrado	cleared	?
+cola	queue
+pedido	request
+anotar	note	?
+niveles	levels
+nivel	level
+marcador	marker
+encuadre	framing	?
+banderas	flags
+funcion	function
+a	to	?
+ms	ms
+frontal	front
+elemento	element
+fijo	fixed
+muestras	samples
+util	useful	?
+segundos	seconds
+objeto	object
+escala	scale
+siguiente	next
+fin	end
+pitch	pitch
+imagenes	images
+juego	game
+contenido	content
+base	base
+color	color
+bufer	buffer
+reg	reg	?
+avisos	warnings
+copiar	copy
+ultima	last
+actual	current
+nvk	nvk	?
+cerrojo	lock
+frontales	fronts
+nombre	name
+comprobar	check
+uso	use
+segun	by	?
+primera	first
+host	host
+coches	cars
+diferir	defer
+valores	values
+s	s	?
+linea	line
+entradas	entries
+fila	row
+borrar	clear
+veces	times
+categoria	category
+constantes	constants
+y	and
+escribe	write
+mascaras	masks
+vk	vk	?
+nuevo	new
+nueva	new
+shaders	shaders
+cambios	changes
+previas	previous
+valido	valid
+archivo	file
+ajustes	settings
+contadores	counters
+fallos	failures
+marca	mark
+terminar	finish
+ranura	slot
+tiempo	time
+swap	swap
+envios	sends
+primero	first
+cada	every
+cruda	raw
+resuelta	resolved
+x	x	?
+info	info
+previo	previous
+rechazar	reject
+unidad	unit
+muestreo	sampling
+no	no
+tras	after
+barrera	barrier
+nativos	native
+cabecera	header
+d	d	?
+resplandor	glow
+esperando	waiting
+rango	range
+dibujados	drawn
+sesgo	bias
+gamma	gamma
+todo	all
+fase	phase
+ventana	window
+memo	memo	?
+nucleo	core
+intervalo	interval
+reloj	clock
+posicion	position
+control	control
+unidades	units
+activa	active
+alternar	toggle
+render	render
+tipos	types
+trozo	chunk
+ciclo	cycle
+guardia	guard
+valida	valid
+spec	spec
+abierta	open
+orden	order
+planeadas	planned
+subidas	uploads
+peor	worst
+fondo	background
+be	be	?
+escrita	written
+generacion	generation
+formato	format
+n	n	?
+cero	zero
+previa	previous
+borrados	cleared	?
+precalentado	prewarmed
+nativa	native
+maximo	max
+resultado	result
+esperar	wait
+mapa	map
+cara	face
+destruir	destroy
+escena	scene
+flotante	float
+guest	guest
+contar	count
+escrito	written
+es	is
+otro	other
+compuesta	composite
+codigo	code
+forma	shape
+vuelo	flight	?
+canonica	canonical
+del
+creadas	created
+compartidas	shared
+ubo	ubo
+fn	fn	?
+inm	imm	?
+hasta	until
+aviso	warning
+inf	inf	?
+ruta	path
+reflejo	reflection
+salidas	outputs
+detalle	detail
+vistos	seen
+distintos	distinct
+out	out
+llamadas	calls
+vertice	vertex
+envio	send
+mb	mb
+grabar	record
+resolver	resolve
+aplazadas	deferred
+im	im	?
+hechas	done
+vulkan	vulkan
+objetos	objects
+grupo	group
+anotado	annotated
+apagada	disabled
+veg	veg	?
+palabra	word
+paquete	packet
+fuente	source
+libre	free
+delante	ahead	?
+mutex	mutex
+usado	used
+apagado	disabled
+iguales	equal
+cv	cv	?
+si	if
+referencia	reference
+consultas	queries
+guardar	save
+diagnostico	diagnostic
+aciertos	hits
+neon	neon
+real	real
+switch	switch
+reutilizar	reuse
+llamada	call
+descarte	discard
+paso	step
+ranuras	slots
+parte	part
+comandos	commands
+elementos	elements
+empaquetado	packed
+vacio	empty
+presentar	present
+centro	center
+area	area
+perezosa	lazy
+rapido	fast
+intercambio	swap
+vivas	alive
+cabe	fits
+alternancia	toggle
+resueltas	resolved
+prioridad	priority
+marcas	marks
+sitio	place
+cronometro	stopwatch
+soltar	release
+mirando	looking	?
+temprana	early
+creacion	creation
+dinamico	dynamic
+demanda	demand
+nuevos	new
+invalidar	invalidate
+comparacion	comparison
+nuevas	new
+ganchos	hooks
+siempre	always
+entre	between
+campo	field
+mip	mip
+empezar	start
+al
+posproceso	postprocess
+publicados	published
+sc	sc	?
+pedir	request
+grupos	groups
+sampler	sampler
+precalentados	prewarmed
+carga	load
+tijera	scissor
+final	final
+aplazado	deferred
+grabado	recorded
+obtener	get
+rechazados	rejected
+comprobaciones	checks
+bucle	loop
+copiadas	copied
+mmio	mmio
+peticion	request
+rojo	red
+azul	blue
+oclusiones	occlusions
+partes	parts
+num	num	?
+puntual	point	?
+enviar	send
+anterior	previous
+hay	has	?
+inv	inv	?
+directa	direct
+repetidos	repeated
+creados	created
+cantidad	amount
+entera	int	?
+log	log
+pedidos	requests
+constante	constant
+aplicando	applying
+parar	stop
+pases	passes
+decidir	decide
+samplers	samplers
+ciclos	cycles
+vueltas	turns	?
+dato	data
+limite	limit
+sumar	add
+inicializar	initialize
+puntero	pointer
+comprobacion	check
+texels	texels
+contador	counter
+consulta	query
+vallas	fences	?
+medir	measure
+informes	reports
+aplicar	apply
+cuerpo	body
+leido	read
+espejo	mirror
+apagar	disable
+lineas	lines
+sub	sub	?
+capa	layer
+conjunto	set
+liberar	free
+olvidar	forget
+slab	slab
+composicion	composition
+desenfoque	blur
+dedupe	dedupe
+tardias	late
+comparar	compare
+tomar	take
+distintas	distinct
+que	that
+misma	same
+llenos	full
+desenmosaicar	untile	?
+carpeta	folder
+invalido	invalid
+escritas	written
+relleno	fill
+dibujar	draw
+bufers	buffers
+comparadas	compared
+comprobadas	checked
+opcode	opcode
+sistema	system
+durmiendo	sleeping
+enlace	link
+rapida	fast
+entero	integer
+suave	smooth
+memcmp	memcmp
+restaurar	restore
+triangulos	triangles
+ayuda	help
+rex	rex
+admite	supports
+tomados	taken
+estadistica	stat
+offsets	offsets
+nombres	names
+edram	edram
+atributo	attribute
+contexto	context
+enlazada	bound
+signo	sign
+verificacion	verification
+rgb	rgb
+pass	pass
+enviado	sent
+hechos	done
+instantaneas	snapshots
+img	img	?
+efecto	effect
+paquetes	packets
+para	for
+spirv	spirv
+l	l	?
+variantes	variants
+clase	class
+falta	missing
+inutil	useless
+necesario	required
+llena	full
+agotadas	exhausted
+ayudadas	assisted	?
+ayudando	helping
+instantanea	snapshot
+tex	tex	?
+otra	other
+motivo	reason
+preparar	prepare
+pronto	soon
+lectores	readers
+cacheado	cached
+tomadas	taken
+fences	fences
+id	id
+muestreador	sampler
+tramos	segments
+corte	cut	?
+cvars	cvars
+framebuffers	framebuffers
+vblank	vblank
+vectoriales	vector	?
+global	global
+uno	one
+primer	first
+limpio	clean
+diferencias	differences
+filas	rows
+perdidas	lost
+t	t	?
+suma	sum
+modulo	module
+avisar	warn
+cargar	load
+busqueda	search
+contenedor	container
+coste	cost
+identificar	identify
+visibilidad	visibility
+la
+aplazar	defer
+caras	faces
+recogidos	collected
+fisica	physical
+usadas	used
+mezclas	blends
+posiciones	positions
+rangos	ranges
+framebuffer	framebuffer
+encolar	enqueue
+grafico	graphic
+pools	pools
+diferido	deferred
+crudo	raw
+bits	bits
+modulos	modules
+comprobados	checked
+offset	offset
+cronometrados	timed
+compensar	compensate
+invisible	invisible
+leida	read
+tamanos	sizes
+comparados	compared
+progreso	progress
+inmediato	immediate
+identidad	identity
+atajo	shortcut
+subidos	uploaded
+vacia	empty
+hash	hash
+turno	turn
+bandas	bands
+componente	component
+verificadas	verified
+direcciones	addresses
+motivos	reasons
+lado	side
+origenes	sources
+presupuesto	budget
+guardados	saved
+descriptores	descriptors
+desde	from
+curso	running	?
+subir	upload
+topologia	topology
+emitir	emit
+cifras	figures	?
+muertas	dead
+candado	lock
+banda	band
+leidos	read
+saltados	skipped
+aplazados	deferred
+candidatos	candidates
+emitidos	emitted
+rapidas	fast
+comparaciones	comparisons
+causa	cause
+enlazadas	bound
+ok	ok
+it	it	?
+migraciones	migrations
+dos	two
+terminado	finished
+viejo	old
+testigo	witness
+dedicadas	dedicated
+vieja	old
+modelo	model
+cambiar	change
+captura	capture
+retenida	retained
+diferencia	difference
+fallo	failure
+bajo	low
+verificados	verified
+contenidos	contents
+desplazamientos	offsets
+medidos	measured
+etiqueta	label
+fence	fence
+ficheros	files
+viejos	old
+identica	identical
+mira	look	?
+seguidas	consecutive	?
+presentador	presenter
+opaco	opaque
+todos	all
+punteros	pointers
+rampas	ramps
+recorte	clip
+reescrito	rewritten
+recoger	collect
+minucias	details	?
+verificar	verify
+mem	mem	?
+pcf	pcf
+barato	cheap
+foto	photo
+volcado	dump
+alineacion	alignment
+avisado	warned
+ordenes	commands	?
+cubeta	bucket
+fallidos	failed
+calculadas	computed
+reutilizadas	reused
+wptr	wptr
+cubos	cubes
+retorno	return
+colocadas	placed
+trazar	trace
+omitir	skip
+rellenar	fill
+apto	fit	?
+lentos	slow
+filtros	filters
+canales	channels
+medidas	measures	?
+ventanas	windows
+esperado	expected
+fallida	failed
+fb	fb	?
+olvidadas	forgotten
+fs	fs	?
+flushstate	flushstate
+recogidas	collected
+descartado	discarded
+cubetas	buckets
+etiquetas	labels
+factores	factors
+energia	energy
+publicado	published
+usos	uses
+sesion	session
+min	min
+sueltas	released	?
+pintado	painted
+presentado	presented
+profundidades	depths
+primeros	first
+incapaces	unable	?
+virtual	virtual
+stencil	stencil
+totales	totals
+zancada	stride
+brillo	brightness
+vez	time	?
+tratamiento	handling
+planear	plan
+publicar	publish
+vigilar	watch
+incoherentes	inconsistent
+swaps	swaps
+valla	fence
+companera	companion
+impl	impl	?
+escalar	scale
+quitar	remove
+reparar	repair
+nunca	never
+aniso	aniso	?
+refresco	refresh
+ahorrados	saved
+guardada	saved
+epoca	epoch
+productor	producer
+calculos	calculations
+distinto	distinct
+trabajando	working
+parches	patches
+sincronizaciones	syncs
+generaciones	generations
+atascado	stuck
+sospechosas	suspicious
+cambiada	changed
+aplazando	deferring
+etapas	stages
+image	image
+natural	natural
+plan	plan
+lee	read
+midiendo	measuring
+registrado	registered
+video	video
+emparejado	matched
+trabajos	jobs
+las
+transfer	transfer
+dst	dst	?
+escalable	scalable
+recogiendo	collecting
+float	float
+mirar	look	?
+registrar	register
+destiempo	untimed	?
+soltando	releasing
+soltadas	released
+muerta	dead
+viva	alive
+calculada	computed
+tramo	segment
+vacias	empty
+refrescar	refresh
+apm	apm	?
+habilitar	enable
+depth	depth
+mips	mips
+precisas	precise
+saltar	skip
+consumidor	consumer
+marcadores	markers
+asegurar	ensure
+biblioteca	library
+redundante	redundant
+pruebas	tests
+tempranas	early
+ejecutar	execute
+elegir	choose
+canonico	canonical
+extender	extend
+iniciar	start
+invitado	guest
+suelo	floor
+marcar	mark
+estencil	stencil
+operacion	operation
+pintar	paint
+podar	prune
+recalcular	recalculate
+recordar	remember
+rehacer	redo
+sacar	extract
+abierto	open
+anotada	noted
+bilineal	bilinear
+goteo	trickle	?
+b	b	?
+swizzle	swizzle
+callback	callback
+aplazables	deferrable
+perdidos	lost
+resuelto	resolved
+colas	queues
+grabadas	recorded
+tiradas	dropped	?
+texto	text
+copiado	copied
+pedida	requested
+ayudados	helped	?
+sinc	sync
+devolver	return
+diagnosticos	diagnostics
+dib	draw
+emparejados	matched
+identificados	identified
+edad	age
+minima	min
+enteras	integers
+caducada	expired
+choque	collision
+fija	fixed
+pintadas	painted
+repuesto	spare
+descartadas	discarded
+resubidas	reuploaded
+intercambios	swaps
+formatos	formats
+una
+ejecutor	executor
+extension	extension
+maxima	max
+bright	bright
+medio	medium
+magia	magic
+preparador	preparer
+defecto	default	?
+devuelta	returned
+utiles	useful	?
+megas	megas
+adjunto	attached
+grabada	recorded
+igual	same
+submit	submit
+fingida	faked	?
+iniciada	started
+validas	valid
+pausa	pause
+reservas	reserves
+importancia	importance
+kill	kill
+prev	prev	?
+aplicados	applied
+exactos	exact
+normales	normal
+omitidas	skipped
+volcadas	dumped
+resolves	resolves
+restaura	restore
+crecimiento	growth
+par	pair
+enviada	sent
+ocultar	hide
+create	create
+graficos	graphics
+visual	visual
+aprender	learn
+indirecto	indirect
+planeada	planned
+cerrar	close
+remapeo	remap
+componer	compose
+kills	kills
+tratada	handled
+vuelta	return	?
+aparte	apart
+descartar	discard
+despertar	wake
+despues	after
+emparejar	match
+entregar	deliver
+main	main
+como	as
+hace	does	?
+expulsar	evict
+fijar	fix
+p	p	?
+hacer	make
+subetapas	substages
+volumen	volume
+procesar	process
+limpiar	clear
+mover	move
+originales	originals
+sw	sw	?
+mhz	mhz
+perf	perf
+relojes	clocks
+reverse	reverse
+serializar	serialize
+encendido	enabled
+tabla	table
+texel	texel
+tiene	has
+veredicto	verdict
+vivo	alive
+argumentos	arguments
+invtam	invsize	?
+baldosas	tiles
+cargas	loads
+activas	active
+cerrada	closed
+dir	dir	?
+raiz	root
+esperada	expected
+fotos	photos
+mirados	looked	?
+habilitado	enabled
+clases	classes
+reinicio	reset
+op	op	?
+almacen	store
+cortes	cuts
+flotantes	floats
+slabs	slabs
+domo	dome
+fallido	failed
+indirecta	indirect
+fragmento	fragment
+modos	modes
+canal	channel
+secuencial	sequential
+estad	stat	?
+up	up	?
+agua	water
+macros	macros
+inicial	initial
+encendida	enabled
+colores	colors
+fps	fps
+exclusivo	exclusive
+grises	gray
+anisotropico	anisotropic
+olvidan	forget
+perezoso	lazy
+kb	kb
+diferidos	deferred
+mipmaps	mipmaps
+cbufs	cbufs
+emision	emission
+precarga	preload
+precalentar	prewarm
+clamp	clamp
+invisibles	invisible
+zcull	zcull
+ocupada	occupied
+ticks	ticks
+segundo	second
+presente	present
+componentes	components
+menu	menu
+ui	ui
+major	major
+minor	minor
+patch	patch
+make	make
+structure	structure
+type	type
+abrir	open	
+activar	activate	
+activo	active	
+api	api	
+bien	well	
+c	c	?
+calcular	compute	
+columna	column	
+creada	created	
+creado	created	
+early	early	
+escritor	writer	
+fichero	file	
+intercambiar	swap	
+layout	layout	
+load	load	
+luma	luma	
+mundo	world	
+nx	nx	
+plano	plane	?
+primitivas	primitives	
+regmem	regmem	?
+replacing	replacing	
+rotar	rotate	
+salty	salty	?
+un		
+us	us	?
+usar	use	
+vistas	views	

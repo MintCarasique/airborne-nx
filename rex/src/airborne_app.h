@@ -58,8 +58,8 @@ class AirborneApp : public rex::ReXApp {
   // Install the scripted gamepad when the input_script cvar is set, and the
   // native renderer instead of the Xenos emulation when nfsmw_renderizador=nativo.
   void OnPreSetup(rex::RuntimeConfig& config) override {
-    if (nfsmw::nativo::Activo()) {
-      config.graphics = nfsmw::nativo::CrearSistemaGrafico();
+    if (nfsmw::native_renderer::Active()) {
+      config.graphics = nfsmw::native_renderer::CreateGraphicSystem();
     }
     InstallInputScript(config);
   }

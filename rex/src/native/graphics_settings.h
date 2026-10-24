@@ -18,55 +18,55 @@
 
 #include <cstdint>
 
-namespace nfsmw::ajustes {
+namespace nfsmw::settings {
 
 // Optional post-processing in the Graficos/Posproceso category, like the one in GoldenEye-Recomp (which only
 // exists in D3D12): color grading (temperature, brightness, contrast, tint, saturation, vibrance and gamma),
 // vignette and scanlines. Off by default: the output stays bit-identical. Applied by the output pass of the
 // native renderer.
-struct Posproceso {
-  bool activo = false;
-  float brillo = 0.0f;
-  float contraste = 1.0f;
-  float saturacion = 1.0f;
-  float vibracion = 0.0f;
+struct Postprocess {
+  bool active = false;
+  float brightness = 0.0f;
+  float contrast = 1.0f;
+  float saturation = 1.0f;
+  float rumble = 0.0f;
   float temperatura = 0.0f;
   float gamma = 1.0f;
-  float tinte_r = 1.0f;
-  float tinte_g = 1.0f;
-  float tinte_b = 1.0f;
-  float tinte = 0.0f;
-  float vineta = 0.0f;
-  float lineas = 0.0f;
+  float r_tint = 1.0f;
+  float g_tint = 1.0f;
+  float b_tint = 1.0f;
+  float tint = 0.0f;
+  float vignette = 0.0f;
+  float lines = 0.0f;
 };
 
 // Values in effect (the chosen preset or the custom ones). Reads the cvars with the registry lock: call
 // only when VersionPosproceso changes.
-Posproceso LeerPosproceso();
+Postprocess ReadPostprocess();
 
 // Increments every time the menu changes a post-processing cvar (lock-free: it can be checked every frame).
-uint64_t VersionPosproceso();
+uint64_t PostprocessVersion();
 
 // nfsmw_antialiasing = fxaa (lock-free: it can be checked every frame).
 bool AntialiasingFxaa();
 
 // nfsmw_resplandor_cielo: 0 original, 1 natural, 2 suave (lock-free: it can be checked on every draw).
-int ResplandorCielo();
+int GlowSky();
 
 // nfsmw_tratamiento_visual: 0 original, 1 suave, 2 apagado (lock-free: it can be checked on every draw).
-int TratamientoVisual();
+int VisualHandling();
 
 // Registers the change notifications for the live Graphics settings (post-processing, antialiasing, sky glow
 // and the color filter), once at startup.
-void VigilarAjustesEnVivo();
+void WatchLiveSettings();
 
 // Passes nfsmw_resolucion_interna and nfsmw_limite_fps to the video mode (video_mode_width/height,
 // resolution and video_mode_refresh_rate), except the ones that come from the command line. Must run
 // before the game requests the video mode.
-void AplicarAjustesGraficos();
+void ApplyGraphicsSettings();
 
 // With the native renderer, removes from the menu the FPS, resolution and graphics settings that do
 // nothing, and the video mode settings that the ones above replace.
-void OcultarAjustesSinEfecto();
+void HideSettingsWithoutEffect();
 
 }  // namespace nfsmw::ajustes

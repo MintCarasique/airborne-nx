@@ -30,16 +30,16 @@ REXCVAR_DEFINE_INT32(nfsmw_captura_cada_s, 0, "NFSMW",
 REXCVAR_DEFINE_INT32(nfsmw_captura_max, 20, "NFSMW", "Maximo de capturas por ejecucion")
     .range(1, 1000);
 
-namespace nfsmw::captura {
+namespace nfsmw::capture {
 namespace {
 
 std::mutex g_mutex;
 std::condition_variable g_cv;
 bool g_parar = false;
-std::thread g_hilo;
+std::thread g_thread;
 
-uint32_t Crc32(const uint8_t* datos, size_t n, uint32_t crc) {
-  static const std::array<uint32_t, 256> tabla = [] {
+uint32_t Crc32(const uint8_t* payload, size_t n, uint32_t crc) {
+  static const std::array<uint32_t, 256> table = [] {
     std::array<uint32_t, 256> t{};
     for (uint32_t i = 0; i < 256; ++i) {
       uint32_t c = i;
@@ -51,41 +51,41 @@ uint32_t Crc32(const uint8_t* datos, size_t n, uint32_t crc) {
     return t;
   }();
   for (size_t i = 0; i < n; ++i) {
-    crc = tabla[(crc ^ datos[i]) & 0xFF] ^ (crc >> 8);
+    crc = table[(crc ^ payload[i]) & 0xFF] ^ (crc >> 8);
   }
   return crc;
 }
 
-void PonerBe32(std::vector<uint8_t>& salida, uint32_t valor) {
-  salida.push_back(uint8_t(valor >> 24));
-  salida.push_back(uint8_t(valor >> 16));
-  salida.push_back(uint8_t(valor >> 8));
-  salida.push_back(uint8_t(valor));
+void PutBe32(std::vector<uint8_t>& output, uint32_t value) {
+  output.push_back(uint8_t(value >> 24));
+  output.push_back(uint8_t(value >> 16));
+  output.push_back(uint8_t(value >> 8));
+  output.push_back(uint8_t(value));
 }
 
-void Chunk(std::vector<uint8_t>& salida, const char tipo[4], const std::vector<uint8_t>& datos) {
-  PonerBe32(salida, uint32_t(datos.size()));
-  const size_t inicio_tipo = salida.size();
-  salida.insert(salida.end(), tipo, tipo + 4);
-  salida.insert(salida.end(), datos.begin(), datos.end());
+void Chunk(std::vector<uint8_t>& output, const char type[4], const std::vector<uint8_t>& payload) {
+  PutBe32(output, uint32_t(payload.size()));
+  const size_t type_start = output.size();
+  output.insert(output.end(), type, type + 4);
+  output.insert(output.end(), payload.begin(), payload.end());
   const uint32_t crc =
-      Crc32(salida.data() + inicio_tipo, salida.size() - inicio_tipo, 0xFFFFFFFFu) ^ 0xFFFFFFFFu;
-  PonerBe32(salida, crc);
+      Crc32(output.data() + type_start, output.size() - type_start, 0xFFFFFFFFu) ^ 0xFFFFFFFFu;
+  PutBe32(output, crc);
 }
 
 // RGBX (R8 G8 B8 X8, like rex::ui::RawImage) to 8-bit RGB PNG.
-std::vector<uint8_t> CodificarPng(const rex::ui::RawImage& imagen) {
-  const uint32_t ancho = imagen.width;
-  const uint32_t alto = imagen.height;
-  std::vector<uint8_t> crudo;
-  crudo.reserve(size_t(alto) * (size_t(ancho) * 3 + 1));
-  for (uint32_t y = 0; y < alto; ++y) {
-    crudo.push_back(0);  // sin filtro
-    const uint8_t* fila = imagen.data.data() + size_t(y) * imagen.stride;
-    for (uint32_t x = 0; x < ancho; ++x) {
-      crudo.push_back(fila[x * 4]);
-      crudo.push_back(fila[x * 4 + 1]);
-      crudo.push_back(fila[x * 4 + 2]);
+std::vector<uint8_t> CodificarPng(const rex::ui::RawImage& img) {
+  const uint32_t width_px = img.width;
+  const uint32_t height_px = img.height;
+  std::vector<uint8_t> raw;
+  raw.reserve(size_t(height_px) * (size_t(width_px) * 3 + 1));
+  for (uint32_t y = 0; y < height_px; ++y) {
+    raw.push_back(0);  // sin filtro
+    const uint8_t* row = img.data.data() + size_t(y) * img.stride;
+    for (uint32_t x = 0; x < width_px; ++x) {
+      raw.push_back(row[x * 4]);
+      raw.push_back(row[x * 4 + 1]);
+      raw.push_back(row[x * 4 + 2]);
     }
   }
 
@@ -93,27 +93,27 @@ std::vector<uint8_t> CodificarPng(const rex::ui::RawImage& imagen) {
   std::vector<uint8_t> zlib = {0x78, 0x01};
   size_t pos = 0;
   do {
-    const size_t trozo = std::min<size_t>(65535, crudo.size() - pos);
-    const bool ultimo = pos + trozo == crudo.size();
-    zlib.push_back(ultimo ? 1 : 0);
-    zlib.push_back(uint8_t(trozo));
-    zlib.push_back(uint8_t(trozo >> 8));
-    zlib.push_back(uint8_t(~trozo));
-    zlib.push_back(uint8_t(~trozo >> 8));
-    zlib.insert(zlib.end(), crudo.begin() + pos, crudo.begin() + pos + trozo);
-    pos += trozo;
-  } while (pos < crudo.size());
+    const size_t chunk = std::min<size_t>(65535, raw.size() - pos);
+    const bool is_last = pos + chunk == raw.size();
+    zlib.push_back(is_last ? 1 : 0);
+    zlib.push_back(uint8_t(chunk));
+    zlib.push_back(uint8_t(chunk >> 8));
+    zlib.push_back(uint8_t(~chunk));
+    zlib.push_back(uint8_t(~chunk >> 8));
+    zlib.insert(zlib.end(), raw.begin() + pos, raw.begin() + pos + chunk);
+    pos += chunk;
+  } while (pos < raw.size());
   uint32_t a = 1, b = 0;
-  for (uint8_t byte : crudo) {
+  for (uint8_t byte : raw) {
     a = (a + byte) % 65521;
     b = (b + a) % 65521;
   }
-  PonerBe32(zlib, (b << 16) | a);
+  PutBe32(zlib, (b << 16) | a);
 
   std::vector<uint8_t> png = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
   std::vector<uint8_t> ihdr;
-  PonerBe32(ihdr, ancho);
-  PonerBe32(ihdr, alto);
+  PutBe32(ihdr, width_px);
+  PutBe32(ihdr, height_px);
   ihdr.push_back(8);  // bits per channel
   ihdr.push_back(2);  // RGB
   ihdr.push_back(0);  // deflate
@@ -125,55 +125,55 @@ std::vector<uint8_t> CodificarPng(const rex::ui::RawImage& imagen) {
   return png;
 }
 
-void Bucle(std::function<rex::ui::Presenter*()> obtener_presentador, int cada_s, int maximo) {
-  const std::filesystem::path carpeta = rex::filesystem::GetExecutableFolder() / "capturas";
-  const auto inicio = std::chrono::steady_clock::now();
-  for (int n = 1; n <= maximo; ++n) {
+void Loop(std::function<rex::ui::Presenter*()> get_presenter, int cada_s, int max_value) {
+  const std::filesystem::path dir_name = rex::filesystem::GetExecutableFolder() / "capturas";
+  const auto start = std::chrono::steady_clock::now();
+  for (int n = 1; n <= max_value; ++n) {
     {
-      std::unique_lock<std::mutex> cerrojo(g_mutex);
-      if (g_cv.wait_for(cerrojo, std::chrono::seconds(cada_s), [] { return g_parar; })) {
+      std::unique_lock<std::mutex> mutex_lock(g_mutex);
+      if (g_cv.wait_for(mutex_lock, std::chrono::seconds(cada_s), [] { return g_parar; })) {
         return;
       }
     }
-    rex::ui::Presenter* presentador = obtener_presentador ? obtener_presentador() : nullptr;
-    rex::ui::RawImage imagen;
-    if (!presentador || !presentador->CaptureGuestOutput(imagen) || !imagen.width ||
-        !imagen.height) {
+    rex::ui::Presenter* presenter_ptr = get_presenter ? get_presenter() : nullptr;
+    rex::ui::RawImage img;
+    if (!presenter_ptr || !presenter_ptr->CaptureGuestOutput(img) || !img.width ||
+        !img.height) {
       REXLOG_WARN("[captura] {}: no hay imagen del juego que capturar", n);
       continue;
     }
     std::error_code ec;
-    std::filesystem::create_directories(carpeta, ec);
-    const auto segundos = std::chrono::duration_cast<std::chrono::seconds>(
-                              std::chrono::steady_clock::now() - inicio)
+    std::filesystem::create_directories(dir_name, ec);
+    const auto secs = std::chrono::duration_cast<std::chrono::seconds>(
+                              std::chrono::steady_clock::now() - start)
                               .count();
-    char nombre[64];
-    std::snprintf(nombre, sizeof(nombre), "captura_%03d_%04llds.png", n,
-                  static_cast<long long>(segundos));
-    const std::filesystem::path ruta = carpeta / nombre;
-    const std::vector<uint8_t> png = CodificarPng(imagen);
-    std::ofstream fichero(ruta, std::ios::binary);
-    fichero.write(reinterpret_cast<const char*>(png.data()), std::streamsize(png.size()));
-    if (!fichero) {
-      REXLOG_WARN("[captura] No se pudo escribir {}", ruta.string());
+    char name[64];
+    std::snprintf(name, sizeof(name), "captura_%03d_%04llds.png", n,
+                  static_cast<long long>(secs));
+    const std::filesystem::path file_path = dir_name / name;
+    const std::vector<uint8_t> png = CodificarPng(img);
+    std::ofstream file_name(file_path, std::ios::binary);
+    file_name.write(reinterpret_cast<const char*>(png.data()), std::streamsize(png.size()));
+    if (!file_name) {
+      REXLOG_WARN("[captura] No se pudo escribir {}", file_path.string());
       continue;
     }
-    REXLOG_INFO("[captura] {} ({}x{})", ruta.string(), imagen.width, imagen.height);
+    REXLOG_INFO("[captura] {} ({}x{})", file_path.string(), img.width, img.height);
   }
 }
 
 }  // namespace
 
-void Arrancar(std::function<rex::ui::Presenter*()> obtener_presentador) {
+void Boot(std::function<rex::ui::Presenter*()> get_presenter) {
   const int cada_s = REXCVAR_GET(nfsmw_captura_cada_s);
-  if (cada_s <= 0 || g_hilo.joinable()) {
+  if (cada_s <= 0 || g_thread.joinable()) {
     return;
   }
   {
-    std::lock_guard<std::mutex> cerrojo(g_mutex);
+    std::lock_guard<std::mutex> mutex_lock(g_mutex);
     g_parar = false;
   }
-  g_hilo = std::thread(Bucle, std::move(obtener_presentador), cada_s,
+  g_thread = std::thread(Loop, std::move(get_presenter), cada_s,
                        int(REXCVAR_GET(nfsmw_captura_max)));
   REXLOG_INFO("[captura] Una captura cada {} s (maximo {})", cada_s,
               int(REXCVAR_GET(nfsmw_captura_max)));
@@ -181,12 +181,12 @@ void Arrancar(std::function<rex::ui::Presenter*()> obtener_presentador) {
 
 void Parar() {
   {
-    std::lock_guard<std::mutex> cerrojo(g_mutex);
+    std::lock_guard<std::mutex> mutex_lock(g_mutex);
     g_parar = true;
   }
   g_cv.notify_all();
-  if (g_hilo.joinable()) {
-    g_hilo.join();
+  if (g_thread.joinable()) {
+    g_thread.join();
   }
 }
 

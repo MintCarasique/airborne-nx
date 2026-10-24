@@ -12,50 +12,50 @@
 #include <string>
 
 // Guest frames presented by the game (NFSMW counted them in its frame loop).
-std::atomic<uint64_t> g_nfsmw_fotogramas_juego{0};
+std::atomic<uint64_t> g_nfsmw_game_frames{0};
 
 namespace nfsmw {
 
-namespace nativo {
-void AvisarProgresoAnillo() {}
-void ActivarConsumidorMarcadores(bool) {}
-void AnotarComprobacionMarcador(bool, uint32_t, uint32_t, uint32_t, uint32_t) {}
+namespace native_renderer {
+void WarnRingProgress() {}
+void ActivateMarkersConsumer(bool) {}
+void TrackMarkerCheck(bool, uint32_t, uint32_t, uint32_t, uint32_t) {}
 }  // namespace nativo
 
-namespace guardia30 {
+namespace guard30 {
 // Shadows are skipped exactly when the cvar asks for it; no frame-rate guard.
-bool SinSombras(bool requested) {
+bool WithoutShadows(bool requested) {
   return requested;
 }
 void Latir(double) {}
-void Informe() {}
+void Report() {}
 }  // namespace guardia30
 
-namespace escenario_lod {
-std::string Resumen() {
+namespace lod_scenario {
+std::string Summary() {
   return {};
 }
 }  // namespace escenario_lod
 
-namespace reflejo_demanda {
-bool MedirVisibilidad() {
+namespace demand_reflection {
+bool MeasureVisibility() {
   return false;
 }
-bool VisibilidadComprobada() {
+bool CheckedVisibility() {
   return false;
 }
-void AnotarCopia() {}
-void AnotarLectura() {}
-void AnotarOculto() {}
-void AnotarSwap() {}
-void AnotarTestigo(bool) {}
-void AnotarVisible(bool) {}
+void TrackCopy() {}
+void TrackRead() {}
+void TrackHidden() {}
+void TrackSwap() {}
+void TrackSentinel(bool) {}
+void TrackVisible(bool) {}
 }  // namespace reflejo_demanda
 
 namespace render_targets {
 // Samples of the game's original anti-aliasing mode; 1 until MoH:A's mode
 // table is known.
-uint32_t MuestrasOriginalesModoActual(const uint8_t*) {
+uint32_t OriginalSamplesCurrentMode(const uint8_t*) {
   return 1;
 }
 }  // namespace render_targets

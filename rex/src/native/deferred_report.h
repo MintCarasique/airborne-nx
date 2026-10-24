@@ -12,8 +12,8 @@
 
 #include <rex/logging.h>
 
-namespace nfsmw::nativo {
-void InformeDiferido(std::string linea);
+namespace nfsmw::native_renderer {
+void DeferredReport(std::string line);
 }  // namespace nfsmw::nativo
 
-#define NFSMW_INFORME_DIFERIDO(...) ::nfsmw::nativo::InformeDiferido(fmt::format(__VA_ARGS__))
+#define NFSMW_DEFERRED_REPORT(...) ::nfsmw::native_renderer::DeferredReport(fmt::format(__VA_ARGS__))

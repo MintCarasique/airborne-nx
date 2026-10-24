@@ -40,7 +40,7 @@ REXCVAR_DEFINE_BOOL(airborne_dump_unknown_shaders, false, "AirborneNX",
                     "have to unknown_shaders/<hash>_<vs|ps>.bin next to the executable, for "
                     "tools/wrap_unknown_shaders.py");
 
-namespace nfsmw::nativo {
+namespace nfsmw::native_renderer {
 namespace {
 
 // AirborneNX: shaders that come without a container (built at run time by the XDK or the game) are dumped
@@ -78,20 +78,20 @@ void DumpUnknownShader(bool vertex, uint64_t hash, std::span<const uint32_t> mic
 // AirborneNX: and the destination register too: the XDK can permute the registers of a group of fetches
 // (a particle VS arrives with r4/r6/r5 where the container has r6/r5/r4). The renderer finds each element's
 // fetch by register in the patched microcode, not by position.
-constexpr uint32_t kFetchConserva[3] = {0x00000FFF, 0x80000000, 0x80000000};
+constexpr uint32_t kKeepsFetch[3] = {0x00000FFF, 0x80000000, 0x80000000};
 
-constexpr uint32_t kMaxAvisos = 48;
+constexpr uint32_t kMaxWarnings = 48;
 
-constexpr const char* kUsos[] = {"posicion", "peso",     "indices",    "normal",
+constexpr const char* kUses[] = {"posicion", "peso",     "indices",    "normal",
                                  "tam_punto", "texcoord", "tangente",   "binormal",
                                  "teselado",  "posicion_t", "color",    "niebla",
                                  "profundidad", "muestra", "uso14",     "uso15"};
 
-struct Contenedor {
+struct Container {
   const std::vector<uint8_t>& o;
 
-  bool Hay(size_t posicion, size_t bytes) const {
-    return posicion <= o.size() && bytes <= o.size() - posicion;
+  bool Hay(size_t position, size_t bytes) const {
+    return position <= o.size() && bytes <= o.size() - position;
   }
   uint32_t U32(size_t p) const {
     return uint32_t(o[p]) << 24 | uint32_t(o[p + 1]) << 16 | uint32_t(o[p + 2]) << 8 | o[p + 3];
@@ -100,9 +100,9 @@ struct Contenedor {
 };
 
 // nfsmw_nativo_sombra_minimo. The zero-terminated string starting at `posicion` is `nombre`.
-bool NombreEs(const Contenedor& c, size_t posicion, const char* nombre) {
-  const size_t n = std::strlen(nombre);
-  return c.Hay(posicion, n + 1) && std::memcmp(c.o.data() + posicion, nombre, n) == 0 && c.o[posicion + n] == 0;
+bool NameIs(const Container& c, size_t position, const char* name) {
+  const size_t n = std::strlen(name);
+  return c.Hay(position, n + 1) && std::memcmp(c.o.data() + position, name, n) == 0 && c.o[position + n] == 0;
 }
 
 // Reads what is needed from the 2005 container, which is not the one in XenosRecomp
@@ -116,70 +116,70 @@ bool NombreEs(const Contenedor& c, size_t posicion, const char* nombre) {
 // shader.h): 36-byte header, CTAB at +16 as in 2005, shader header at +24, and the microcode is the range
 // [physicalOffset, physicalOffset + size) of the physical part (literal constants can follow it). The
 // vertex element list starts at +0x24 of the shader header instead of +0x28.
-const char* Leer(const nfsmw::native::Shader& shader, EntradaShader& e) {
-  const Contenedor c{shader.original};
+const char* Read(const nfsmw::native::Shader& shader, ShaderEntry& e) {
+  const Container c{shader.original};
   if (!c.Hay(0, 24)) return "contenedor demasiado corto";
   const bool de2008 = (c.U32(0) & 0xFFFFFF00u) == 0x102A1100u;
   if (de2008 && !c.Hay(0, 36)) return "contenedor demasiado corto";
   const uint32_t virtuales = c.U32(4);
-  const uint32_t fisicos = c.U32(8);
-  const uint32_t tabla = c.U32(16);
-  const uint32_t cabecera = c.U32(de2008 ? 24 : 20);
-  const size_t lista = de2008 ? 36 : 40;
-  if (!fisicos || (fisicos % 4) || !c.Hay(virtuales, fisicos)) {
+  const uint32_t physical = c.U32(8);
+  const uint32_t table = c.U32(16);
+  const uint32_t hdr = c.U32(de2008 ? 24 : 20);
+  const size_t item_list = de2008 ? 36 : 40;
+  if (!physical || (physical % 4) || !c.Hay(virtuales, physical)) {
     return "microcodigo fuera del contenedor";
   }
-  if (cabecera >= virtuales || size_t(cabecera) + (shader.vertices ? lista : 32) > virtuales) {
+  if (hdr >= virtuales || size_t(hdr) + (shader.vertices ? item_list : 32) > virtuales) {
     return "cabecera del shader fuera de la parte virtual";
   }
-  uint32_t inicio_codigo = 0, bytes_codigo = fisicos;
+  uint32_t code_start = 0, code_bytes = physical;
   if (de2008) {
-    inicio_codigo = c.U32(cabecera);
-    bytes_codigo = c.U32(cabecera + 4);
-    if (!bytes_codigo || (inicio_codigo % 4) || (bytes_codigo % 4) || inicio_codigo > fisicos ||
-        bytes_codigo > fisicos - inicio_codigo) {
+    code_start = c.U32(hdr);
+    code_bytes = c.U32(hdr + 4);
+    if (!code_bytes || (code_start % 4) || (code_bytes % 4) || code_start > physical ||
+        code_bytes > physical - code_start) {
       return "microcodigo fuera de la parte fisica";
     }
   }
 
   e.vertices = shader.vertices;
-  e.microcodigo.resize(bytes_codigo / 4);
-  for (size_t i = 0; i < e.microcodigo.size(); ++i) {
-    e.microcodigo[i] = c.U32(size_t(virtuales) + inicio_codigo + i * 4);
+  e.ucode.resize(code_bytes / 4);
+  for (size_t i = 0; i < e.ucode.size(); ++i) {
+    e.ucode[i] = c.U32(size_t(virtuales) + code_start + i * 4);
   }
 
   if (e.vertices) {
     // List at +0x28 (2005) or +0x24 (2008), after skipping the words at +0x18; +0x1C = element count.
-    const uint32_t previos = c.U32(cabecera + 24);
-    const uint32_t cantidad = c.U32(cabecera + 28);
-    const size_t comienzo = size_t(cabecera) + lista + size_t(previos) * 4;
-    if (cantidad > 64 || previos > 1024 || comienzo + size_t(cantidad) * 4 > virtuales) {
+    const uint32_t previous_items = c.U32(hdr + 24);
+    const uint32_t amount = c.U32(hdr + 28);
+    const size_t begin_pos = size_t(hdr) + item_list + size_t(previous_items) * 4;
+    if (amount > 64 || previous_items > 1024 || begin_pos + size_t(amount) * 4 > virtuales) {
       return "elementos de vertices fuera de la parte virtual";
     }
-    for (uint32_t i = 0; i < cantidad; ++i) {
-      const uint32_t valor = c.U32(comienzo + size_t(i) * 4);
-      ElementoVertice elemento;
-      elemento.instruccion = uint16_t(valor & 0xFFF);
-      elemento.uso = uint8_t((valor >> 12) & 0xF);
-      elemento.indice_uso = uint8_t((valor >> 16) & 0xF);
-      if ((size_t(elemento.instruccion) + 1) * 3 > e.microcodigo.size()) {
+    for (uint32_t i = 0; i < amount; ++i) {
+      const uint32_t value = c.U32(begin_pos + size_t(i) * 4);
+      VertexElement element;
+      element.instruction = uint16_t(value & 0xFFF);
+      element.use = uint8_t((value >> 12) & 0xF);
+      element.use_index = uint8_t((value >> 16) & 0xF);
+      if ((size_t(element.instruction) + 1) * 3 > e.ucode.size()) {
         return "elemento de vertices apunta fuera del microcodigo";
       }
-      elemento.swizzle = uint16_t(e.microcodigo[size_t(elemento.instruccion) * 3 + 1] & 0xFFF);
-      elemento.registro = uint8_t((e.microcodigo[size_t(elemento.instruccion) * 3] >> 12) & 0x3F);
-      e.elementos.push_back(elemento);
+      element.swizzle = uint16_t(e.ucode[size_t(element.instruction) * 3 + 1] & 0xFFF);
+      element.reg_index = uint8_t((e.ucode[size_t(element.instruction) * 3] >> 12) & 0x3F);
+      e.elements.push_back(element);
       for (size_t j = 0; j < 3; ++j) {
-        e.microcodigo[size_t(elemento.instruccion) * 3 + j] &= kFetchConserva[j];
+        e.ucode[size_t(element.instruction) * 3 + j] &= kKeepsFetch[j];
       }
     }
   } else {
-    if (!c.Hay(cabecera + 24, 8)) return "cabecera de pixel shader corta";
-    e.salidas = c.U32(cabecera + 28);
+    if (!c.Hay(hdr + 24, 8)) return "cabecera de pixel shader corta";
+    e.outputs = c.U32(hdr + 28);
   }
 
   // Constant table: only the samplers (register and type).
-  if (!tabla || !c.Hay(tabla + 4, 28)) return "sin tabla de constantes";
-  const size_t base = size_t(tabla) + 4;
+  if (!table || !c.Hay(table + 4, 28)) return "sin tabla de constantes";
+  const size_t base = size_t(table) + 4;
   const uint32_t constantes = c.U32(base + 12);
   const uint32_t info = c.U32(base + 16);
   if (constantes > 1024 || !c.Hay(base + info, size_t(constantes) * 20)) {
@@ -188,27 +188,27 @@ const char* Leer(const nfsmw::native::Shader& shader, EntradaShader& e) {
   // Float registers the SPIR-V reads: the highest in the table, or up to the end of the
   // buffer if there is an array with relative indexing (XenosRecomp shader_recompiler.cpp:
   // 1172-1183: tailCount = 256 in VS and 224 in PS).
-  uint32_t registros_float = 0;
+  uint32_t float_regs = 0;
   for (uint32_t i = 0; i < constantes; ++i) {
     const size_t p = base + info + size_t(i) * 20;
     if (c.U16(p + 4) == 2) {  // RegisterSet::Float4
-      const uint32_t indice = c.U16(p + 6);
-      const uint32_t cuantos = c.U16(p + 8);
-      registros_float = std::max(registros_float, cuantos > 1 ? (e.vertices ? 256u : 224u)
-                                                              : indice + 1);
+      const uint32_t index = c.U16(p + 6);
+      const uint32_t how_many_items = c.U16(p + 8);
+      float_regs = std::max(float_regs, how_many_items > 1 ? (e.vertices ? 256u : 224u)
+                                                              : index + 1);
     }
   }
-  e.constantes_bytes = std::min<uint32_t>(std::max<uint32_t>(registros_float, 1), 256) * 16;
+  e.constantes_bytes = std::min<uint32_t>(std::max<uint32_t>(float_regs, 1), 256) * 16;
   for (uint32_t i = 0; i < constantes; ++i) {
     const size_t p = base + info + size_t(i) * 20;
     if (c.U16(p + 4) != 3) continue;  // RegisterSet::Sampler
     SamplerShader sampler;
-    sampler.registro = c.U16(p + 6);
-    const uint32_t tipo = c.U32(p + 12);
-    sampler.tipo = c.Hay(base + tipo, 4) ? c.U16(base + tipo + 2) : 0;
+    sampler.reg_index = c.U16(p + 6);
+    const uint32_t type = c.U32(p + 12);
+    sampler.type = c.Hay(base + type, 4) ? c.U16(base + type + 2) : 0;
     // nfsmw_nativo_sombra_minimo. The name is at that distance from the start of the table, like the type
     // (XenosRecomp shader_recompiler.cpp: constantTableData + constantInfo->name).
-    sampler.mapa_sombras = NombreEs(c, base + size_t(c.U32(p)), "SHADOWMAP_SAMPLER");
+    sampler.shadows_map = NameIs(c, base + size_t(c.U32(p)), "SHADOWMAP_SAMPLER");
     e.samplers.push_back(sampler);
   }
 
@@ -216,102 +216,102 @@ const char* Leer(const nfsmw::native::Shader& shader, EntradaShader& e) {
   // declares those samplers itself, so they have to be bound too. The control flow comes first, as pairs of
   // 48-bit instructions in 3 words, up to the lowest exec address; each exec clause marks its fetch
   // instructions with bit 0 of each 2-bit sequence entry.
-  e.samplers_tabla = uint32_t(e.samplers.size());
+  e.table_samplers = uint32_t(e.samplers.size());
   if (!e.vertices) {
-    const size_t instrucciones = e.microcodigo.size() / 3;
-    size_t limite = instrucciones;
-    for (size_t i = 0; i < limite && i < instrucciones; ++i) {
-      const uint32_t a = e.microcodigo[i * 3], b = e.microcodigo[i * 3 + 1], w = e.microcodigo[i * 3 + 2];
+    const size_t instructions = e.ucode.size() / 3;
+    size_t limit = instructions;
+    for (size_t i = 0; i < limit && i < instructions; ++i) {
+      const uint32_t a = e.ucode[i * 3], b = e.ucode[i * 3 + 1], w = e.ucode[i * 3 + 2];
       const uint64_t cf[2] = {uint64_t(a) | uint64_t(b & 0xFFFF) << 32, uint64_t(b >> 16) | uint64_t(w) << 16};
-      for (const uint64_t palabra : cf) {
-        const uint32_t op = uint32_t(palabra >> 44) & 0xF;
+      for (const uint64_t word_value : cf) {
+        const uint32_t op = uint32_t(word_value >> 44) & 0xF;
         if (!((op >= 1 && op <= 6) || op == 13 || op == 14)) {
           continue;
         }
-        const uint32_t direccion = uint32_t(palabra) & 0xFFF, cantidad = uint32_t(palabra >> 12) & 0x7;
-        const uint32_t secuencia = uint32_t(palabra >> 16) & 0xFFF;
-        if (direccion) {
-          limite = std::min<size_t>(limite, direccion);
+        const uint32_t address = uint32_t(word_value) & 0xFFF, amount = uint32_t(word_value >> 12) & 0x7;
+        const uint32_t sequence = uint32_t(word_value >> 16) & 0xFFF;
+        if (address) {
+          limit = std::min<size_t>(limit, address);
         }
-        for (uint32_t j = 0; j < cantidad; ++j) {
-          const size_t k = size_t(direccion) + j;
-          if (!((secuencia >> (j * 2)) & 0x1) || (k + 1) * 3 > e.microcodigo.size()) {
+        for (uint32_t j = 0; j < amount; ++j) {
+          const size_t k = size_t(address) + j;
+          if (!((sequence >> (j * 2)) & 0x1) || (k + 1) * 3 > e.ucode.size()) {
             continue;
           }
-          const uint32_t w0 = e.microcodigo[k * 3], w2 = e.microcodigo[k * 3 + 2];
+          const uint32_t w0 = e.ucode[k * 3], w2 = e.ucode[k * 3 + 2];
           const uint32_t opcode = w0 & 0x1F;
           if (opcode != 1 && (opcode < 16 || opcode > 19)) {
             continue;
           }
-          const uint16_t registro = uint16_t((w0 >> 20) & 0x1F);
+          const uint16_t reg_index = uint16_t((w0 >> 20) & 0x1F);
           if (std::any_of(e.samplers.begin(), e.samplers.end(),
-                          [&](const SamplerShader& s) { return s.registro == registro; })) {
+                          [&](const SamplerShader& s) { return s.reg_index == reg_index; })) {
             continue;
           }
           const uint32_t dimension = (w2 >> 14) & 0x3;  // 0 1D, 1 2D, 2 3D, 3 cube
           SamplerShader sampler;
-          sampler.registro = registro;
-          sampler.tipo = dimension == 2 ? 13 : dimension == 3 ? 14 : 12;
+          sampler.reg_index = reg_index;
+          sampler.type = dimension == 2 ? 13 : dimension == 3 ? 14 : 12;
           e.samplers.push_back(sampler);
         }
       }
     }
   }
 
-  e.huella = XXH3_64bits(e.microcodigo.data(), e.microcodigo.size() * sizeof(uint32_t));
+  e.fingerprint = XXH3_64bits(e.ucode.data(), e.ucode.size() * sizeof(uint32_t));
   return nullptr;
 }
 
-struct ClaveCruda {
-  uint64_t huella;
-  uint32_t palabras;
+struct RawKey {
+  uint64_t fingerprint;
+  uint32_t word_data;
   bool vertices;
-  bool operator==(const ClaveCruda&) const = default;
+  bool operator==(const RawKey&) const = default;
 };
 
-struct HashClaveCruda {
-  size_t operator()(const ClaveCruda& c) const {
-    return size_t(c.huella ^ (uint64_t(c.palabras) << 1) ^ uint64_t(c.vertices));
+struct RawKeyHash {
+  size_t operator()(const RawKey& c) const {
+    return size_t(c.fingerprint ^ (uint64_t(c.word_data) << 1) ^ uint64_t(c.vertices));
   }
 };
 
 }  // namespace
 
-struct ShadersNativos::Datos {
-  nfsmw::native::BibliotecaShaders biblioteca;
-  std::vector<EntradaShader> entradas;
+struct NativeShaders::Impl {
+  nfsmw::native::ShadersLibrary library;
+  std::vector<ShaderEntry> entries;
   std::unordered_map<const nfsmw::native::Shader*, uint32_t> por_shader;
   // (vertices, palabras) -> entradas candidatas.
-  std::map<std::pair<bool, uint32_t>, std::vector<uint32_t>> candidatos;
-  std::unordered_map<ClaveCruda, const EntradaShader*, HashClaveCruda> cache;
+  std::map<std::pair<bool, uint32_t>, std::vector<uint32_t>> candidates;
+  std::unordered_map<RawKey, const ShaderEntry*, RawKeyHash> cache;
   std::vector<uint32_t> temporal;
-  EstadisticasShaders estadisticas;
-  uint32_t avisos = 0;
-  bool cargada = false;
+  ShaderStats stats;
+  uint32_t warnings = 0;
+  bool loaded = false;
 };
 
-ShadersNativos::ShadersNativos() : datos_(std::make_unique<Datos>()) {}
-ShadersNativos::~ShadersNativos() = default;
+NativeShaders::NativeShaders() : payload_(std::make_unique<Impl>()) {}
+NativeShaders::~NativeShaders() = default;
 
-bool ShadersNativos::cargada() const {
-  return datos_->cargada;
+bool NativeShaders::loaded() const {
+  return payload_->loaded;
 }
 
-bool FetchCoherentes(const EntradaShader& vs, std::span<const uint32_t> parcheado) {
-  if (!vs.vertices || parcheado.size() != vs.microcodigo.size()) {
+bool FetchCoherentes(const ShaderEntry& vs, std::span<const uint32_t> patched) {
+  if (!vs.vertices || patched.size() != vs.ucode.size()) {
     return false;
   }
-  for (const ElementoVertice& elemento : vs.elementos) {
-    const uint32_t registro = elemento.registro;
-    bool encontrado = false;
-    for (const ElementoVertice& otro : vs.elementos) {
-      const uint32_t d0 = parcheado[size_t(otro.instruccion) * 3];
-      if (((d0 >> 12) & 0x3F) == registro && (d0 & 0x1F) == 0) {
-        encontrado = true;
+  for (const VertexElement& element : vs.elements) {
+    const uint32_t reg_index = element.reg_index;
+    bool found = false;
+    for (const VertexElement& other_one : vs.elements) {
+      const uint32_t d0 = patched[size_t(other_one.instruction) * 3];
+      if (((d0 >> 12) & 0x3F) == reg_index && (d0 & 0x1F) == 0) {
+        found = true;
         break;
       }
     }
-    if (!encontrado) {
+    if (!found) {
       return false;
     }
   }
@@ -320,159 +320,159 @@ bool FetchCoherentes(const EntradaShader& vs, std::span<const uint32_t> parchead
 
 // nfsmw_nativo_sombra_minimo. The library has tfetch2DSombraMin if the pixel shader's SPIR-V contains the
 // NFSMW_MARCA_SOMBRA_MINIMO constant from shader_common.h (a 32-bit OpConstant): nothing else uses it.
-constexpr uint32_t kMarcaSombraMinimo = 0x5E3B1A84u;
-static bool TieneMarcaSombraMinimo(const std::vector<uint32_t>& spirv) {
+constexpr uint32_t kShadowMinMark = 0x5E3B1A84u;
+static bool HasShadowMinMark(const std::vector<uint32_t>& spirv) {
   if (spirv.size() < 5 || spirv[0] != 0x07230203u) {
     return false;
   }
   for (size_t i = 5; i < spirv.size();) {
-    const uint32_t palabras = spirv[i] >> 16;
-    if (palabras == 0 || i + palabras > spirv.size()) {
+    const uint32_t word_data = spirv[i] >> 16;
+    if (word_data == 0 || i + word_data > spirv.size()) {
       return false;
     }
-    if ((spirv[i] & 0xFFFF) == 43 && palabras == 4 && spirv[i + 3] == kMarcaSombraMinimo) {
+    if ((spirv[i] & 0xFFFF) == 43 && word_data == 4 && spirv[i + 3] == kShadowMinMark) {
       return true;
     }
-    i += palabras;
+    i += word_data;
   }
   return false;
 }
 
 // OpKill, OpTerminateInvocation and OpDemoteToHelperInvocation in the module. If the SPIR-V cannot be walked
 // it returns 2, the conservative answer (the fragment stage is kept).
-static uint32_t ContarKills(const std::vector<uint32_t>& spirv) {
+static uint32_t CountKills(const std::vector<uint32_t>& spirv) {
   if (spirv.size() < 5 || spirv[0] != 0x07230203u) {
     return 2;
   }
   uint32_t kills = 0;
   for (size_t i = 5; i < spirv.size();) {
-    const uint32_t palabras = spirv[i] >> 16;
-    const uint32_t codigo = spirv[i] & 0xFFFF;
-    if (palabras == 0 || i + palabras > spirv.size()) {
+    const uint32_t word_data = spirv[i] >> 16;
+    const uint32_t code = spirv[i] & 0xFFFF;
+    if (word_data == 0 || i + word_data > spirv.size()) {
       return 2;
     }
-    if (codigo == 252 || codigo == 4416 || codigo == 5380) {
+    if (code == 252 || code == 4416 || code == 5380) {
       ++kills;
     }
-    i += palabras;
+    i += word_data;
   }
   return kills;
 }
 
-bool ShadersNativos::Cargar(const std::filesystem::path& archivo) {
-  Datos& d = *datos_;
+bool NativeShaders::Load(const std::filesystem::path& fname) {
+  Impl& d = *payload_;
   try {
-    d.biblioteca.Cargar(archivo);
+    d.library.Load(fname);
   } catch (const std::exception& e) {
-    REXLOG_WARN("[nativo] C5a: biblioteca de shaders no disponible ({}): {}", archivo.string(),
+    REXLOG_WARN("[nativo] C5a: biblioteca de shaders no disponible ({}): {}", fname.string(),
                 e.what());
     return false;
   }
-  const auto& shaders = d.biblioteca.shaders();
-  uint32_t con_kill = 0, sin_kill = 0;
-  uint32_t con_mapa_sombras = 0, con_minimo = 0;  // nfsmw_nativo_sombra_minimo
-  d.entradas.clear();
-  d.entradas.reserve(shaders.size());
+  const auto& shaders = d.library.shaders();
+  uint32_t con_kill = 0, without_kill = 0;
+  uint32_t with_shadows_map = 0, with_min = 0;  // nfsmw_nativo_sombra_minimo
+  d.entries.clear();
+  d.entries.reserve(shaders.size());
   uint32_t vertex = 0, pixel = 0;
   for (uint32_t i = 0; i < shaders.size(); ++i) {
-    EntradaShader e;
+    ShaderEntry e;
     e.shader = &shaders[i];
-    e.numero = i;
-    if (const char* motivo = Leer(shaders[i], e)) {
-      REXLOG_WARN("[nativo] C5a: contenedor {} de la biblioteca ignorado: {}", i, motivo);
+    e.number = i;
+    if (const char* reason = Read(shaders[i], e)) {
+      REXLOG_WARN("[nativo] C5a: contenedor {} de la biblioteca ignorado: {}", i, reason);
       continue;
     }
     if (!e.vertices) {
-      e.kills = ContarKills(shaders[i].spirv);
-      e.descarta = e.kills != 1;                // 1 = only the alpha test one
-      (e.descarta ? con_kill : sin_kill) += 1;
+      e.kills = CountKills(shaders[i].spirv);
+      e.discards = e.kills != 1;                // 1 = only the alpha test one
+      (e.discards ? con_kill : without_kill) += 1;
       // nfsmw_nativo_sombra_minimo. Whether its SPIR-V can take the shadow map minimum.
-      e.sombra_minimo = TieneMarcaSombraMinimo(shaders[i].spirv);
+      e.shadow_min = HasShadowMinMark(shaders[i].spirv);
       for (const SamplerShader& s : e.samplers) {
-        if (s.mapa_sombras) {
-          ++con_mapa_sombras;
-          con_minimo += e.sombra_minimo ? 1 : 0;
+        if (s.shadows_map) {
+          ++with_shadows_map;
+          with_min += e.shadow_min ? 1 : 0;
           break;
         }
       }
     }
     (e.vertices ? vertex : pixel) += 1;
-    d.entradas.push_back(std::move(e));
+    d.entries.push_back(std::move(e));
   }
-  d.candidatos.clear();
+  d.candidates.clear();
   d.por_shader.clear();
-  std::map<std::tuple<bool, uint32_t, uint64_t>, std::vector<uint32_t>> grupos;
-  for (uint32_t i = 0; i < d.entradas.size(); ++i) {
-    const EntradaShader& e = d.entradas[i];
-    const uint32_t palabras = uint32_t(e.microcodigo.size());
-    d.candidatos[{e.vertices, palabras}].push_back(i);
+  std::map<std::tuple<bool, uint32_t, uint64_t>, std::vector<uint32_t>> groups;
+  for (uint32_t i = 0; i < d.entries.size(); ++i) {
+    const ShaderEntry& e = d.entries[i];
+    const uint32_t word_data = uint32_t(e.ucode.size());
+    d.candidates[{e.vertices, word_data}].push_back(i);
     d.por_shader[e.shader] = i;
-    grupos[{e.vertices, palabras, e.huella}].push_back(i);
+    groups[{e.vertices, word_data, e.fingerprint}].push_back(i);
   }
-  uint32_t repetidos = 0, repetidos_distintos = 0;
-  for (const auto& [clave, miembros] : grupos) {
-    if (miembros.size() < 2) continue;
-    ++repetidos;
-    const auto& spirv = d.entradas[miembros[0]].shader->spirv;
-    for (uint32_t m : miembros) {
-      if (d.entradas[m].shader->spirv != spirv) {
-        ++repetidos_distintos;
+  uint32_t repeated = 0, distinct_repeated = 0;
+  for (const auto& [key, members] : groups) {
+    if (members.size() < 2) continue;
+    ++repeated;
+    const auto& spirv = d.entries[members[0]].shader->spirv;
+    for (uint32_t m : members) {
+      if (d.entries[m].shader->spirv != spirv) {
+        ++distinct_repeated;
         break;
       }
     }
   }
   d.cache.clear();
-  d.cargada = !d.entradas.empty();
+  d.loaded = !d.entries.empty();
   REXLOG_INFO("[nativo] C5a: biblioteca con {} shaders ({} vertex, {} pixel); {} grupos con el "
               "mismo microcodigo, {} de ellos con SPIR-V distinto",
-              d.entradas.size(), vertex, pixel, repetidos, repetidos_distintos);
+              d.entries.size(), vertex, pixel, repeated, distinct_repeated);
   REXLOG_INFO("[nativo] C5a: pixel shaders que pueden descartar pixeles {} de {} (el resto solo llevan el "
               "kill de la prueba de alfa: sin color que escribir, su etapa se puede quitar)",
-              con_kill, con_kill + sin_kill);
+              con_kill, con_kill + without_kill);
   REXLOG_INFO("[nativo] C5a: sombra por minimo (build 184): {} pixel shaders muestrean el mapa de sombras "
               "(SHADOWMAP_SAMPLER) y {} traen tfetch2DSombraMin{}",
-              con_mapa_sombras, con_minimo,
-              con_minimo && con_minimo == con_mapa_sombras
+              with_shadows_map, with_min,
+              with_min && with_min == with_shadows_map
                   ? " (biblioteca con el minimo)"
                   : " (sin el minimo: el mapa de sombras se sigue copiando como siempre)");
-  return d.cargada;
+  return d.loaded;
 }
 
-const EntradaShader* ShadersNativos::Identificar(bool vertices,
-                                                 std::span<const uint32_t> microcodigo) {
-  Datos& d = *datos_;
-  ++d.estadisticas.cargas;
-  const ClaveCruda clave{XXH3_64bits(microcodigo.data(), microcodigo.size_bytes()),
-                         uint32_t(microcodigo.size()), vertices};
-  if (auto it = d.cache.find(clave); it != d.cache.end()) {
+const ShaderEntry* NativeShaders::Identify(bool vertices,
+                                                 std::span<const uint32_t> ucode) {
+  Impl& d = *payload_;
+  ++d.stats.loads;
+  const RawKey key{XXH3_64bits(ucode.data(), ucode.size_bytes()),
+                         uint32_t(ucode.size()), vertices};
+  if (auto it = d.cache.find(key); it != d.cache.end()) {
     return it->second;
   }
-  ++d.estadisticas.distintos;
+  ++d.stats.distinct_items;
 
-  const EntradaShader* elegido = nullptr;
-  uint32_t coincidencias = 0;
-  if (auto c = d.candidatos.find({vertices, uint32_t(microcodigo.size())});
-      c != d.candidatos.end()) {
-    for (uint32_t indice : c->second) {
-      const EntradaShader& e = d.entradas[indice];
-      d.temporal.assign(microcodigo.begin(), microcodigo.end());
-      for (const ElementoVertice& elemento : e.elementos) {
+  const ShaderEntry* chosen = nullptr;
+  uint32_t matches = 0;
+  if (auto c = d.candidates.find({vertices, uint32_t(ucode.size())});
+      c != d.candidates.end()) {
+    for (uint32_t index : c->second) {
+      const ShaderEntry& e = d.entries[index];
+      d.temporal.assign(ucode.begin(), ucode.end());
+      for (const VertexElement& element : e.elements) {
         for (size_t j = 0; j < 3; ++j) {
-          d.temporal[size_t(elemento.instruccion) * 3 + j] &= kFetchConserva[j];
+          d.temporal[size_t(element.instruction) * 3 + j] &= kKeepsFetch[j];
         }
       }
-      if (XXH3_64bits(d.temporal.data(), d.temporal.size() * sizeof(uint32_t)) != e.huella ||
-          d.temporal != e.microcodigo) {
+      if (XXH3_64bits(d.temporal.data(), d.temporal.size() * sizeof(uint32_t)) != e.fingerprint ||
+          d.temporal != e.ucode) {
         continue;
       }
       // AirborneNX: the same microcode can come in containers whose constant tables declare fewer samplers
       // (UE3 material variants); XenosRecomp drops the texture fetches it has no sampler for. Prefer the
       // container that declares the most samplers, then the most constants.
-      if (!elegido || e.samplers_tabla > elegido->samplers_tabla ||
-          (e.samplers_tabla == elegido->samplers_tabla && e.constantes_bytes > elegido->constantes_bytes)) {
-        elegido = &e;
+      if (!chosen || e.table_samplers > chosen->table_samplers ||
+          (e.table_samplers == chosen->table_samplers && e.constantes_bytes > chosen->constantes_bytes)) {
+        chosen = &e;
       }
-      ++coincidencias;
+      ++matches;
     }
   }
 
@@ -480,32 +480,32 @@ const EntradaShader* ShadersNativos::Identificar(bool vertices,
   // those export instructions into no-ops (word 0 loses the export bit and both write masks: C80F8002 ->
   // C8000000; the source words change too). A candidate whose only differences are such instructions is the
   // same shader: its SPIR-V still writes the interpolator, which the PS ignores.
-  if (!elegido && vertices) {
-    if (auto c = d.candidatos.find({vertices, uint32_t(microcodigo.size())}); c != d.candidatos.end()) {
-      for (uint32_t indice : c->second) {
-        const EntradaShader& e = d.entradas[indice];
-        bool igual = true;
-        bool alguna = false;
-        for (size_t k = 0; igual && k * 3 + 2 < microcodigo.size(); ++k) {
-          bool distinta = false;
+  if (!chosen && vertices) {
+    if (auto c = d.candidates.find({vertices, uint32_t(ucode.size())}); c != d.candidates.end()) {
+      for (uint32_t index : c->second) {
+        const ShaderEntry& e = d.entries[index];
+        bool is_equal = true;
+        bool any = false;
+        for (size_t k = 0; is_equal && k * 3 + 2 < ucode.size(); ++k) {
+          bool distinct_alt = false;
           for (size_t j = 0; j < 3; ++j) {
-            uint32_t entrante = microcodigo[k * 3 + j];
-            for (const ElementoVertice& elemento : e.elementos) {
-              if (size_t(elemento.instruccion) == k) entrante &= kFetchConserva[j];
+            uint32_t inbound = ucode[k * 3 + j];
+            for (const VertexElement& element : e.elements) {
+              if (size_t(element.instruction) == k) inbound &= kKeepsFetch[j];
             }
-            distinta |= entrante != e.microcodigo[k * 3 + j];
+            distinct_alt |= inbound != e.ucode[k * 3 + j];
           }
-          if (!distinta) continue;
+          if (!distinct_alt) continue;
           // Only from instruction 1 on (instruction 0 holds the control flow) and only the export pattern.
-          const uint32_t entrante0 = microcodigo[k * 3], original0 = e.microcodigo[k * 3];
-          igual = k > 0 && (original0 & 0x8000u) && !(entrante0 & 0x00FF8000u) &&
-                  (entrante0 & 0xFC000000u) == (original0 & 0xFC000000u);
-          alguna = true;
+          const uint32_t incoming0 = ucode[k * 3], original0 = e.ucode[k * 3];
+          is_equal = k > 0 && (original0 & 0x8000u) && !(incoming0 & 0x00FF8000u) &&
+                  (incoming0 & 0xFC000000u) == (original0 & 0xFC000000u);
+          any = true;
         }
-        if (igual && alguna) {
-          elegido = &e;
-          ++coincidencias;
-          ++d.estadisticas.exportes_anulados;
+        if (is_equal && any) {
+          chosen = &e;
+          ++matches;
+          ++d.stats.overridden_exports;
           break;
         }
       }
@@ -514,131 +514,131 @@ const EntradaShader* ShadersNativos::Identificar(bool vertices,
 
   // Vertex shaders arrive patched: a mismatch is normal.
   // AirborneNX: vertex shaders too (MoH:A patches them only at creation; a miss is a missing shader).
-  const bool avisar = d.avisos < kMaxAvisos;
-  if (elegido) {
-    ++d.estadisticas.identificados;
-    if (coincidencias > 1) {
-      ++d.estadisticas.ambiguos;
+  const bool warn = d.warnings < kMaxWarnings;
+  if (chosen) {
+    ++d.stats.identified;
+    if (matches > 1) {
+      ++d.stats.ambiguos;
     }
     // AirborneNX: one line per shader the ring identifies (52 distinct ones at the title screen).
-    if (d.estadisticas.distintos <= 256) {
-      std::string usados;
-      for (const SamplerShader& sampler : elegido->samplers) {
-        usados += fmt::format(" s{}:{}", sampler.registro, sampler.tipo);
+    if (d.stats.distinct_items <= 256) {
+      std::string used_items;
+      for (const SamplerShader& sampler : chosen->samplers) {
+        used_items += fmt::format(" s{}:{}", sampler.reg_index, sampler.type);
       }
       REXLOG_INFO("[nativo] C5a: {} n{} identificado ({} palabras, {} coincidencias, {} bytes de constantes, "
                   "samplers:{}; contenedor {:016X})",
-                  vertices ? "VS" : "PS", elegido->numero, microcodigo.size(), coincidencias,
-                  elegido->constantes_bytes, usados.empty() ? " ninguno" : usados, elegido->shader->huella);
+                  vertices ? "VS" : "PS", chosen->number, ucode.size(), matches,
+                  chosen->constantes_bytes, used_items.empty() ? " ninguno" : used_items, chosen->shader->fingerprint);
     }
-    if (avisar && vertices) {
+    if (warn && vertices) {
       // What D3D has patched in each fetch: it becomes the vertex input.
-      ++d.avisos;
-      std::string detalle;
-      for (const ElementoVertice& elemento : elegido->elementos) {
-        const size_t p = size_t(elemento.instruccion) * 3;
-        const uint32_t d0 = microcodigo[p], d1 = microcodigo[p + 1], d2 = microcodigo[p + 2];
+      ++d.warnings;
+      std::string detail;
+      for (const VertexElement& element : chosen->elements) {
+        const size_t p = size_t(element.instruction) * 3;
+        const uint32_t d0 = ucode[p], d1 = ucode[p + 1], d2 = ucode[p + 2];
         const uint32_t fetch = ((d0 >> 20) & 0x1F) * 3 + ((d0 >> 25) & 0x3);
         const int32_t offset = int32_t(d2 << 1) >> 9;
-        detalle += fmt::format(" {}{}:f{}/fmt{}/z{}/o{}{}", kUsos[elemento.uso & 0xF],
-                               elemento.indice_uso, fetch, (d1 >> 16) & 0x3F, d2 & 0xFF, offset,
+        detail += fmt::format(" {}{}:f{}/fmt{}/z{}/o{}{}", kUses[element.use & 0xF],
+                               element.use_index, fetch, (d1 >> 16) & 0x3F, d2 & 0xFF, offset,
                                ((d1 >> 30) & 0x1) ? "/mini" : "");
       }
-      REXLOG_INFO("[nativo] C5a: VS n{} ({} palabras, {} coincidencias):{}", elegido->numero,
-                  microcodigo.size(), coincidencias, detalle);
+      REXLOG_INFO("[nativo] C5a: VS n{} ({} palabras, {} coincidencias):{}", chosen->number,
+                  ucode.size(), matches, detail);
     }
   } else {
-    ++d.estadisticas.sin_identificar;
+    ++d.stats.without_identify;
     if (REXCVAR_GET(airborne_dump_unknown_shaders)) {
-      DumpUnknownShader(vertices, clave.huella, microcodigo);
+      DumpUnknownShader(vertices, key.fingerprint, ucode);
     }
-    if (avisar) {
-      ++d.avisos;
-      const auto c = d.candidatos.find({vertices, uint32_t(microcodigo.size())});
+    if (warn) {
+      ++d.warnings;
+      const auto c = d.candidates.find({vertices, uint32_t(ucode.size())});
       REXLOG_WARN("[nativo] C5a: {} shader sin identificar: {} palabras, huella {:016X} "
                   "({} contenedores de ese tipo y longitud)",
-                  vertices ? "vertex" : "pixel", microcodigo.size(), clave.huella,
-                  c != d.candidatos.end() ? c->second.size() : 0);
+                  vertices ? "vertex" : "pixel", ucode.size(), key.fingerprint,
+                  c != d.candidates.end() ? c->second.size() : 0);
       // AirborneNX: the whole microcode, to look for shaders that come without a container (XDK internals).
-      if (microcodigo.size() <= 128) {
+      if (ucode.size() <= 128) {
         std::string words;
-        for (const uint32_t w : microcodigo) words += fmt::format(" {:08X}", w);
+        for (const uint32_t w : ucode) words += fmt::format(" {:08X}", w);
         REXLOG_WARN("[nativo] C5a:   microcode:{}", words);
       }
       // Diagnostics: the closest container of the same length (fewest differing words after the fetch
       // mask) and which words change (incoming / container).
-      const EntradaShader* cercano = nullptr;
-      uint32_t menos = UINT32_MAX;
-      for (size_t k = 0; c != d.candidatos.end() && k < c->second.size(); ++k) {
-        const EntradaShader& e = d.entradas[c->second[k]];
-        uint32_t cuantas = 0;
-        for (size_t i = 0; i < microcodigo.size(); ++i) {
-          uint32_t entrante = microcodigo[i];
-          for (const ElementoVertice& elemento : e.elementos) {
-            const size_t p = size_t(elemento.instruccion) * 3;
-            if (i >= p && i < p + 3) entrante &= kFetchConserva[i - p];
+      const ShaderEntry* nearest = nullptr;
+      uint32_t minus = UINT32_MAX;
+      for (size_t k = 0; c != d.candidates.end() && k < c->second.size(); ++k) {
+        const ShaderEntry& e = d.entries[c->second[k]];
+        uint32_t how_many = 0;
+        for (size_t i = 0; i < ucode.size(); ++i) {
+          uint32_t inbound = ucode[i];
+          for (const VertexElement& element : e.elements) {
+            const size_t p = size_t(element.instruction) * 3;
+            if (i >= p && i < p + 3) inbound &= kKeepsFetch[i - p];
           }
-          cuantas += entrante != e.microcodigo[i];
+          how_many += inbound != e.ucode[i];
         }
-        if (cuantas < menos) {
-          menos = cuantas;
-          cercano = &e;
+        if (how_many < minus) {
+          minus = how_many;
+          nearest = &e;
         }
       }
-      if (cercano) {
-        std::string diferencias;
-        uint32_t mostradas = 0;
-        for (size_t i = 0; i < microcodigo.size() && mostradas < 32; ++i) {
-          uint32_t entrante = microcodigo[i];
-          for (const ElementoVertice& elemento : cercano->elementos) {
-            const size_t p = size_t(elemento.instruccion) * 3;
-            if (i >= p && i < p + 3) entrante &= kFetchConserva[i - p];
+      if (nearest) {
+        std::string differences;
+        uint32_t shown = 0;
+        for (size_t i = 0; i < ucode.size() && shown < 32; ++i) {
+          uint32_t inbound = ucode[i];
+          for (const VertexElement& element : nearest->elements) {
+            const size_t p = size_t(element.instruction) * 3;
+            if (i >= p && i < p + 3) inbound &= kKeepsFetch[i - p];
           }
-          if (entrante != cercano->microcodigo[i]) {
-            ++mostradas;
-            diferencias += fmt::format(" {}:{:08X}/{:08X}", i, microcodigo[i], cercano->microcodigo[i]);
+          if (inbound != nearest->ucode[i]) {
+            ++shown;
+            differences += fmt::format(" {}:{:08X}/{:08X}", i, ucode[i], nearest->ucode[i]);
           }
         }
-        REXLOG_WARN("[nativo] C5a:   el mas cercano n{}: {} palabras distintas:{}", cercano->numero, menos,
-                    diferencias);
+        REXLOG_WARN("[nativo] C5a:   el mas cercano n{}: {} palabras distintas:{}", nearest->number, minus,
+                    differences);
       }
     }
   }
-  d.cache.emplace(clave, elegido);
-  return elegido;
+  d.cache.emplace(key, chosen);
+  return chosen;
 }
 
-const EntradaShader* ShadersNativos::IdentificarContenedor(
-    std::span<const uint8_t> contenedor) const {
-  const Datos& d = *datos_;
-  if (!d.cargada) {
+const ShaderEntry* NativeShaders::IdentifyContainer(
+    std::span<const uint8_t> container) const {
+  const Impl& d = *payload_;
+  if (!d.loaded) {
     return nullptr;
   }
-  const nfsmw::native::Shader* shader = d.biblioteca.Buscar(contenedor);
+  const nfsmw::native::Shader* shader = d.library.Lookup(container);
   if (!shader) {
     return nullptr;
   }
   const auto it = d.por_shader.find(shader);
-  return it != d.por_shader.end() ? &d.entradas[it->second] : nullptr;
+  return it != d.por_shader.end() ? &d.entries[it->second] : nullptr;
 }
 
 // Entries are in library order (Cargar), with gaps where a container was skipped.
-const EntradaShader* ShadersNativos::PorNumero(uint32_t numero) const {
-  const Datos& d = *datos_;
-  if (!d.cargada) {
+const ShaderEntry* NativeShaders::ByNumber(uint32_t number) const {
+  const Impl& d = *payload_;
+  if (!d.loaded) {
     return nullptr;
   }
-  const auto it = std::lower_bound(d.entradas.begin(), d.entradas.end(), numero,
-                                   [](const EntradaShader& e, uint32_t n) { return e.numero < n; });
-  return it != d.entradas.end() && it->numero == numero ? &*it : nullptr;
+  const auto it = std::lower_bound(d.entries.begin(), d.entries.end(), number,
+                                   [](const ShaderEntry& e, uint32_t n) { return e.number < n; });
+  return it != d.entries.end() && it->number == number ? &*it : nullptr;
 }
 
-const char* NombreUso(uint8_t uso) {
-  return kUsos[uso & 0xF];
+const char* UseName(uint8_t use) {
+  return kUses[use & 0xF];
 }
 
-EstadisticasShaders ShadersNativos::Estadisticas() const {
-  return datos_->estadisticas;
+ShaderStats NativeShaders::Stats() const {
+  return payload_->stats;
 }
 
 }  // namespace nfsmw::nativo

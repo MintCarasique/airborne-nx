@@ -14,31 +14,31 @@
 
 #include <cstdint>
 
-namespace nfsmw::reflejo_demanda {
+namespace nfsmw::demand_reflection {
 
 // Guest physical address where the game resolves the reflection. It is the same in every measured run
 // (PC and console); nfsmw_recortes_carrera.cpp checks it in every run before skipping any frame.
-constexpr uint32_t kDireccion = 0x07C5A000;
+constexpr uint32_t kAddress = 0x07C5A000;
 
 // From the native renderer (ring thread).
-void AnotarLectura();  // a draw samples the reflection texture
-void AnotarCopia();    // the reflection is resolved to kDireccion
-void AnotarSwap();     // end of a renderer frame
+void TrackRead();  // a draw samples the reflection texture
+void TrackCopy();    // the reflection is resolved to kDireccion
+void TrackSwap();     // end of a renderer frame
 
 // nfsmw_reflejo_visibilidad. All from the ring thread.
 // Whether to measure: the setting is on and the guard has not tripped. Asked once per frame.
-bool MedirVisibilidad();
+bool MeasureVisibility();
 // Whether the witnesses are already verified (visibility decides). Until then the witness is measured
 // more often.
-bool VisibilidadComprobada();
+bool CheckedVisibility();
 // A draw that samples the reflection left samples on screen. medido = false: it could not be measured
 // (no room for the query, a game query already open, the deferred sky...) and is treated as visible,
 // the safe choice.
-void AnotarVisible(bool medido);
+void TrackVisible(bool measured);
 // A draw that samples the reflection left no samples: the terrain or something else covered it entirely.
-void AnotarOculto();
+void TrackHidden();
 // The witness: the final race composite, which covers the whole screen and must leave samples. If it
 // ever gives 0, the queries cannot be trusted and the decision falls back to reads.
-void AnotarTestigo(bool con_muestras);
+void TrackSentinel(bool with_samples);
 
 }  // namespace nfsmw::reflejo_demanda

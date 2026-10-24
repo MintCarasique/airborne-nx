@@ -12,29 +12,29 @@
 
 #include <rex/system/interfaces/graphics.h>
 
-namespace nfsmw::nativo {
+namespace nfsmw::native_renderer {
 
 // true if the nfsmw_renderizador cvar asks for the native path.
-bool Activo();
+bool Active();
 
 // Ring thread progress, for the game's D3D waits (nfsmw_espera_anillo.cpp): it increases every time
 // the ring thread returns the read pointer or delivers an interrupt.
-uint32_t ProgresoAnillo();
+uint32_t RingProgress();
 
 // Waits at most 'limite' for ProgresoAnillo() to differ from 'visto'. true if it advanced.
-bool EsperarProgresoAnillo(uint32_t visto, std::chrono::microseconds limite);
+bool WaitRingProgress(uint32_t seen, std::chrono::microseconds limit);
 
 // Called by the ring thread after writing the read pointer to game memory, and when delivering
 // an interrupt. Cheap if nobody is waiting.
-void AvisarProgresoAnillo();
+void WarnRingProgress();
 
 // Swaps presented by the native renderer since startup (0 with Xenos emulation). The watchdog in
 // nfsmw_app.h counts them as progress: with blocking waits the game threads sleep in the same place
 // for most of the frame.
-uint64_t SwapsNativos();
+uint64_t NativeSwaps();
 
 // The native graphics system: the SDK presenter, a reserved MMIO range, the vblank
 // thread and the command ring sink.
-std::unique_ptr<rex::system::IGraphicsSystem> CrearSistemaGrafico();
+std::unique_ptr<rex::system::IGraphicsSystem> CreateGraphicSystem();
 
 }  // namespace nfsmw::nativo
