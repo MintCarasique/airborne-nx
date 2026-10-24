@@ -481,8 +481,8 @@ REXCVAR_DEFINE_INT32(nfsmw_nativo_texturas_huella_hilo_mb, 16, "NFSMW",
  * no decision of the ring: it only counts, and reports every 10 s in the "C3 reutilizar por contenido"
  * line.
  */
-REXCVAR_DEFINE_BOOL(airborne_edram_4x_alias, false, "AirborneNX",
-                    "Native renderer (experimental): draw 4X MSAA surfaces into the 1X surface of twice the pitch "
+REXCVAR_DEFINE_BOOL(airborne_edram_4x_alias, true, "AirborneNX",
+                    "Native renderer: draw 4X MSAA surfaces into the 1X surface of twice the pitch "
                     "(EDRAM aliasing) and draw rectangle lists without face culling")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(airborne_salida_7e3, true, "AirborneNX",
@@ -2344,7 +2344,7 @@ class VulkanDrawerImpl final : public VulkanDrawer {
     // (StartPass), which aliases what other passes draw at the same base: the XDK clears UE3's 1280-pitch
     // depth through a 640-pitch 4X rectangle. 2X surfaces keep their own pixel space (they only reach 1X
     // ones through resolves).
-    // Experimental (airborne_edram_4x_alias): with it off, 4X surfaces keep their own pixel space as before.
+    // With airborne_edram_4x_alias off, 4X surfaces keep their own pixel space as before.
     const bool msaa_4x = edram_4x_alias_ &&
                          ((r[gr::XE_GPU_REG_RB_SURFACE_INFO] >> 16) & 0x3) == uint32_t(xenos::MsaaSamples::k4X);
     const uint32_t pitch = (r[gr::XE_GPU_REG_RB_SURFACE_INFO] & 0x3FFF) * (msaa_4x ? 2 : 1);
@@ -2972,7 +2972,7 @@ class VulkanDrawerImpl final : public VulkanDrawer {
      */
     if (msaa_4x) {  // AirborneNX: a 4X pass has its own scale, so it is not the 1X pass of the same targets
       for (uint64_t& k : keys) {
-        if (k) k |= uint64_t(1) << 62;
+        if (k) k |= uint64_t(1) << 61;  // bit 62 marks the depth key, 63 the color keys
       }
     }
     uint64_t pass_key;
@@ -3363,7 +3363,7 @@ class VulkanDrawerImpl final : public VulkanDrawer {
     key.rasterizado = (sc_mode & 0x7) | (restart_flag ? 0x8 : 0) | (with_bias ? 0x10 : 0);
     // AirborneNX: rectangles are not polygons for face culling (the emulation's IsPrimitivePolygonal): the
     // depth restore comes with back-face culling on and would be dropped.
-    if (rect_list && edram_4x_alias_) {  // experimental together with the 4X aliasing (they need each other)
+    if (rect_list && edram_4x_alias_) {  // together with the 4X aliasing (they need each other)
       key.rasterizado &= ~uint32_t(0x3);
     }
     VkPipeline pipeline = VK_NULL_HANDLE;
@@ -12391,10 +12391,9 @@ class VulkanDrawerImpl final : public VulkanDrawer {
   std::unordered_map<const ShaderEntry*, VkShaderModule> modules_;
   std::array<VkShaderModule, 3> variants_modules_{};  // 1 natural, 2 soft
   VkShaderModule rect_list_gs_ = VK_NULL_HANDLE;  // AirborneNX: shaders/rect_list_gs.hlsl
-  // AirborneNX (experimental, airborne_edram_4x_alias): 4X surfaces drawn in 1X terms and rectangles without
-  // face culling. Both are what the hardware/emulation do, and they only work together: the XDK clears the
-  // scene depth through 640-pitch 4X rectangles, and UE3's depth restore rectangle comes with culling on.
-  // Together they still leave a doubled ghost of the title logo, so they are off by default.
+  // AirborneNX (airborne_edram_4x_alias): 4X surfaces drawn in 1X terms and rectangles without face culling.
+  // Both are what the hardware/emulation do, and they only work together: the XDK clears the scene depth
+  // through 640-pitch 4X rectangles, and UE3's depth restore rectangle comes with culling on.
   const bool edram_4x_alias_ = REXCVAR_GET(airborne_edram_4x_alias);
   std::array<bool, 3> created_variants_modules_{};
   int glow_tracked_ = 0;
