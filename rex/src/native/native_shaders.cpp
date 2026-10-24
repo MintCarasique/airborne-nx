@@ -173,6 +173,52 @@ const char* Leer(const nfsmw::native::Shader& shader, EntradaShader& e) {
     e.samplers.push_back(sampler);
   }
 
+  // AirborneNX: texture fetches on registers the constant table does not declare. tools/shaders_native
+  // declares those samplers itself, so they have to be bound too. The control flow comes first, as pairs of
+  // 48-bit instructions in 3 words, up to the lowest exec address; each exec clause marks its fetch
+  // instructions with bit 0 of each 2-bit sequence entry.
+  e.samplers_tabla = uint32_t(e.samplers.size());
+  if (!e.vertices) {
+    const size_t instrucciones = e.microcodigo.size() / 3;
+    size_t limite = instrucciones;
+    for (size_t i = 0; i < limite && i < instrucciones; ++i) {
+      const uint32_t a = e.microcodigo[i * 3], b = e.microcodigo[i * 3 + 1], w = e.microcodigo[i * 3 + 2];
+      const uint64_t cf[2] = {uint64_t(a) | uint64_t(b & 0xFFFF) << 32, uint64_t(b >> 16) | uint64_t(w) << 16};
+      for (const uint64_t palabra : cf) {
+        const uint32_t op = uint32_t(palabra >> 44) & 0xF;
+        if (!((op >= 1 && op <= 6) || op == 13 || op == 14)) {
+          continue;
+        }
+        const uint32_t direccion = uint32_t(palabra) & 0xFFF, cantidad = uint32_t(palabra >> 12) & 0x7;
+        const uint32_t secuencia = uint32_t(palabra >> 16) & 0xFFF;
+        if (direccion) {
+          limite = std::min<size_t>(limite, direccion);
+        }
+        for (uint32_t j = 0; j < cantidad; ++j) {
+          const size_t k = size_t(direccion) + j;
+          if (!((secuencia >> (j * 2)) & 0x1) || (k + 1) * 3 > e.microcodigo.size()) {
+            continue;
+          }
+          const uint32_t w0 = e.microcodigo[k * 3], w2 = e.microcodigo[k * 3 + 2];
+          const uint32_t opcode = w0 & 0x1F;
+          if (opcode != 1 && (opcode < 16 || opcode > 19)) {
+            continue;
+          }
+          const uint16_t registro = uint16_t((w0 >> 20) & 0x1F);
+          if (std::any_of(e.samplers.begin(), e.samplers.end(),
+                          [&](const SamplerShader& s) { return s.registro == registro; })) {
+            continue;
+          }
+          const uint32_t dimension = (w2 >> 14) & 0x3;  // 0 1D, 1 2D, 2 3D, 3 cube
+          SamplerShader sampler;
+          sampler.registro = registro;
+          sampler.tipo = dimension == 2 ? 13 : dimension == 3 ? 14 : 12;
+          e.samplers.push_back(sampler);
+        }
+      }
+    }
+  }
+
   e.huella = XXH3_64bits(e.microcodigo.data(), e.microcodigo.size() * sizeof(uint32_t));
   return nullptr;
 }
@@ -383,8 +429,8 @@ const EntradaShader* ShadersNativos::Identificar(bool vertices,
       // AirborneNX: the same microcode can come in containers whose constant tables declare fewer samplers
       // (UE3 material variants); XenosRecomp drops the texture fetches it has no sampler for. Prefer the
       // container that declares the most samplers, then the most constants.
-      if (!elegido || e.samplers.size() > elegido->samplers.size() ||
-          (e.samplers.size() == elegido->samplers.size() && e.constantes_bytes > elegido->constantes_bytes)) {
+      if (!elegido || e.samplers_tabla > elegido->samplers_tabla ||
+          (e.samplers_tabla == elegido->samplers_tabla && e.constantes_bytes > elegido->constantes_bytes)) {
         elegido = &e;
       }
       ++coincidencias;

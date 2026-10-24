@@ -54,6 +54,8 @@ struct EntradaShader {
   uint64_t huella = 0;                // XXH3 of that masked microcode
   std::vector<ElementoVertice> elementos;
   std::vector<SamplerShader> samplers;
+  // AirborneNX: how many of them come from the constant table (the rest from the microcode's fetches).
+  uint32_t samplers_tabla = 0;
   uint32_t salidas = 0;  // pixel shader: bits COLOR0..3 y DEPTH (PixelShaderOutputs)
   // OpKill in the SPIR-V. XenosRecomp puts one in every pixel shader for the alpha test (guarded by
   // SPEC_CONSTANT_ALPHA_TEST), so it only really discards if there is more than one.
