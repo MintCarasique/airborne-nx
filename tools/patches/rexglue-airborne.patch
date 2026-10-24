@@ -211,6 +211,22 @@ index 3f1f3cf..f36dae5 100644
  #define REX_LOAD_U8(x) (*(volatile u8*)(base + (u32)(x) + REX_PHYS_HOST_OFFSET(x)))
  #define REX_LOAD_U16(x) __builtin_bswap16(*(volatile u16*)(base + (u32)(x) + REX_PHYS_HOST_OFFSET(x)))
  #define REX_LOAD_U32(x) __builtin_bswap32(*(volatile u32*)(base + (u32)(x) + REX_PHYS_HOST_OFFSET(x)))
+diff --git a/sdk/src/audio/xma_context.cpp b/sdk/src/audio/xma_context.cpp
+index a902d01..c00055b 100644
+--- a/sdk/src/audio/xma_context.cpp
++++ b/sdk/src/audio/xma_context.cpp
+@@ -481,7 +481,10 @@ bool XmaContext::Work() {
+ }
+ 
+ void XmaContext::Enable() {
+-  std::lock_guard<std::mutex> lock(lock_);
++  // AirborneNX: no lock. is_enabled_ is atomic and Work() clears it under the lock before decoding, so an
++  // Enable that lands during a decode just asks for the next pass. With the lock, every XMAEnableContext
++  // waited for the decode in progress: on the Switch the game's audio thread (RWAudioCore Dac) spent a
++  // quarter of its samples in svcArbitrateLock/Unlock under here, ~2,500 kicks per second in Adanti.
+   set_is_enabled(true);
+ }
+ 
 diff --git a/sdk/src/codegen/builders/system.cpp b/sdk/src/codegen/builders/system.cpp
 index b2d70f5..ffc00fb 100644
 --- a/sdk/src/codegen/builders/system.cpp
