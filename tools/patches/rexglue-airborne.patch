@@ -1,3 +1,19 @@
+diff --git a/sdk/include/rex/codegen/config.h b/sdk/include/rex/codegen/config.h
+index 8200139..56aa9d2 100644
+--- a/sdk/include/rex/codegen/config.h
++++ b/sdk/include/rex/codegen/config.h
+@@ -96,6 +96,11 @@ struct RecompilerConfig {
+   bool crRegistersAsLocalVariables = false;
+   bool nonArgumentRegistersAsLocalVariables = false;
+   bool nonVolatileRegistersAsLocalVariables = false;
++  // AirborneNX: the volatile vector registers (v0-v13, v32-v63) as locals too. They are loaded from ctx
++  // when the function starts and written back around every call, indirect call, trap and return, so
++  // arguments and results still pass through ctx; in between (the loops that do the math) they live
++  // in host registers instead of going through the PPCContext in memory on every instruction.
++  bool volatileVectorRegistersAsLocalVariables = false;
+   bool generateExceptionHandlers = false;  ///< Generate SEH exception handler wrappers
+ 
+   // === Analysis tuning (optional) ===
 diff --git a/sdk/include/rex/filesystem/devices/host_path_device.h b/sdk/include/rex/filesystem/devices/host_path_device.h
 index 93e5b46..8372f08 100644
 --- a/sdk/include/rex/filesystem/devices/host_path_device.h
@@ -304,6 +320,22 @@ index 3a1bebb..6ba53f6 100644
      }
      for (int i = 0; kicked_value && i < 32; ++i, kicked_value >>= 1) {
        if (kicked_value & 1) {
+diff --git a/sdk/src/codegen/builders/context.cpp b/sdk/src/codegen/builders/context.cpp
+index 6590c06..0dd641c 100644
+--- a/sdk/src/codegen/builders/context.cpp
++++ b/sdk/src/codegen/builders/context.cpp
+@@ -71,8 +71,10 @@ std::string BuilderContext::f(size_t index) {
+ 
+ std::string BuilderContext::v(size_t index) {
+   const auto& cfg = config();
++  const bool volatile_vector = index <= 13 || (index >= 32 && index <= 63);
+   if ((cfg.nonArgumentRegistersAsLocalVariables && (index >= 32 && index <= 63)) ||
+-      (localizeNonVolatiles() && ((index >= 14 && index <= 31) || (index >= 64 && index <= 127)))) {
++      (localizeNonVolatiles() && ((index >= 14 && index <= 31) || (index >= 64 && index <= 127))) ||
++      (cfg.volatileVectorRegistersAsLocalVariables && volatile_vector && !fn.sharesRegisters())) {
+     locals.v[index] = true;
+     return fmt::format("v{}", index);
+   }
 diff --git a/sdk/src/codegen/builders/system.cpp b/sdk/src/codegen/builders/system.cpp
 index b2d70f5..ffc00fb 100644
 --- a/sdk/src/codegen/builders/system.cpp
@@ -375,6 +407,120 @@ index cbdd7f7..35299f2 100644
    return true;
  }
  
+diff --git a/sdk/src/codegen/codegen_writer.cpp b/sdk/src/codegen/codegen_writer.cpp
+index a0484fb..ea8240f 100644
+--- a/sdk/src/codegen/codegen_writer.cpp
++++ b/sdk/src/codegen/codegen_writer.cpp
+@@ -89,6 +89,7 @@ nlohmann::json buildTemplateData(const rex::codegen::CodegenContext& ctx,
+       {"cr_as_local", cfg.crRegistersAsLocalVariables},
+       {"non_argument_as_local", cfg.nonArgumentRegistersAsLocalVariables},
+       {"non_volatile_as_local", cfg.nonVolatileRegistersAsLocalVariables},
++      {"volatile_vectors_as_local", cfg.volatileVectorRegistersAsLocalVariables},
+   };
+ 
+   return {
+diff --git a/sdk/src/codegen/config.cpp b/sdk/src/codegen/config.cpp
+index 5da54a0..e8ae270 100644
+--- a/sdk/src/codegen/config.cpp
++++ b/sdk/src/codegen/config.cpp
+@@ -114,6 +114,9 @@ void ApplyToml(const toml::table& toml, RecompilerConfig& cfg, const std::string
+             hasBool("non_argument_as_local"), "non_argument_as_local");
+   MergeBool(cfg.nonVolatileRegistersAsLocalVariables, toml["non_volatile_as_local"].value_or(false),
+             hasBool("non_volatile_as_local"), "non_volatile_as_local");
++  MergeBool(cfg.volatileVectorRegistersAsLocalVariables,
++            toml["volatile_vectors_as_local"].value_or(false), hasBool("volatile_vectors_as_local"),
++            "volatile_vectors_as_local");
+   MergeBool(cfg.generateExceptionHandlers, toml["generate_exception_handlers"].value_or(false),
+             hasBool("generate_exception_handlers"), "generate_exception_handlers");
+   if (hasBool("is_dll")) {
+diff --git a/sdk/src/codegen/function_graph.cpp b/sdk/src/codegen/function_graph.cpp
+index fc918bb..e3d0489 100644
+--- a/sdk/src/codegen/function_graph.cpp
++++ b/sdk/src/codegen/function_graph.cpp
+@@ -14,6 +14,7 @@
+ #include "builders.h"
+ 
+ #include <algorithm>
++#include <cctype>
+ #include <cassert>
+ #include <unordered_set>
+ 
+@@ -637,6 +638,66 @@ std::string FunctionNode::emitCpp(const EmitContext& ctx) const {
+     emit_println(body, "}}\n");
+   }
+ 
++  // --- AirborneNX: volatile vector locals (volatile_vectors_as_local) ---
++  // Which volatile vector registers this function localized; they are synchronized with ctx at its
++  // boundaries: loaded after the declarations, written back before and reloaded after every call
++  // (direct, import, indirect, trap) and written back before every return. The call and return
++  // statements are rewritten in place as one-line blocks, so they stay valid after an `if (...)`.
++  std::string vector_spill, vector_reload;
++  if (ctx.config.volatileVectorRegistersAsLocalVariables && !sharesRegisters()) {
++    for (size_t i = 0; i < 64; i++) {
++      const bool volatile_vector = i <= 13 || i >= 32;
++      if (volatile_vector && localVariables.v[i]) {
++        vector_spill += fmt::format("ctx.v{0} = v{0}; ", i);
++        vector_reload += fmt::format("v{0} = ctx.v{0}; ", i);
++      }
++    }
++  }
++  if (!vector_spill.empty()) {
++    std::string rewritten;
++    rewritten.reserve(body.size() + body.size() / 4);
++    size_t line_start = 0;
++    while (line_start < body.size()) {
++      size_t line_end = body.find('\n', line_start);
++      if (line_end == std::string::npos)
++        line_end = body.size();
++      std::string line = body.substr(line_start, line_end - line_start);
++      const size_t code = line.find_first_not_of('\t');
++      const bool comment = code != std::string::npos && line.compare(code, 2, "//") == 0;
++      if (!comment) {
++        // A call statement: "<name>(ctx, base...);" or "REX_CALL_INDIRECT_FUNC(...);".
++        size_t call = line.find("(ctx, base");
++        size_t call_begin = std::string::npos;
++        if (call != std::string::npos) {
++          call_begin = call;
++          while (call_begin > 0 && (std::isalnum(static_cast<unsigned char>(line[call_begin - 1])) ||
++                                    line[call_begin - 1] == '_'))
++            --call_begin;
++        } else if ((call = line.find("REX_CALL_INDIRECT_FUNC(")) != std::string::npos) {
++          call_begin = call;
++        }
++        if (call_begin != std::string::npos) {
++          const size_t call_end = line.find(");", call_begin);
++          if (call_end != std::string::npos) {
++            const std::string statement = line.substr(call_begin, call_end + 2 - call_begin);
++            line = line.substr(0, call_begin) + "{ " + vector_spill + statement + " " + vector_reload + "}" +
++                   line.substr(call_end + 2);
++          }
++        } else {
++          const size_t ret = line.find("return;");
++          if (ret != std::string::npos) {
++            line = line.substr(0, ret) + "{ " + vector_spill + "return; }" + line.substr(ret + 7);
++          }
++        }
++      }
++      rewritten += line;
++      if (line_end < body.size())
++        rewritten += '\n';
++      line_start = line_end + 1;
++    }
++    body = std::move(rewritten);
++  }
++
+   // --- Emit local variable declarations, then body ---
+   if (localVariables.ctr)
+     emit_println(out, "\tPPCRegister ctr{{}};");
+@@ -673,6 +734,8 @@ std::string FunctionNode::emitCpp(const EmitContext& ctx) const {
+     emit_println(out, "\tPPCVRegister vTemp{{}};");
+   if (localVariables.ea)
+     emit_println(out, "\tuint32_t ea{{}};");
++  if (!vector_reload.empty())
++    emit_println(out, "\t{}", vector_reload);
+ 
+   // If SEH, emit SEH_TRY and indent body
+   if (generateSeh) {
 diff --git a/sdk/src/core/guest_memory_switch.cpp b/sdk/src/core/guest_memory_switch.cpp
 index 34cd4ed..ece2295 100644
 --- a/sdk/src/core/guest_memory_switch.cpp

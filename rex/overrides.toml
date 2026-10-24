@@ -18,6 +18,10 @@ cr_as_local = true
 non_volatile_as_local = true
 xer_as_local = true
 ctr_as_local = true
+# Volatile vector registers (v0-v13, v32-v63) as locals too, synchronized with the
+# context at every call and return (AirborneNX codegen option): the VMX128 math
+# loops (mixer, animation, matrices) stop going through memory per instruction.
+volatile_vectors_as_local = true
 
 # ----------------------------------------------------------------------------
 #  FUNCTIONS DECLARED BY HAND
