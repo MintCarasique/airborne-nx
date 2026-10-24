@@ -1,8 +1,8 @@
 diff --git a/sdk/include/rex/codegen/config.h b/sdk/include/rex/codegen/config.h
-index 8200139..56aa9d2 100644
+index 8200139..ecb633e 100644
 --- a/sdk/include/rex/codegen/config.h
 +++ b/sdk/include/rex/codegen/config.h
-@@ -96,6 +96,11 @@ struct RecompilerConfig {
+@@ -96,6 +96,14 @@ struct RecompilerConfig {
    bool crRegistersAsLocalVariables = false;
    bool nonArgumentRegistersAsLocalVariables = false;
    bool nonVolatileRegistersAsLocalVariables = false;
@@ -11,6 +11,9 @@ index 8200139..56aa9d2 100644
 +  // arguments and results still pass through ctx; in between (the loops that do the math) they live
 +  // in host registers instead of going through the PPCContext in memory on every instruction.
 +  bool volatileVectorRegistersAsLocalVariables = false;
++  // AirborneNX: the same for the volatile integer and float registers (r0, r2-r12, f0-f13), synchronized
++  // with ctx at the same points.
++  bool volatileRegistersAsLocalVariables = false;
    bool generateExceptionHandlers = false;  ///< Generate SEH exception handler wrappers
  
    // === Analysis tuning (optional) ===
@@ -321,10 +324,31 @@ index 3a1bebb..6ba53f6 100644
      for (int i = 0; kicked_value && i < 32; ++i, kicked_value >>= 1) {
        if (kicked_value & 1) {
 diff --git a/sdk/src/codegen/builders/context.cpp b/sdk/src/codegen/builders/context.cpp
-index 6590c06..0dd641c 100644
+index 6590c06..7932775 100644
 --- a/sdk/src/codegen/builders/context.cpp
 +++ b/sdk/src/codegen/builders/context.cpp
-@@ -71,8 +71,10 @@ std::string BuilderContext::f(size_t index) {
+@@ -52,7 +52,9 @@ std::string BuilderContext::r(size_t index) {
+   const auto& cfg = config();
+   if ((cfg.nonArgumentRegistersAsLocalVariables &&
+        (index == 0 || index == 2 || index == 11 || index == 12)) ||
+-      (localizeNonVolatiles() && index >= 14)) {
++      (localizeNonVolatiles() && index >= 14) ||
++      (cfg.volatileRegistersAsLocalVariables && (index == 0 || (index >= 2 && index <= 12)) &&
++       !fn.sharesRegisters())) {
+     locals.r[index] = true;
+     return fmt::format("r{}", index);
+   }
+@@ -62,7 +64,8 @@ std::string BuilderContext::r(size_t index) {
+ std::string BuilderContext::f(size_t index) {
+   const auto& cfg = config();
+   if ((cfg.nonArgumentRegistersAsLocalVariables && index == 0) ||
+-      (localizeNonVolatiles() && index >= 14)) {
++      (localizeNonVolatiles() && index >= 14) ||
++      (cfg.volatileRegistersAsLocalVariables && index <= 13 && !fn.sharesRegisters())) {
+     locals.f[index] = true;
+     return fmt::format("f{}", index);
+   }
+@@ -71,8 +74,10 @@ std::string BuilderContext::f(size_t index) {
  
  std::string BuilderContext::v(size_t index) {
    const auto& cfg = config();
@@ -408,25 +432,28 @@ index cbdd7f7..35299f2 100644
  }
  
 diff --git a/sdk/src/codegen/codegen_writer.cpp b/sdk/src/codegen/codegen_writer.cpp
-index a0484fb..ea8240f 100644
+index a0484fb..2c30c60 100644
 --- a/sdk/src/codegen/codegen_writer.cpp
 +++ b/sdk/src/codegen/codegen_writer.cpp
-@@ -89,6 +89,7 @@ nlohmann::json buildTemplateData(const rex::codegen::CodegenContext& ctx,
+@@ -89,6 +89,8 @@ nlohmann::json buildTemplateData(const rex::codegen::CodegenContext& ctx,
        {"cr_as_local", cfg.crRegistersAsLocalVariables},
        {"non_argument_as_local", cfg.nonArgumentRegistersAsLocalVariables},
        {"non_volatile_as_local", cfg.nonVolatileRegistersAsLocalVariables},
 +      {"volatile_vectors_as_local", cfg.volatileVectorRegistersAsLocalVariables},
++      {"volatile_as_local", cfg.volatileRegistersAsLocalVariables},
    };
  
    return {
 diff --git a/sdk/src/codegen/config.cpp b/sdk/src/codegen/config.cpp
-index 5da54a0..e8ae270 100644
+index 5da54a0..7139da7 100644
 --- a/sdk/src/codegen/config.cpp
 +++ b/sdk/src/codegen/config.cpp
-@@ -114,6 +114,9 @@ void ApplyToml(const toml::table& toml, RecompilerConfig& cfg, const std::string
+@@ -114,6 +114,11 @@ void ApplyToml(const toml::table& toml, RecompilerConfig& cfg, const std::string
              hasBool("non_argument_as_local"), "non_argument_as_local");
    MergeBool(cfg.nonVolatileRegistersAsLocalVariables, toml["non_volatile_as_local"].value_or(false),
              hasBool("non_volatile_as_local"), "non_volatile_as_local");
++  MergeBool(cfg.volatileRegistersAsLocalVariables, toml["volatile_as_local"].value_or(false),
++            hasBool("volatile_as_local"), "volatile_as_local");
 +  MergeBool(cfg.volatileVectorRegistersAsLocalVariables,
 +            toml["volatile_vectors_as_local"].value_or(false), hasBool("volatile_vectors_as_local"),
 +            "volatile_vectors_as_local");
@@ -434,7 +461,7 @@ index 5da54a0..e8ae270 100644
              hasBool("generate_exception_handlers"), "generate_exception_handlers");
    if (hasBool("is_dll")) {
 diff --git a/sdk/src/codegen/function_graph.cpp b/sdk/src/codegen/function_graph.cpp
-index fc918bb..e3d0489 100644
+index fc918bb..c487303 100644
 --- a/sdk/src/codegen/function_graph.cpp
 +++ b/sdk/src/codegen/function_graph.cpp
 @@ -14,6 +14,7 @@
@@ -445,7 +472,7 @@ index fc918bb..e3d0489 100644
  #include <cassert>
  #include <unordered_set>
  
-@@ -637,6 +638,66 @@ std::string FunctionNode::emitCpp(const EmitContext& ctx) const {
+@@ -637,6 +638,80 @@ std::string FunctionNode::emitCpp(const EmitContext& ctx) const {
      emit_println(body, "}}\n");
    }
  
@@ -455,6 +482,20 @@ index fc918bb..e3d0489 100644
 +  // (direct, import, indirect, trap) and written back before every return. The call and return
 +  // statements are rewritten in place as one-line blocks, so they stay valid after an `if (...)`.
 +  std::string vector_spill, vector_reload;
++  if (ctx.config.volatileRegistersAsLocalVariables && !sharesRegisters()) {
++    for (size_t i = 0; i <= 12; i++) {
++      if (i != 1 && localVariables.r[i]) {
++        vector_spill += fmt::format("ctx.r{0} = r{0}; ", i);
++        vector_reload += fmt::format("r{0} = ctx.r{0}; ", i);
++      }
++    }
++    for (size_t i = 0; i <= 13; i++) {
++      if (localVariables.f[i]) {
++        vector_spill += fmt::format("ctx.f{0} = f{0}; ", i);
++        vector_reload += fmt::format("f{0} = ctx.f{0}; ", i);
++      }
++    }
++  }
 +  if (ctx.config.volatileVectorRegistersAsLocalVariables && !sharesRegisters()) {
 +    for (size_t i = 0; i < 64; i++) {
 +      const bool volatile_vector = i <= 13 || i >= 32;
@@ -512,7 +553,7 @@ index fc918bb..e3d0489 100644
    // --- Emit local variable declarations, then body ---
    if (localVariables.ctr)
      emit_println(out, "\tPPCRegister ctr{{}};");
-@@ -673,6 +734,8 @@ std::string FunctionNode::emitCpp(const EmitContext& ctx) const {
+@@ -673,6 +748,8 @@ std::string FunctionNode::emitCpp(const EmitContext& ctx) const {
      emit_println(out, "\tPPCVRegister vTemp{{}};");
    if (localVariables.ea)
      emit_println(out, "\tuint32_t ea{{}};");

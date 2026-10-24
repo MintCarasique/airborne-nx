@@ -22,6 +22,9 @@ ctr_as_local = true
 # context at every call and return (AirborneNX codegen option): the VMX128 math
 # loops (mixer, animation, matrices) stop going through memory per instruction.
 volatile_vectors_as_local = true
+# The same for the volatile integer and float registers (r0, r2-r12, f0-f13).
+# Off: measured on the PC (Adanti, 60-90 s, active samples) it changed nothing.
+volatile_as_local = false
 
 # ----------------------------------------------------------------------------
 #  FUNCTIONS DECLARED BY HAND
