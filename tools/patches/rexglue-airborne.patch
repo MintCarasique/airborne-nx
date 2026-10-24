@@ -255,6 +255,55 @@ index a902d01..c00055b 100644
    set_is_enabled(true);
  }
  
+diff --git a/sdk/src/audio/xma_decoder.cpp b/sdk/src/audio/xma_decoder.cpp
+index 3a1bebb..6ba53f6 100644
+--- a/sdk/src/audio/xma_decoder.cpp
++++ b/sdk/src/audio/xma_decoder.cpp
+@@ -221,6 +221,13 @@ MedidaXma g_medida_xma;
+ constexpr uint32_t kPalabrasPendientes = 10;  // 320 contextos / 32
+ std::atomic<uint32_t> g_pendientes[kPalabrasPendientes];
+ std::atomic<int64_t> g_pendiente_desde_ns{0};
++// AirborneNX: the worker has been woken and has not started its pass yet. A kick only signals the event
++// when it is the one setting this (seq_cst on both sides, Dekker style: the kick marks its context and
++// then sets the flag, the worker clears the flag and then reads the marks, so every kick is either seen
++// by the pass in progress or wakes the worker again). On the Switch each Set was a mutex plus a syscall,
++// 2,500-4,300 times per second in Adanti, and the game's audio thread spent a quarter of its samples in
++// svcArbitrateLock/Unlock under XMAEnableContext.
++std::atomic<bool> g_trabajador_avisado{false};
+ 
+ int64_t AhoraNs() {
+   using namespace std::chrono;
+@@ -228,7 +235,7 @@ int64_t AhoraNs() {
+ }
+ 
+ void MarcarPendiente(uint32_t context_id) {
+-  g_pendientes[context_id / 32].fetch_or(1u << (context_id % 32), std::memory_order_release);
++  g_pendientes[context_id / 32].fetch_or(1u << (context_id % 32), std::memory_order_seq_cst);
+ }
+ 
+ // Returns true if this thread takes the context; only one can.
+@@ -300,8 +307,9 @@ void XmaDecoder::WorkerThreadMain() {
+     // First the ones a kick has just enabled: they are reached without walking all 320 or touching their
+     // locks.
+     bool habia_pendientes = false;
++    g_trabajador_avisado.store(false, std::memory_order_seq_cst);
+     for (uint32_t palabra = 0; palabra < kPalabrasPendientes && worker_running_; ++palabra) {
+-      uint32_t bits = g_pendientes[palabra].load(std::memory_order_acquire);
++      uint32_t bits = g_pendientes[palabra].load(std::memory_order_seq_cst);
+       uint32_t indice = 0;
+       while (rex::bit_scan_forward(bits, &indice)) {
+         const uint32_t n = palabra * 32 + indice;
+@@ -514,7 +522,9 @@ void XmaDecoder::WriteRegister(uint32_t addr, uint32_t value) {
+         }
+       }
+       g_pendiente_desde_ns.store(AhoraNs(), std::memory_order_release);
+-      work_event_->Set();
++      if (!g_trabajador_avisado.exchange(true, std::memory_order_seq_cst)) {
++        work_event_->Set();
++      }
+     }
+     for (int i = 0; kicked_value && i < 32; ++i, kicked_value >>= 1) {
+       if (kicked_value & 1) {
 diff --git a/sdk/src/codegen/builders/system.cpp b/sdk/src/codegen/builders/system.cpp
 index b2d70f5..ffc00fb 100644
 --- a/sdk/src/codegen/builders/system.cpp
