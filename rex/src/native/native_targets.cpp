@@ -3047,6 +3047,17 @@ class DestinosVulkan final : public DestinosNativos, public ContextoDestinos {
     return imagen;
   }
 
+  void AnotarTamanoTextura(uint32_t direccion, uint32_t ancho, uint32_t alto) override {
+    auto& tamano = tamanos_textura_[direccion];
+    if (tamano.first != ancho || tamano.second != alto) {
+      tamano = {ancho, alto};
+      if (avisados_.insert(0x6000000u | (direccion & 0xFFFFFF)).second) {
+        REXLOG_INFO("[nativo] C2: la textura en {:08X} se muestrea como {}x{}: sus resueltas tendran ese tamano",
+                    direccion, ancho, alto);
+      }
+    }
+  }
+
   const ImagenNativa* TexturaResuelta(uint32_t direccion) override {
     const auto it = resueltas_.find(direccion);
     // Watchdog of nfsmw_nativo_restaurar_por_intercambio. This is the only door through which draws reach a
@@ -4230,6 +4241,12 @@ class DestinosVulkan final : public DestinosNativos, public ContextoDestinos {
 
   Resuelta* ObtenerResuelta(uint32_t base, uint32_t ancho, uint32_t alto, uint32_t formato,
                             bool intercambio_rb, VkFormat formato_host = kFormatoColor) {
+    // AirborneNX: the size the guest samples it with, when it fits in the destination (AnotarTamanoTextura).
+    if (const auto t = tamanos_textura_.find(base);
+        t != tamanos_textura_.end() && t->second.first <= ancho && t->second.second <= alto) {
+      ancho = t->second.first;
+      alto = t->second.second;
+    }
     if (!ancho || !alto) {
       Rechazar(9, "copia a una textura de tamano 0");
       return nullptr;
@@ -6082,6 +6099,8 @@ class DestinosVulkan final : public DestinosNativos, public ContextoDestinos {
 
   std::unordered_map<uint64_t, Imagen> destinos_;
   std::unordered_map<uint32_t, Resuelta> resueltas_;
+  // AirborneNX: size each resolved texture is sampled with (AnotarTamanoTextura).
+  std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> tamanos_textura_;
   // nfsmw_nativo_diag_lectores_s (DiagLectoresAlPresentar). Ring thread only.
   struct LectorDiag {
     uint32_t ps = 0;        // PS number in the library (kLectorSwap: the Swap presenting the front buffer)

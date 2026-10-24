@@ -103,6 +103,13 @@ class ContextoDestinos {
   virtual ImagenNativa* DestinoProfundidad(uint32_t base, uint32_t formato, uint32_t pitch) = 0;
   // Texture resolved by C2 at that physical address, or nullptr.
   virtual const ImagenNativa* TexturaResuelta(uint32_t direccion) = 0;
+  // AirborneNX: the size of the guest texture that samples the resolved texture at that address. A resolved
+  // image is created as wide as RB_COPY_DEST_PITCH (aligned to 32), but the guest samples it with normalized
+  // coordinates over its own size (MoH:A's bloom: pitch 352, texture 328). The next resolves create the image
+  // with this size instead.
+  virtual void AnotarTamanoTextura(uint32_t direccion, uint32_t ancho, uint32_t alto) {
+    (void)direccion, (void)ancho, (void)alto;
+  }
   // nfsmw_nativo_profundidad_perezosa. While set, the depth textures requested belong to a sample the
   // shader does not take (the final composite without blur) and do not force a copy.
   virtual void LecturasDeProfundidadMuertas(bool muertas) { (void)muertas; }

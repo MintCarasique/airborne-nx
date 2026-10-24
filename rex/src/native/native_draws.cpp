@@ -8482,6 +8482,12 @@ class DibujosVulkanImpl final : public DibujosVulkan {
     const uint32_t base = (f[1] >> 12) << 12;
     if (!cubo && !volumen) {
       if (const ImagenNativa* resuelta = contexto_->TexturaResuelta(base & 0x1FFFFFFF)) {
+        // AirborneNX: the guest texture's own size (size_2d: 13 + 13 bits).
+        const uint32_t ancho_guest = (f[2] & 0x1FFF) + 1, alto_guest = ((f[2] >> 13) & 0x1FFF) + 1;
+        if (!EsProfundidad(resuelta->formato) && !resuelta->ancho_guest &&
+            (ancho_guest != resuelta->ancho || alto_guest != resuelta->alto)) {
+          contexto_->AnotarTamanoTextura(base & 0x1FFFFFFF, ancho_guest, alto_guest);
+        }
         // Without this the shadows flicker.
         // With nfsmw_nativo_inv_tamano_tex the shader takes 1/size from the shared constants, and this path
         // used to return without reporting the size: 0 was written and the tfetch offsets (the taps of the
