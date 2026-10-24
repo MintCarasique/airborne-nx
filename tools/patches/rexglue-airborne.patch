@@ -1,3 +1,17 @@
+diff --git a/sdk/include/rex/filesystem/devices/host_path_device.h b/sdk/include/rex/filesystem/devices/host_path_device.h
+index 93e5b46..8372f08 100644
+--- a/sdk/include/rex/filesystem/devices/host_path_device.h
++++ b/sdk/include/rex/filesystem/devices/host_path_device.h
+@@ -44,6 +44,9 @@ class HostPathDevice : public Device {
+   ~HostPathDevice() override;
+ 
+   bool Initialize() override;
++  // AirborneNX: files under override_root replace the files at the same relative path (same tree, other
++  // content and size). Only paths that already exist are replaced. Returns how many were applied.
++  size_t ApplyOverrides(const std::filesystem::path& override_root);
+   void Dump(string::StringBuffer* string_buffer) override;
+   Entry* ResolvePath(const std::string_view path) override;
+ 
 diff --git a/sdk/include/rex/graphics/vulkan/command_processor.h b/sdk/include/rex/graphics/vulkan/command_processor.h
 index 696ff48..840506b 100644
 --- a/sdk/include/rex/graphics/vulkan/command_processor.h
@@ -153,6 +167,20 @@ index 9d2a848..f4bba39 100644
    struct ArgsVkPipelineBarrier {
      VkPipelineStageFlags src_stage_mask;
      VkPipelineStageFlags dst_stage_mask;
+diff --git a/sdk/include/rex/system/xthread.h b/sdk/include/rex/system/xthread.h
+index a72911e..07b0faf 100644
+--- a/sdk/include/rex/system/xthread.h
++++ b/sdk/include/rex/system/xthread.h
+@@ -423,6 +423,9 @@ class XThread : public XObject {
+   std::atomic<bool> running_{false};
+ 
+   std::string thread_name_;
++  // AirborneNX (Switch): the guest's audio mixer thread gets a priority above the other guest threads;
++  // set when it is named, applied on the thread itself (set_name or its next Delay).
++  bool audio_priority_pending_ = false;
+   std::unique_ptr<runtime::ThreadState> thread_state_;
+ 
+   int32_t priority_ = 0;
 diff --git a/sdk/include/rex/ui/vulkan/device.h b/sdk/include/rex/ui/vulkan/device.h
 index ebe673d..c15b1ad 100644
 --- a/sdk/include/rex/ui/vulkan/device.h
@@ -347,6 +375,45 @@ index 34cd4ed..ece2295 100644
              ++it;
          }
      }
+diff --git a/sdk/src/filesystem/devices/host_path_device.cpp b/sdk/src/filesystem/devices/host_path_device.cpp
+index 9fdd2f3..8b180dd 100644
+--- a/sdk/src/filesystem/devices/host_path_device.cpp
++++ b/sdk/src/filesystem/devices/host_path_device.cpp
+@@ -86,6 +86,34 @@ bool HostPathDevice::Initialize() {
+   return true;
+ }
+ 
++size_t HostPathDevice::ApplyOverrides(const std::filesystem::path& override_root) {
++  std::error_code ec;
++  if (!std::filesystem::is_directory(override_root, ec)) {
++    return 0;
++  }
++  size_t applied = 0;
++  for (auto it = std::filesystem::recursive_directory_iterator(override_root, ec);
++       !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
++    if (!it->is_regular_file(ec)) {
++      continue;
++    }
++    std::string relative = rex::path_to_utf8(std::filesystem::relative(it->path(), override_root, ec));
++    std::replace(relative.begin(), relative.end(), '/', '\\');
++    auto* entry = static_cast<HostPathEntry*>(root_entry_->ResolvePath(relative));
++    if (!entry || (entry->attributes_ & kFileAttributeDirectory)) {
++      REXFS_WARN("[io] override {} has no file to replace in {}", relative, mount_path_);
++      continue;
++    }
++    const auto size = size_t(std::filesystem::file_size(it->path(), ec));
++    entry->host_path_ = it->path();
++    entry->size_ = size;
++    entry->allocation_size_ = rex::round_up(size, size_t(4096));
++    REXFS_INFO("[io] override: {} <- {} ({} bytes)", relative, rex::path_to_utf8(it->path()), size);
++    ++applied;
++  }
++  return applied;
++}
++
+ void HostPathDevice::Dump(string::StringBuffer* string_buffer) {
+   auto global_lock = global_critical_region_.Acquire();
+   root_entry_->Dump(string_buffer, 0);
 diff --git a/sdk/src/graphics/pipeline/shader/spirv_translator_rb.cpp b/sdk/src/graphics/pipeline/shader/spirv_translator_rb.cpp
 index 765c141..dbb1621 100644
 --- a/sdk/src/graphics/pipeline/shader/spirv_translator_rb.cpp
@@ -899,8 +966,33 @@ index feacf4d..03f69b3 100644
        }
      }
  
+diff --git a/sdk/src/system/runtime.cpp b/sdk/src/system/runtime.cpp
+index c10694c..ad94056 100644
+--- a/sdk/src/system/runtime.cpp
++++ b/sdk/src/system/runtime.cpp
+@@ -30,6 +30,9 @@
+ 
+ REXCVAR_DEFINE_STRING(game_data_root, "", "Runtime", "Override game data path");
+ REXCVAR_DEFINE_STRING(user_data_root, "", "Runtime", "Override user data path");
++REXCVAR_DEFINE_STRING(game_data_override_root, "", "Runtime",
++                      "Folder whose files replace the game data files at the same relative path "
++                      "(e.g. <folder>/MOHAGame/Localization/Coalesced.int)");
+ REXCVAR_DEFINE_STRING(update_data_root, "", "Runtime", "Override update data path");
+ REXCVAR_DEFINE_STRING(cache_root, "", "Runtime", "Override shader cache path");
+ REXCVAR_DEFINE_STRING(metadata_root, "", "Runtime", "Override metadata path");
+@@ -311,6 +314,10 @@ bool Runtime::SetupVfs() {
+     REXSYS_ERROR("Runtime::SetupVfs: Failed to initialize host path device");
+     return false;
+   }
++  if (const std::string override_root = REXCVAR_GET(game_data_override_root); !override_root.empty()) {
++    const size_t applied = device->ApplyOverrides(std::filesystem::path(override_root));
++    REXSYS_INFO("Runtime::SetupVfs: {} file override(s) from {}", applied, override_root);
++  }
+   if (!file_system_->RegisterDevice(std::move(device))) {
+     REXSYS_ERROR("Runtime::SetupVfs: Failed to register host path device");
+     return false;
 diff --git a/sdk/src/system/xthread.cpp b/sdk/src/system/xthread.cpp
-index af02bc0..bcb5d3b 100644
+index af02bc0..d705598 100644
 --- a/sdk/src/system/xthread.cpp
 +++ b/sdk/src/system/xthread.cpp
 @@ -11,6 +11,7 @@
@@ -911,10 +1003,14 @@ index af02bc0..bcb5d3b 100644
  #include <cstring>
  
  #include <fmt/format.h>
-@@ -46,6 +47,10 @@
+@@ -46,6 +47,14 @@
  REXCVAR_DEFINE_BOOL(ignore_thread_priorities, true, "Kernel",
                      "Ignores game-specified thread priorities");
  
++REXCVAR_DEFINE_INT32(guest_audio_thread_priority, 0, "Kernel",
++                     "Switch: Horizon priority of the game's audio mixer thread (named RWAudioCore...). The "
++                     "other guest threads run at 0x3B, time-sliced on three cores, and the mixer missed its "
++                     "deadlines under load (audout requests without data: the sound crackled). 0 = leave it");
 +REXCVAR_DEFINE_INT32(zero_delay_backoff_us, 100, "Kernel",
 +                     "Switch: a guest thread that polls with Sleep(0) (KeDelayExecutionThread with a zero "
 +                     "interval) more than 16 times in a row, each call within 200 us of the previous one, "
@@ -922,7 +1018,40 @@ index af02bc0..bcb5d3b 100644
  REXCVAR_DEFINE_BOOL(ignore_thread_affinities, true, "Kernel",
                      "Ignores game-specified thread affinities");
  
-@@ -1072,11 +1077,30 @@ X_STATUS XThread::Delay(uint32_t processor_mode, uint32_t alertable, uint64_t in
+@@ -181,6 +190,17 @@ void XThread::set_last_error(uint32_t error_code) {
+ void XThread::set_name(const std::string_view name) {
+   std::lock_guard<std::mutex> lock(thread_lock_);
+   thread_name_ = fmt::format("{} ({:08X})", name, handle());
++#if REX_PLATFORM_SWITCH
++  if (guest_thread_ && name.starts_with("RWAudioCore") && REXCVAR_GET(guest_audio_thread_priority) > 0) {
++    audio_priority_pending_ = true;
++    if (XThread::IsInThread() && XThread::GetCurrentThread() == this) {
++      audio_priority_pending_ = false;
++      RexSwitchSetCurrentThreadPriority(REXCVAR_GET(guest_audio_thread_priority));
++      REXSYS_INFO("Switch: guest audio thread '{}' at priority {:#x}", thread_name_,
++                  REXCVAR_GET(guest_audio_thread_priority));
++    }
++  }
++#endif
+ 
+   if (thread_) {
+     // May be getting set before the thread is created.
+@@ -1045,6 +1065,14 @@ uint32_t XThread::SelfSuspend() {
+ #endif
+ 
+ X_STATUS XThread::Delay(uint32_t processor_mode, uint32_t alertable, uint64_t interval) {
++#if REX_PLATFORM_SWITCH
++  if (audio_priority_pending_ && XThread::GetCurrentThread() == this) {
++    audio_priority_pending_ = false;
++    RexSwitchSetCurrentThreadPriority(REXCVAR_GET(guest_audio_thread_priority));
++    REXSYS_INFO("Switch: guest audio thread '{}' at priority {:#x} (from Delay)", thread_name_,
++                REXCVAR_GET(guest_audio_thread_priority));
++  }
++#endif
+   int64_t timeout_ticks = interval;
+   uint32_t timeout_ms;
+   if (timeout_ticks > 0) {
+@@ -1072,11 +1100,30 @@ X_STATUS XThread::Delay(uint32_t processor_mode, uint32_t alertable, uint64_t in
      }
    } else {
      if (timeout_ms == 0) {

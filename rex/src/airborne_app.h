@@ -15,6 +15,8 @@
 #include "nxlink_log.h"
 #include "renderdoc_trigger.h"
 
+REXCVAR_DECLARE(std::string, game_data_override_root);  // system/runtime.cpp (SDK)
+
 class AirborneApp : public rex::ReXApp {
  public:
   using rex::ReXApp::ReXApp;
@@ -43,13 +45,29 @@ class AirborneApp : public rex::ReXApp {
   // and the command line still win):
   //   gpu_plugin     without it the SDK silently runs with no GPU emulation.
   //   user_language  3 = German: this dump's English localization is a broken
-  //                  Russian one (see docs/ASSESSMENT.md).
+  //                  Russian one (see docs/ASSESSMENT.md). English (the
+  //                  cvar's default, 1) when the override folder brings an
+  //                  English MOHAGame/Localization/Coalesced.int (built from
+  //                  the PC version's text with tools/coalesced.py).
+  //   game_data_override_root  <exe or NRO folder>/override when it exists:
+  //                  its files replace the game files at the same path.
   //   mnk_mode       keyboard as the pad, PC only: on the Switch the synthetic
   //                  device would shadow the real controllers.
   void OnPostInitLogging() override {
     StartNxlinkLog();
     SetIfUnset("gpu_plugin", "xenos");
-    SetIfUnset("user_language", "3");
+    if (const auto overrides = rex::filesystem::GetExecutableFolder() / "override";
+        std::filesystem::is_directory(overrides)) {
+      SetIfUnset("game_data_override_root", rex::path_to_utf8(overrides).c_str());
+    }
+    const std::string override_root = REXCVAR_GET(game_data_override_root);
+    const bool english_text =
+        !override_root.empty() &&
+        std::filesystem::exists(std::filesystem::path(override_root) / "MOHAGame" / "Localization" /
+                                "Coalesced.int");
+    if (!english_text) {
+      SetIfUnset("user_language", "3");
+    }
 #if !REX_PLATFORM_SWITCH
     SetIfUnset("mnk_mode", "true");
 #endif
