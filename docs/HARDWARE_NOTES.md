@@ -31,6 +31,12 @@
   (422 МБ backing / 716 МБ с зеркалами). 0,1–0,3 FPS. GPU на кадр в уровне: всего ~1090 мс, переносы 909 мс
   (depth→stencil bit 553 мс/32 draw, color→stencil bit 217 мс/24 draw), draw игры 158 мс. Все типы переносов
   дают ~25–35 Мпикс/с независимо от источника.
+- Прогон 8 (7d0cd99+4f709f05677d, `--nfsmw_renderizador=nativo`, библиотека шейдеров v3 186 МБ отдельным файлом
+  `sdmc:/switch/airborne-nx/airborne_shaders.nfsp`, лог `analysis/hardware/live_native1.log`): нативный рендерер на
+  железе. Титульный экран 17–20 FPS (эмуляция: 0,7), дальше тяжелее, 4–25 FPS. GPU 32–41 мс на Swap (сцена 20–32 мс,
+  копии 3–4 мс, «320» 2 мс), CPU 150–270 % из 400. 188 разных шейдеров, 182 опознаны (6 — без контейнеров),
+  отказов draw 0, падений нет. Барьеры вокруг копий (`airborne_barreras_copias`) включены. Одна `DIFERENCIA` у
+  IM_LOAD без memcmp (страж отключил ярлык). Картинку с консоли не видели — нужен скриншот.
 - SDK: «Too few processor cores - scheduling will be wonky»; общая память GPU — полный буфер 512 МБ (sparse нет).
 
 # Измерено на железе (Switch, HOS 22.1.0, applet_type 0 = Application)
