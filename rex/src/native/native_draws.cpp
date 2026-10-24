@@ -744,6 +744,12 @@ REXCVAR_DEFINE_INT32(nfsmw_nativo_inv_tamano_tex_alternar_s, 0, "NFSMW",
 REXCVAR_DEFINE_INT32(nfsmw_nativo_estadisticas_por_dibujo_s, 0, "NFSMW",
                      "Renderizador nativo (diagnostico, build 159): con N > 0 mide un fotograma de cada N "
                      "segundos con una consulta por dibujo y reparte los fragmentos por pixel shader");
+REXCVAR_DEFINE_BOOL(airborne_prune_vs_outputs, true, "AirborneNX",
+                    "Native renderer: drop the vertex shader's stores to the outputs the pixel shader does not "
+                    "read (NVK does not link the stages; the translated shaders write all 22 interface outputs)");
+REXCVAR_DEFINE_INT32(airborne_shader_stats, 0, "AirborneNX",
+                     "Native renderer: log the driver compiler's statistics (instructions, registers, ...) of the "
+                     "first N pipelines created on the ring (VK_KHR_pipeline_executable_properties). 0 = off");
 REXCVAR_DEFINE_INT32(nfsmw_nativo_prueba_tijera, 0, "NFSMW",
                      "Renderizador nativo (prueba, build 159): recorta a 1x1 los dibujos de una categoria "
                      "(1 sombras, 2 escena, 3 cubo, 4 posproceso). Se manda todo el estado y todos los "
@@ -1864,6 +1870,109 @@ struct VertexInput {
 
 // Copy of the SPIR-V without the writes to the color targets (output variables with Location 0..3).
 // Returns empty if the module cannot be walked or there was nothing to remove.
+/*
+ * AirborneNX: the vertex shader without the outputs the pixel shader does not read.
+ *
+ * The translated vertex shaders declare every interface output (TEXCOORD0-15 and COLOR0-5, locations
+ * 0-21) and zero all of them before the body, and NVK does not link the stages, so each vertex stored 22
+ * vectors whatever the pixel shader reads. On the Switch the scene is vertex bound (Adanti: 2.2 M indices
+ * in the base pass, and a 1x1 scissor does not change its GPU time), so the stores to the locations
+ * outside keep_mask are dropped. The variables stay declared and in the interface, never written, which is
+ * valid: the next stage does not read them.
+ */
+uint32_t InputLocationMask(const std::vector<uint32_t>& spirv, bool& ok) {
+  constexpr uint32_t kMagic = 0x07230203u;
+  constexpr uint32_t kOpDecorate = 71, kOpVariable = 59;
+  constexpr uint32_t kDecorationBuiltIn = 11, kDecorationLocation = 30, kInputStorage = 1;
+  ok = false;
+  if (spirv.size() < 5 || spirv[0] != kMagic) {
+    return 0;
+  }
+  std::unordered_map<uint32_t, uint32_t> location_of;
+  std::unordered_set<uint32_t> builtin;
+  for (size_t i = 5; i < spirv.size();) {
+    const uint32_t words = spirv[i] >> 16, code = spirv[i] & 0xFFFF;
+    if (words == 0 || i + words > spirv.size()) {
+      return 0;
+    }
+    if (code == kOpDecorate && words >= 4 && spirv[i + 2] == kDecorationLocation) {
+      location_of[spirv[i + 1]] = spirv[i + 3];
+    } else if (code == kOpDecorate && words >= 3 && spirv[i + 2] == kDecorationBuiltIn) {
+      builtin.insert(spirv[i + 1]);
+    }
+    i += words;
+  }
+  uint32_t mask = 0;
+  for (size_t i = 5; i < spirv.size();) {
+    const uint32_t words = spirv[i] >> 16, code = spirv[i] & 0xFFFF;
+    if (code == kOpVariable && words >= 4 && spirv[i + 3] == kInputStorage && !builtin.count(spirv[i + 2])) {
+      const auto it = location_of.find(spirv[i + 2]);
+      if (it == location_of.end() || it->second >= 32) {
+        return 0;  // an input without a usable location: do not prune against this shader
+      }
+      mask |= uint32_t(1) << it->second;
+    }
+    i += words;
+  }
+  ok = true;
+  return mask;
+}
+
+std::vector<uint32_t> PruneOutputsByLocation(const std::vector<uint32_t>& spirv, uint32_t keep_mask,
+                                             uint32_t& removed) {
+  constexpr uint32_t kMagic = 0x07230203u;
+  constexpr uint32_t kOpDecorate = 71, kOpVariable = 59, kOpStore = 62;
+  constexpr uint32_t kOpAccessChain = 65, kOpInBoundsAccessChain = 66;
+  constexpr uint32_t kDecorationBuiltIn = 11, kDecorationLocation = 30, kOutputStorage = 3;
+  removed = 0;
+  if (spirv.size() < 5 || spirv[0] != kMagic) {
+    return {};
+  }
+  std::unordered_set<uint32_t> dropped_locations, builtin;
+  for (size_t i = 5; i < spirv.size();) {
+    const uint32_t words = spirv[i] >> 16, code = spirv[i] & 0xFFFF;
+    if (words == 0 || i + words > spirv.size()) {
+      return {};
+    }
+    if (code == kOpDecorate && words >= 4 && spirv[i + 2] == kDecorationLocation &&
+        (spirv[i + 3] >= 32 || !((keep_mask >> spirv[i + 3]) & 1))) {
+      dropped_locations.insert(spirv[i + 1]);
+    } else if (code == kOpDecorate && words >= 3 && spirv[i + 2] == kDecorationBuiltIn) {
+      builtin.insert(spirv[i + 1]);
+    }
+    i += words;
+  }
+  std::unordered_set<uint32_t> pointers;
+  for (size_t i = 5; i < spirv.size();) {
+    const uint32_t words = spirv[i] >> 16, code = spirv[i] & 0xFFFF;
+    if (code == kOpVariable && words >= 4 && spirv[i + 3] == kOutputStorage) {
+      if (dropped_locations.count(spirv[i + 2]) && !builtin.count(spirv[i + 2])) {
+        pointers.insert(spirv[i + 2]);
+      }
+    } else if ((code == kOpAccessChain || code == kOpInBoundsAccessChain) && words >= 4 &&
+               pointers.count(spirv[i + 3])) {
+      pointers.insert(spirv[i + 2]);
+    }
+    i += words;
+  }
+  if (pointers.empty()) {
+    return {};
+  }
+  std::vector<uint32_t> output;
+  output.reserve(spirv.size());
+  output.insert(output.end(), spirv.begin(), spirv.begin() + 5);
+  for (size_t i = 5; i < spirv.size();) {
+    const uint32_t words = spirv[i] >> 16, code = spirv[i] & 0xFFFF;
+    if (code == kOpStore && words >= 3 && pointers.count(spirv[i + 1])) {
+      ++removed;
+    } else {
+      output.insert(output.end(), spirv.begin() + i, spirv.begin() + i + words);
+    }
+    i += words;
+  }
+  return removed ? output : std::vector<uint32_t>();
+}
+
 std::vector<uint32_t> PruneColorWrites(const std::vector<uint32_t>& spirv, uint32_t& removed) {
   constexpr uint32_t kMagic = 0x07230203u;
   constexpr uint32_t kOpEntryPoint = 15, kOpDecorate = 71, kOpVariable = 59, kOpStore = 62;
@@ -2135,6 +2244,11 @@ class VulkanDrawerImpl final : public VulkanDrawer {
       dfn_.vkDestroyShaderModule(device_, spv_module, nullptr);
     }
     for (auto& [entry, spv_module] : alpha_only_modules_) {
+      if (spv_module != VK_NULL_HANDLE) {
+        dfn_.vkDestroyShaderModule(device_, spv_module, nullptr);
+      }
+    }
+    for (auto& [key, spv_module] : pruned_vs_modules_) {
       if (spv_module != VK_NULL_HANDLE) {
         dfn_.vkDestroyShaderModule(device_, spv_module, nullptr);
       }
@@ -8122,6 +8236,18 @@ class VulkanDrawerImpl final : public VulkanDrawer {
       REXLOG_INFO("[nativo] C3: diagnostico de mips (nfsmw_nativo_diag_mips) = SI");
     }
     ubo_alignment_ = std::max<VkDeviceSize>(16, vk_device_->properties().minUniformBufferOffsetAlignment);
+    if (vk_device_->properties().pipelineExecutableInfo && REXCVAR_GET(airborne_shader_stats) > 0) {
+      const auto& ifn = vk_device_->vulkan_instance()->functions();
+      get_executables_ = reinterpret_cast<PFN_vkGetPipelineExecutablePropertiesKHR>(
+          ifn.vkGetDeviceProcAddr(device_, "vkGetPipelineExecutablePropertiesKHR"));
+      get_executable_stats_ = reinterpret_cast<PFN_vkGetPipelineExecutableStatisticsKHR>(
+          ifn.vkGetDeviceProcAddr(device_, "vkGetPipelineExecutableStatisticsKHR"));
+      if (!get_executables_ || !get_executable_stats_) {
+        get_executables_ = nullptr;
+        get_executable_stats_ = nullptr;
+      }
+      REXLOG_INFO("[nativo] C6: shader statistics of the driver {}", get_executable_stats_ ? "on" : "unavailable");
+    }
     alternar_ubo_s_ = REXCVAR_GET(nfsmw_nativo_constantes_ubo_alternar_s);
     REXLOG_INFO("[nativo] C6: constantes por UBO dinamico (nfsmw_nativo_constantes_ubo) = {}; alternar cada {} s; "
                 "alineacion {} bytes",
@@ -10710,6 +10836,41 @@ class VulkanDrawerImpl final : public VulkanDrawer {
     return spv_module;
   }
 
+  // AirborneNX: the vertex shader module without the outputs this pixel shader does not read
+  // (PruneOutputsByLocation), one per (VS, mask of PS inputs). Rectangle lists keep the full module: their
+  // geometry shader passes every location on.
+  VkShaderModule PrunedVertexModule(const ShaderEntry& vs, const ShaderEntry* ps, uint32_t specialization) {
+    if (!REXCVAR_GET(airborne_prune_vs_outputs) || (specialization & kSpecRectList)) {
+      return ModuleOf(vs);
+    }
+    bool ok = true;
+    const uint32_t keep = ps ? InputLocationMask(ps->shader->spirv, ok) : 0;
+    if (!ok) {
+      return ModuleOf(vs);
+    }
+    const uint64_t cache_key = (uint64_t(vs.number) << 32) | keep;
+    if (const auto it = pruned_vs_modules_.find(cache_key); it != pruned_vs_modules_.end()) {
+      return it->second != VK_NULL_HANDLE ? it->second : ModuleOf(vs);
+    }
+    uint32_t removed = 0;
+    const std::vector<uint32_t> pruned = PruneOutputsByLocation(vs.shader->spirv, keep, removed);
+    VkShaderModule spv_module = VK_NULL_HANDLE;
+    if (!pruned.empty()) {
+      VkShaderModuleCreateInfo info{};
+      info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+      info.codeSize = pruned.size() * sizeof(uint32_t);
+      info.pCode = pruned.data();
+      if (dfn_.vkCreateShaderModule(device_, &info, nullptr, &spv_module) != VK_SUCCESS) {
+        spv_module = VK_NULL_HANDLE;
+      }
+    }
+    if (pruned_vs_modules_.size() < 16) {
+      REXLOG_INFO("[nativo] C5a: VS n{} for PS inputs {:08X}: {} output stores dropped", vs.number, keep, removed);
+    }
+    pruned_vs_modules_.emplace(cache_key, spv_module);
+    return spv_module != VK_NULL_HANDLE ? spv_module : ModuleOf(vs);
+  }
+
   // Pixel shader module without the color writes, one per shader. If it cannot be pruned, the normal one
   // is returned: the image is the same, only the saving is lost.
   VkShaderModule AlphaOnlyModule(const ShaderEntry& entry) {
@@ -11662,7 +11823,7 @@ class VulkanDrawerImpl final : public VulkanDrawer {
       Warn(50, "colision de huellas de pipeline");
       return VK_NULL_HANDLE;
     }
-    const VkShaderModule vs = ModuleOf(*p.vs);
+    const VkShaderModule vs = PrunedVertexModule(*p.vs, key.ps ? p.ps : nullptr, key.specialization);
     VkShaderModule ps = VK_NULL_HANDLE;
     if (key.ps && (key.specialization & kSpecGlowNatural)) {
       ps = VariantModule(1, kSpirvGlowEnergy, sizeof(kSpirvGlowEnergy));
@@ -11701,6 +11862,7 @@ class VulkanDrawerImpl final : public VulkanDrawer {
       slot.key = key;
       slot.pipeline = pipeline;
     }
+    LogShaderStats(pipeline, p.vs->number, key.ps ? int(p.ps->number) : -1);
     if (pipelines_.size() <= 64) {
       REXLOG_INFO("[nativo] C6: pipeline {} (VS n{} PS n{}, topologia {}, {} colores, "
                   "profundidad {:08X}, mezcla {:08X}, especializacion {})",
@@ -11717,6 +11879,48 @@ class VulkanDrawerImpl final : public VulkanDrawer {
    * same VkGraphicsPipelineCreateInfo as the ring. It only reads its arguments, layout_pipeline_ and the
    * pipeline cache, which Vulkan synchronizes internally; avisar = false outside the ring.
    */
+  // AirborneNX: the driver compiler's statistics of each stage of a new pipeline (airborne_shader_stats),
+  // one line per stage: on the Switch the scene is vertex bound and this says which shaders cost what.
+  void LogShaderStats(VkPipeline pipeline, uint32_t vs_number, int ps_number) {
+    if (pipeline == VK_NULL_HANDLE || get_executable_stats_ == nullptr ||
+        stats_logged_ >= uint32_t(std::max(0, REXCVAR_GET(airborne_shader_stats)))) {
+      return;
+    }
+    ++stats_logged_;
+    VkPipelineInfoKHR pipeline_info{VK_STRUCTURE_TYPE_PIPELINE_INFO_KHR};
+    pipeline_info.pipeline = pipeline;
+    uint32_t n_executables = 0;
+    if (get_executables_(device_, &pipeline_info, &n_executables, nullptr) != VK_SUCCESS || !n_executables) {
+      return;
+    }
+    std::vector<VkPipelineExecutablePropertiesKHR> executables(
+        n_executables, {VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_PROPERTIES_KHR});
+    get_executables_(device_, &pipeline_info, &n_executables, executables.data());
+    for (uint32_t i = 0; i < n_executables; ++i) {
+      VkPipelineExecutableInfoKHR exec_info{VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_INFO_KHR};
+      exec_info.pipeline = pipeline;
+      exec_info.executableIndex = i;
+      uint32_t n_stats = 0;
+      if (get_executable_stats_(device_, &exec_info, &n_stats, nullptr) != VK_SUCCESS) {
+        continue;
+      }
+      std::vector<VkPipelineExecutableStatisticKHR> stats(n_stats,
+                                                          {VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_STATISTIC_KHR});
+      get_executable_stats_(device_, &exec_info, &n_stats, stats.data());
+      std::string line;
+      for (const VkPipelineExecutableStatisticKHR& st : stats) {
+        line += fmt::format(" | {}=", st.name);
+        switch (st.format) {
+          case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_BOOL32_KHR: line += st.value.b32 ? "1" : "0"; break;
+          case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_INT64_KHR: line += std::to_string(st.value.i64); break;
+          case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR: line += std::to_string(st.value.u64); break;
+          default: line += fmt::format("{:.2f}", st.value.f64); break;
+        }
+      }
+      REXLOG_INFO("[nativo] stats VS n{} PS n{} {}{}", vs_number, ps_number, executables[i].name, line);
+    }
+  }
+
   VkResult CreateVulkanPipeline(const PipelineKey& key, const VertexInput& entry, VkShaderModule vs,
                                VkShaderModule ps, VkRenderPass pass, bool warn, VkPipeline& pipeline,
                                uint32_t& n_output_colors) {
@@ -11807,6 +12011,9 @@ class VulkanDrawerImpl final : public VulkanDrawer {
     info.layout = layout_pipeline_;
     info.renderPass = pass;  // the pass's (ring) or a compatible one (prewarm)
     info.basePipelineIndex = -1;
+    if (get_executable_stats_ != nullptr) {
+      info.flags |= VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR;
+    }
     n_output_colors = n_colores;
     pipeline = VK_NULL_HANDLE;
     return dfn_.vkCreateGraphicsPipelines(device_, cache_pipelines_, 1, &info, nullptr, &pipeline);
@@ -12015,6 +12222,7 @@ class VulkanDrawerImpl final : public VulkanDrawer {
     const NativeShaders& library = *prewarmed_library_;
     std::unordered_map<uint64_t, VkShaderModule> modules;  // (variante << 32) | numero
     std::unordered_map<uint64_t, VkRenderPass> passes;       // by formats
+    std::unordered_map<uint64_t, VkShaderModule> pruned_vs;  // AirborneNX: (VS number << 32) | PS input mask
     const auto create = [&](const uint32_t* spirv, size_t bytes) {
       VkShaderModuleCreateInfo info{};
       info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
@@ -12094,7 +12302,26 @@ class VulkanDrawerImpl final : public VulkanDrawer {
         state = kModeOtherList;
         ++other_mode;
       } else {
-        const VkShaderModule vs_module = normal(*vs);
+        VkShaderModule vs_module = normal(*vs);
+        // AirborneNX: the same pruned vertex shader the ring uses (PrunedVertexModule), or the cache misses.
+        if (REXCVAR_GET(airborne_prune_vs_outputs) && !(r.key.specialization & kSpecRectList)) {
+          bool ok = true;
+          const uint32_t keep = r.key.ps ? InputLocationMask(ps->shader->spirv, ok) : 0;
+          if (ok) {
+            const uint64_t pruned_key = (uint64_t(vs->number) << 32) | keep;
+            auto it = pruned_vs.find(pruned_key);
+            if (it == pruned_vs.end()) {
+              uint32_t removed = 0;
+              const std::vector<uint32_t> pruned = PruneOutputsByLocation(vs->shader->spirv, keep, removed);
+              const VkShaderModule made =
+                  pruned.empty() ? VK_NULL_HANDLE : create(pruned.data(), pruned.size() * sizeof(uint32_t));
+              it = pruned_vs.emplace(pruned_key, made).first;
+            }
+            if (it->second != VK_NULL_HANDLE) {
+              vs_module = it->second;
+            }
+          }
+        }
         const VkShaderModule ps_module = r.key.ps ? pixel(r.key, *ps) : VK_NULL_HANDLE;
         const uint64_t pass_key = XXH3_64bits(r.key.formats, sizeof(r.key.formats));
         auto it_pass = passes.find(pass_key);
@@ -12143,6 +12370,11 @@ class VulkanDrawerImpl final : public VulkanDrawer {
       prewarmed_until_.store(i + 1, std::memory_order_release);
     }
     for (const auto& [key, spv_module] : modules) {
+      if (spv_module != VK_NULL_HANDLE) {
+        dfn_.vkDestroyShaderModule(device_, spv_module, nullptr);
+      }
+    }
+    for (const auto& [key, spv_module] : pruned_vs) {
       if (spv_module != VK_NULL_HANDLE) {
         dfn_.vkDestroyShaderModule(device_, spv_module, nullptr);
       }
@@ -12391,6 +12623,11 @@ class VulkanDrawerImpl final : public VulkanDrawer {
   std::unordered_map<const ShaderEntry*, VkShaderModule> modules_;
   std::array<VkShaderModule, 3> variants_modules_{};  // 1 natural, 2 soft
   VkShaderModule rect_list_gs_ = VK_NULL_HANDLE;  // AirborneNX: shaders/rect_list_gs.hlsl
+  std::unordered_map<uint64_t, VkShaderModule> pruned_vs_modules_;  // AirborneNX: PrunedVertexModule
+  // AirborneNX: VK_KHR_pipeline_executable_properties (LogShaderStats); null without the feature.
+  PFN_vkGetPipelineExecutablePropertiesKHR get_executables_ = nullptr;
+  PFN_vkGetPipelineExecutableStatisticsKHR get_executable_stats_ = nullptr;
+  uint32_t stats_logged_ = 0;
   // AirborneNX (airborne_edram_4x_alias): 4X surfaces drawn in 1X terms and rectangles without face culling.
   // Both are what the hardware/emulation do, and they only work together: the XDK clears the scene depth
   // through 640-pitch 4X rectangles, and UE3's depth restore rectangle comes with culling on.

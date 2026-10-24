@@ -153,6 +153,29 @@ index 9d2a848..f4bba39 100644
    struct ArgsVkPipelineBarrier {
      VkPipelineStageFlags src_stage_mask;
      VkPipelineStageFlags dst_stage_mask;
+diff --git a/sdk/include/rex/ui/vulkan/device.h b/sdk/include/rex/ui/vulkan/device.h
+index ebe673d..c15b1ad 100644
+--- a/sdk/include/rex/ui/vulkan/device.h
++++ b/sdk/include/rex/ui/vulkan/device.h
+@@ -190,6 +190,10 @@ class VulkanDevice {
+     bool extendedDynamicState3ColorBlendEnable = false;
+     bool extendedDynamicState3ColorBlendEquation = false;
+     bool extendedDynamicState3ColorWriteMask = false;
++
++    // VK_KHR_pipeline_executable_properties (#270): AirborneNX reads the driver's shader statistics
++    // (instructions, registers) to find the vertex shaders that are expensive on the Switch.
++    bool pipelineExecutableInfo = false;
+   };
+ 
+   // Properties of the core API and enabled extensions, and enabled features.
+@@ -223,6 +227,7 @@ class VulkanDevice {
+     bool ext_1_3_KHR_dynamic_rendering = false;  // #55
+     // NFSMW native renderer (dynamic blending and color write masks).
+     bool ext_EXT_extended_dynamic_state3 = false;  // #456
++    bool ext_KHR_pipeline_executable_properties = false;  // #270
+   };
+ 
+   const Extensions& extensions() const { return extensions_; }
 diff --git a/sdk/include/rex/ui/vulkan/functions/device_1_0.inc b/sdk/include/rex/ui/vulkan/functions/device_1_0.inc
 index aa55a4a..855e78b 100644
 --- a/sdk/include/rex/ui/vulkan/functions/device_1_0.inc
@@ -976,3 +999,46 @@ index 6b3d30a..bdeb08e 100644
      std::fclose(f);
    }
  
+diff --git a/sdk/src/ui/vulkan/vulkan_device.cpp b/sdk/src/ui/vulkan/vulkan_device.cpp
+index 0279615..7666f22 100644
+--- a/sdk/src/ui/vulkan/vulkan_device.cpp
++++ b/sdk/src/ui/vulkan/vulkan_device.cpp
+@@ -199,6 +199,8 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
+     // #456. NFSMW native renderer: dynamic blending and color write masks. Its three features are
+     // enabled further down, only if the device provides them.
+     XE_UI_VULKAN_STRUCT_EXTENSION(EXT_extended_dynamic_state3)
++    // #270. AirborneNX: shader statistics of the driver's compiler.
++    XE_UI_VULKAN_STRUCT_EXTENSION(KHR_pipeline_executable_properties)
+   }
+   if (properties.apiVersion >= VK_MAKE_API_VERSION(0, 1, 1, 0)) {
+     // #414.
+@@ -348,6 +350,9 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
+   VulkanFeatures<VkPhysicalDeviceExtendedDynamicState3FeaturesEXT,
+                  VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_3_FEATURES_EXT>
+       features_EXT_extended_dynamic_state3;
++  VulkanFeatures<VkPhysicalDevicePipelineExecutablePropertiesFeaturesKHR,
++                 VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_EXECUTABLE_PROPERTIES_FEATURES_KHR>
++      features_KHR_pipeline_executable_properties;
+ 
+   if (get_physical_device_properties2_supported) {
+     if (properties.apiVersion >= VK_MAKE_API_VERSION(0, 1, 2, 0)) {
+@@ -392,6 +397,9 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
+     if (device->extensions_.ext_EXT_extended_dynamic_state3) {
+       features_EXT_extended_dynamic_state3.Link(supported_features_2, device_create_info);
+     }
++    if (device->extensions_.ext_KHR_pipeline_executable_properties) {
++      features_KHR_pipeline_executable_properties.Link(supported_features_2, device_create_info);
++    }
+     ifn.vkGetPhysicalDeviceProperties2(physical_device, &properties_2);
+     ifn.vkGetPhysicalDeviceFeatures2(physical_device, &supported_features_2);
+   }
+@@ -774,6 +782,9 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
+     XE_UI_VULKAN_FEATURE_2(features_EXT_extended_dynamic_state3, extendedDynamicState3ColorBlendEquation)
+     XE_UI_VULKAN_FEATURE_2(features_EXT_extended_dynamic_state3, extendedDynamicState3ColorWriteMask)
+   }
++  if (device->extensions_.ext_KHR_pipeline_executable_properties) {
++    XE_UI_VULKAN_FEATURE_2(features_KHR_pipeline_executable_properties, pipelineExecutableInfo)
++  }
+ 
+ #undef XE_UI_VULKAN_LIMIT
+ #undef XE_UI_VULKAN_ENUM_LIMIT
