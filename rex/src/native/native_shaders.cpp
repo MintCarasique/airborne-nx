@@ -6,7 +6,12 @@
 
 #include "shader_library.h"
 
+#include <rex/cvar.h>
+#include <rex/filesystem.h>
 #include <rex/logging.h>
+
+#include <cstdio>
+#include <filesystem>
 
 #include <algorithm>
 #include <exception>
@@ -30,8 +35,38 @@
 #define XXH_INLINE_ALL
 #include <xxhash.h>
 
+REXCVAR_DEFINE_BOOL(airborne_dump_unknown_shaders, false, "AirborneNX",
+                    "Native renderer (development): write the microcode of every shader the library does not "
+                    "have to unknown_shaders/<hash>_<vs|ps>.bin next to the executable, for "
+                    "tools/wrap_unknown_shaders.py");
+
 namespace nfsmw::nativo {
 namespace {
+
+// AirborneNX: shaders that come without a container (built at run time by the XDK or the game) are dumped
+// as raw microcode: a "VSMC"/"PSMC" tag, the word count, then the words big-endian as the GPU reads them.
+void DumpUnknownShader(bool vertex, uint64_t hash, std::span<const uint32_t> microcode) {
+  std::error_code ec;
+  const auto folder = rex::filesystem::GetExecutableFolder() / "unknown_shaders";
+  std::filesystem::create_directories(folder, ec);
+  const auto path = folder / fmt::format("{:016X}_{}.bin", hash, vertex ? "vs" : "ps");
+  if (std::filesystem::exists(path, ec)) {
+    return;
+  }
+  FILE* file = std::fopen(path.string().c_str(), "wb");
+  if (!file) {
+    REXLOG_WARN("[nativo] C5a: cannot write {}", path.string());
+    return;
+  }
+  const uint32_t header[2] = {__builtin_bswap32(vertex ? 0x56534D43u : 0x50534D43u),
+                              __builtin_bswap32(uint32_t(microcode.size()))};
+  std::fwrite(header, sizeof(header), 1, file);
+  for (const uint32_t word : microcode) {
+    const uint32_t be = __builtin_bswap32(word);
+    std::fwrite(&be, sizeof(be), 1, file);
+  }
+  std::fclose(file);
+}
 
 // Bits of a vertex fetch instruction that D3D does not touch
 // (VertexFetchInstruction in XenosRecomp shader_code.h): opcode, source and
@@ -514,6 +549,9 @@ const EntradaShader* ShadersNativos::Identificar(bool vertices,
     }
   } else {
     ++d.estadisticas.sin_identificar;
+    if (REXCVAR_GET(airborne_dump_unknown_shaders)) {
+      DumpUnknownShader(vertices, clave.huella, microcodigo);
+    }
     if (avisar) {
       ++d.avisos;
       const auto c = d.candidatos.find({vertices, uint32_t(microcodigo.size())});
@@ -521,6 +559,12 @@ const EntradaShader* ShadersNativos::Identificar(bool vertices,
                   "({} contenedores de ese tipo y longitud)",
                   vertices ? "vertex" : "pixel", microcodigo.size(), clave.huella,
                   c != d.candidatos.end() ? c->second.size() : 0);
+      // AirborneNX: the whole microcode, to look for shaders that come without a container (XDK internals).
+      if (microcodigo.size() <= 128) {
+        std::string words;
+        for (const uint32_t w : microcodigo) words += fmt::format(" {:08X}", w);
+        REXLOG_WARN("[nativo] C5a:   microcode:{}", words);
+      }
       // Diagnostics: the closest container of the same length (fewest differing words after the fetch
       // mask) and which words change (incoming / container).
       const EntradaShader* cercano = nullptr;
