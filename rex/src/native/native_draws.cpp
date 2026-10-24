@@ -1727,6 +1727,24 @@ struct FormatoTextura {
 };
 
 // Same host formats as the emulation (vulkan/texture_cache.cpp:123-397).
+// AirborneNX: sRGB variant of a texture format, or VK_FORMAT_UNDEFINED.
+VkFormat FormatoSrgb(VkFormat formato) {
+  switch (formato) {
+    case VK_FORMAT_R8G8B8A8_UNORM:
+      return VK_FORMAT_R8G8B8A8_SRGB;
+    case VK_FORMAT_B8G8R8A8_UNORM:
+      return VK_FORMAT_B8G8R8A8_SRGB;
+    case VK_FORMAT_BC1_RGBA_UNORM_BLOCK:
+      return VK_FORMAT_BC1_RGBA_SRGB_BLOCK;
+    case VK_FORMAT_BC2_UNORM_BLOCK:
+      return VK_FORMAT_BC2_SRGB_BLOCK;
+    case VK_FORMAT_BC3_UNORM_BLOCK:
+      return VK_FORMAT_BC3_SRGB_BLOCK;
+    default:
+      return VK_FORMAT_UNDEFINED;
+  }
+}
+
 bool FormatoTexturaDe(uint32_t formato, FormatoTextura& f) {
   switch (formato) {
     case 2:  // k_8
@@ -8456,7 +8474,8 @@ class DibujosVulkanImpl final : public DibujosVulkan {
     }
     monton = cubo ? 2 : volumen ? 1 : 0;
     const uint32_t capas = cubo ? 6 : 1;
-    if ((f[0] >> 2) & 0xFF) {
+    // AirborneNX: gamma (3 in every RGB sign) is handled below with sRGB formats; signed and biased are not.
+    if (((f[0] >> 2) & 0xFF) && ((f[0] >> 2) & 0x3F) != 0x3F) {
       Avisar(31, "texturas con signo o gamma: se leen sin signo");
     }
     const uint32_t swizzle = (f[3] >> 1) & 0xFFF;
@@ -8506,6 +8525,18 @@ class DibujosVulkanImpl final : public DibujosVulkan {
     if (!FormatoTexturaDe(formato, tf)) {
       Avisar(400 + formato, "formato de textura todavia no soportado: se usa una vacia");
       return;
+    }
+    // AirborneNX: gamma textures (sign_x/y/z = 3, TextureSign::kGamma) are linearized by the Xenos when
+    // sampled (piecewise-linear gamma). The host does it with the sRGB variant of the format, the same
+    // approximation the emulation uses by default. They are already separate cache entries: the sign bits
+    // are part of the key.
+    if (((f[0] >> 2) & 0x3F) == 0x3F) {
+      const VkFormat srgb = FormatoSrgb(tf.formato);
+      if (srgb != VK_FORMAT_UNDEFINED) {
+        tf.formato = srgb;
+      } else {
+        Avisar(39, "textura gamma en un formato sin variante sRGB: se lee sin linealizar");
+      }
     }
     // size_2d: 13 + 13 bits; size_3d: 11 + 11 + 10 bits (xenos.h:1222-1233).
     const uint32_t ancho = volumen ? (f[2] & 0x7FF) + 1 : (f[2] & 0x1FFF) + 1;
