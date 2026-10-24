@@ -40,6 +40,7 @@ struct ShaderRecompiler : StringBuffer
     // They are discovered while translating the body, so their declarations are inserted
     // into `out` afterwards at the recorded positions.
     std::set<uint32_t> undeclaredSamplers;
+    std::set<uint32_t> literalConstants; // AirborneNX: cN locals from the definition table
     std::map<uint32_t, std::string> syntheticVertexInputs; // fetch address -> variable name
     bool usesMemExportDummy = false;
     size_t samplerDefsPos = 0;

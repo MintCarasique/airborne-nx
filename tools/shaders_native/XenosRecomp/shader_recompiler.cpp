@@ -531,9 +531,29 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
                 }
                 else
                 {
-                    if (relativa)
-                        throw std::runtime_error("direccionamiento relativo sin constante declarada pendiente");
-                    regFormatted = fmt::format("c{}", reg);
+                    if (literalConstants.count(reg))
+                    {
+                        if (relativa)
+                            throw std::runtime_error("direccionamiento relativo sin constante declarada pendiente");
+                        regFormatted = fmt::format("c{}", reg);
+                    }
+                    else
+                    {
+                        // AirborneNX: float constant the table does not declare (synthetic containers
+                        // from tools/wrap_unknown_shaders.py, or registers past the declared ones): read
+                        // the constant buffer by register index, as a declared Float4 is read; registers
+                        // past the host block (224 PS / 256 VS) read as zero.
+                        const uint32_t limit = isPixelShader ? 224 : 256;
+                        const char* shaderName = isPixelShader ? "Pixel" : "Vertex";
+                        const std::string index = relativa ?
+                            fmt::format("(int({}){})", reg, instr.constAddressRegisterRelative ? " + a0" : " + aL") :
+                            fmt::format("{}", reg);
+                        if (!relativa && reg >= limit)
+                            regFormatted = "float4(0.0, 0.0, 0.0, 0.0)";
+                        else
+                            regFormatted = fmt::format("select(({0}) >= 0 && ({0}) < {1}, (NFSMW_UBO ? g_Ubo{2}.v[clamp({0}, 0, {3})] : vk::RawBufferLoad<float4>(g_PushConstants.{2}ShaderConstants + clamp({0}, 0, {3}) * 16, 0x10)), 0.0)",
+                                index, limit, shaderName, limit - 1);
+                    }
                 }
             }
 
@@ -1497,6 +1517,7 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
             auto value = reinterpret_cast<const be<uint32_t>*>(shaderData + shaderContainer->virtualSize + definition->physicalOffset);
             for (uint16_t i = 0; i < (definition->count + 3) / 4; i++)
             {
+                literalConstants.insert(definition->registerIndex + i - (isPixelShader ? 256 : 0));
                 println("\tfloat4 c{} = asfloat(uint4(0x{:X}, 0x{:X}, 0x{:X}, 0x{:X}));",
                     definition->registerIndex + i - (isPixelShader ? 256 : 0), value[0].get(), value[1].get(), value[2].get(), value[3].get());
 

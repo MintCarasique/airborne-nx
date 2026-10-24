@@ -30,6 +30,7 @@
 //   equivalent.
 
 #include "native_draws.h"
+#include "shaders/rect_list_gs.h"  // AirborneNX: rectangle lists
 #include "native_targets.h"  // FormatoDestinoColorSoportado
 #include "stall_waits.h"
 
@@ -1183,6 +1184,9 @@ constexpr uint32_t kSpecWithoutBlur = uint32_t(1) << 19;
 // Internal bit of the pipeline key that no shader reads (shader_common.h goes up to bit 19). It marks that
 // the pixel shader module is the copy with OpExecutionMode EarlyFragmentTests.
 constexpr uint32_t kSpecZEarly = uint32_t(1) << 20;
+// AirborneNX: internal bit of the pipeline key no shader reads: the draw is a rectangle list, drawn as a triangle
+// list with the rect_list_gs geometry shader that adds each rectangle's fourth corner.
+constexpr uint32_t kSpecRectList = uint32_t(1) << 21;
 // nfsmw_nativo_sombra_minimo. SPEC_CONSTANT_SOMBRA_MINIMO from shader_common.h: tfetch2DSombraMin takes the
 // minimum of the shadow map and its pair, which goes in the 3D index word of that register.
 constexpr uint32_t kSpecShadowMin = uint32_t(1) << 23;
@@ -2141,6 +2145,9 @@ class VulkanDrawerImpl final : public VulkanDrawer {
         dfn_.vkDestroyShaderModule(device_, spv_module, nullptr);
       }
     }
+    if (rect_list_gs_ != VK_NULL_HANDLE) {
+      dfn_.vkDestroyShaderModule(device_, rect_list_gs_, nullptr);
+    }
     for (auto& [key, view] : views_) {
       dfn_.vkDestroyImageView(device_, view.view, nullptr);
     }
@@ -2273,6 +2280,7 @@ class VulkanDrawerImpl final : public VulkanDrawer {
     }
     VkPrimitiveTopology topo;
     bool quads = false;
+    bool rect_list = false;
     bool supports_reset = false;
     switch (type) {
       case 2:
@@ -2296,6 +2304,13 @@ class VulkanDrawerImpl final : public VulkanDrawer {
       case 13:
         topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
         quads = true;
+        break;
+      case 8:  // AirborneNX: rectangle list (UE3's depth restore before the full-screen lighting, XDK clears)
+        if (rect_list_gs_ == VK_NULL_HANDLE) {
+          return Reject(100 + type, "tipo de primitiva todavia no soportado");
+        }
+        topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        rect_list = true;
         break;
       default:
         return Reject(100 + type, "tipo de primitiva todavia no soportado");
@@ -3134,6 +3149,9 @@ class VulkanDrawerImpl final : public VulkanDrawer {
     }
 
     uint32_t specialization = entry->specialization;
+    if (rect_list) {
+      specialization |= kSpecRectList;
+    }
     if (composition_without_blur) {  // the same value that decided the textures
       specialization |= kSpecWithoutBlur;
     }
@@ -8141,6 +8159,16 @@ class VulkanDrawerImpl final : public VulkanDrawer {
     info_layout.pSetLayouts = layouts_pipeline.data();
     info_layout.pushConstantRangeCount = 1;
     info_layout.pPushConstantRanges = &range_info;
+    // AirborneNX: the rectangle list geometry shader (shaders/rect_list_gs.hlsl). Without it (no
+    // geometryShader feature) rectangle lists stay rejected as before.
+    VkShaderModuleCreateInfo gs_info{};
+    gs_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    gs_info.codeSize = sizeof(kRectListGs);
+    gs_info.pCode = kRectListGs;
+    if (dfn_.vkCreateShaderModule(device_, &gs_info, nullptr, &rect_list_gs_) != VK_SUCCESS) {
+      rect_list_gs_ = VK_NULL_HANDLE;
+      REXLOG_WARN("[nativo] C6: no geometry shader for rectangle lists; they are rejected");
+    }
     return dfn_.vkCreatePipelineLayout(device_, &info_layout, nullptr, &layout_pipeline_) ==
            VK_SUCCESS;
   }
@@ -11662,7 +11690,7 @@ class VulkanDrawerImpl final : public VulkanDrawer {
                                uint32_t& n_output_colors) {
     const VkSpecializationMapEntry map_table{0, 0, sizeof(uint32_t)};
     const VkSpecializationInfo specialization{1, &map_table, sizeof(uint32_t), &key.specialization};
-    VkPipelineShaderStageCreateInfo stages[2]{};
+    VkPipelineShaderStageCreateInfo stages[3]{};
     for (auto& stage_idx : stages) {
       stage_idx.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
       stage_idx.pName = "main";
@@ -11672,6 +11700,14 @@ class VulkanDrawerImpl final : public VulkanDrawer {
     stages[0].module = vs;
     stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
     stages[1].module = ps;
+    // AirborneNX: rectangle lists add the geometry stage (after the others in the array; order is free).
+    uint32_t stage_count = key.ps ? 2 : 1;  // mode 5: VS only
+    if ((key.specialization & kSpecRectList) && rect_list_gs_ != VK_NULL_HANDLE) {
+      stages[stage_count].stage = VK_SHADER_STAGE_GEOMETRY_BIT;
+      stages[stage_count].module = rect_list_gs_;
+      stages[stage_count].pSpecializationInfo = nullptr;
+      ++stage_count;
+    }
 
     std::vector<VkVertexInputBindingDescription> bindings;
     for (uint32_t i = 0; i < entry.bindings.size(); ++i) {
@@ -11726,7 +11762,7 @@ class VulkanDrawerImpl final : public VulkanDrawer {
 
     VkGraphicsPipelineCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-    info.stageCount = key.ps ? 2 : 1;  // mode 5: VS only
+    info.stageCount = stage_count;
     info.pStages = stages;
     info.pVertexInputState = &vertices;
     info.pInputAssemblyState = &ensamblado;
@@ -12322,6 +12358,7 @@ class VulkanDrawerImpl final : public VulkanDrawer {
 
   std::unordered_map<const ShaderEntry*, VkShaderModule> modules_;
   std::array<VkShaderModule, 3> variants_modules_{};  // 1 natural, 2 soft
+  VkShaderModule rect_list_gs_ = VK_NULL_HANDLE;  // AirborneNX: shaders/rect_list_gs.hlsl
   std::array<bool, 3> created_variants_modules_{};
   int glow_tracked_ = 0;
   std::unordered_map<uint64_t, std::pair<PipelineKey, VkPipeline>> pipelines_;
