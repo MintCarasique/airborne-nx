@@ -16,6 +16,7 @@ set(AIRBORNE_SOURCES
     src/input_script.cpp
     src/nxlink_log.cpp
     src/occlusion_queries.cpp
+    src/gpu_wait.cpp
     src/renderdoc_trigger.cpp
 )
 

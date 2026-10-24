@@ -1002,6 +1002,9 @@ class VulkanTargets final : public NativeTargets, public TargetsContext {
     for (auto& [key, resolved] : resolved_) {
       Destroy(resolved.img);
     }
+    for (auto& [key, resolved] : parked_resolved_) {
+      Destroy(resolved.img);
+    }
     Destroy(tile_);
     for (FrontImage& spare : images_fronts_) {  // nfsmw_nativo_frontal_perezoso
       Destroy(spare.img);
@@ -4263,19 +4266,45 @@ class VulkanTargets final : public NativeTargets, public TargetsContext {
         it->second.img.rb_swap = rb_swap;
         return &it->second;
       }
-      // Another size or format at the same address: the old image may still be in use.
-      SendJob(true);
-      WaitGpu();
-      if (draws_) {
-        draws_->ForgetImage(it->second.img.img);
-      }
-      Destroy(it->second.img);
+      // Another size or format at the same address. AirborneNX: UE3 alternates formats at one address
+      // every frame (15580000: format 7, then 32), and destroying the old image meant waiting for the GPU
+      // twice per frame (Switch profile: the ring thread 63 % in vkWaitForFences under here). The old
+      // image is parked instead, alive, and a parked one of the wanted size and format comes back.
+      Resolved current = std::move(it->second);
       resolved_.erase(it);
-      // The image at that address no longer exists, so no render target owes it anything.
       if (!borrowed_.empty()) {
         borrowed_.erase(base);
       }
-      ShadowMinResolvedWritten(base);  // the new image does not have its content
+      ShadowMinResolvedWritten(base);  // the image that comes back does not have this content
+      const auto [first, last] = parked_resolved_.equal_range(base);
+      for (auto p = first; p != last; ++p) {
+        if (p->second.img.width_px == width_px && p->second.img.height_px == height_px &&
+            p->second.img.format_id == host_format) {
+          Resolved back = std::move(p->second);
+          parked_resolved_.erase(p);
+          parked_resolved_.emplace(base, std::move(current));
+          back.guest_format = format_id;
+          back.rb_swap = rb_swap;
+          back.img.rb_swap = rb_swap;
+          if (draws_) {
+            draws_->InvalidateTextures();  // that address is now sampled from the image that came back
+          }
+          ++parked_reuses_;
+          return &resolved_.emplace(base, std::move(back)).first->second;
+        }
+      }
+      if (parked_resolved_.count(base) < kMaxParkedPerAddress) {
+        parked_resolved_.emplace(base, std::move(current));
+      } else {
+        // Too many variants: the old way, waiting for the GPU before destroying it.
+        SendJob(true);
+        WaitGpu();
+        if (draws_) {
+          draws_->ForgetImage(current.img.img);
+        }
+        Destroy(current.img);
+      }
+      // Then a new variant is created below.
     }
     Resolved resolved;
     // The attachment usage (color or depth) is needed for nfsmw_nativo_resolver_sin_copia: this image can
@@ -6099,6 +6128,10 @@ class VulkanTargets final : public NativeTargets, public TargetsContext {
 
   std::unordered_map<uint64_t, Image> targets_;
   std::unordered_map<uint32_t, Resolved> resolved_;
+  // AirborneNX: resolved images of another size or format at the same address, kept alive (GetResolved).
+  static constexpr size_t kMaxParkedPerAddress = 3;
+  std::unordered_multimap<uint32_t, Resolved> parked_resolved_;
+  uint64_t parked_reuses_ = 0;
   // AirborneNX: size each resolved texture is sampled with (AnotarTamanoTextura).
   std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> texture_sizes_;
   // nfsmw_nativo_diag_lectores_s (DiagLectoresAlPresentar). Ring thread only.

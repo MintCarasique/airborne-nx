@@ -170,6 +170,49 @@ index aa55a4a..855e78b 100644
  XE_UI_VULKAN_FUNCTION(vkUpdateDescriptorSets)
  XE_UI_VULKAN_FUNCTION(vkWaitForFences)
 +XE_UI_VULKAN_FUNCTION(vkGetQueryPoolResults)
+diff --git a/sdk/resources/templates/codegen/pch_h.inja b/sdk/resources/templates/codegen/pch_h.inja
+index 3f1f3cf..f36dae5 100644
+--- a/sdk/resources/templates/codegen/pch_h.inja
++++ b/sdk/resources/templates/codegen/pch_h.inja
+@@ -142,6 +142,13 @@ extern PPCFuncMapping PPCFuncMappings[];
+ 
+ #define REX_RAW_ADDR(x) (base + (u32)(x) + REX_PHYS_HOST_OFFSET(x))
+ 
++// PowerPC sync/lwsync. A hardware fence on ARM (dmb ish); on x86 (TSO) a compiler barrier is enough.
++#if defined(__aarch64__) || defined(__arm__)
++#define REX_FENCE() __atomic_thread_fence(__ATOMIC_SEQ_CST)
++#else
++#define REX_FENCE() __atomic_signal_fence(__ATOMIC_SEQ_CST)
++#endif
++
+ #define REX_LOAD_U8(x) (*(volatile u8*)(base + (u32)(x) + REX_PHYS_HOST_OFFSET(x)))
+ #define REX_LOAD_U16(x) __builtin_bswap16(*(volatile u16*)(base + (u32)(x) + REX_PHYS_HOST_OFFSET(x)))
+ #define REX_LOAD_U32(x) __builtin_bswap32(*(volatile u32*)(base + (u32)(x) + REX_PHYS_HOST_OFFSET(x)))
+diff --git a/sdk/src/codegen/builders/system.cpp b/sdk/src/codegen/builders/system.cpp
+index b2d70f5..ffc00fb 100644
+--- a/sdk/src/codegen/builders/system.cpp
++++ b/sdk/src/codegen/builders/system.cpp
+@@ -31,14 +31,16 @@ bool build_attn(BuilderContext& ctx) {
+ }
+ 
+ bool build_sync(BuilderContext& ctx) {
+-  // Memory barrier, x86 has strong ordering so this is a no-op
+-  (void)ctx;
++  // Memory barrier. x86 orders memory strongly enough (REX_FENCE is only a compiler barrier there),
++  // but ARM does not: without a hardware fence, a lock-free producer/consumer (UE3's rendering
++  // command queue) lets the consumer see the advanced write pointer before the command it covers.
++  ctx.println("	REX_FENCE();");
+   return true;
+ }
+ 
+ bool build_lwsync(BuilderContext& ctx) {
+-  // Lightweight memory barrier, x86 has strong ordering so this is a no-op
+-  (void)ctx;
++  // Lightweight memory barrier: see build_sync.
++  ctx.println("	REX_FENCE();");
+   return true;
+ }
+ 
 diff --git a/sdk/src/codegen/builders/vector.cpp b/sdk/src/codegen/builders/vector.cpp
 index cbdd7f7..35299f2 100644
 --- a/sdk/src/codegen/builders/vector.cpp
@@ -817,6 +860,60 @@ index feacf4d..03f69b3 100644
        }
      }
  
+diff --git a/sdk/src/system/xthread.cpp b/sdk/src/system/xthread.cpp
+index af02bc0..bcb5d3b 100644
+--- a/sdk/src/system/xthread.cpp
++++ b/sdk/src/system/xthread.cpp
+@@ -11,6 +11,7 @@
+ 
+ #include <algorithm>
+ #include <atomic>
++#include <chrono>
+ #include <cstring>
+ 
+ #include <fmt/format.h>
+@@ -46,6 +47,10 @@
+ REXCVAR_DEFINE_BOOL(ignore_thread_priorities, true, "Kernel",
+                     "Ignores game-specified thread priorities");
+ 
++REXCVAR_DEFINE_INT32(zero_delay_backoff_us, 100, "Kernel",
++                     "Switch: a guest thread that polls with Sleep(0) (KeDelayExecutionThread with a zero "
++                     "interval) more than 16 times in a row, each call within 200 us of the previous one, "
++                     "sleeps this many microseconds instead of yielding. 0 keeps yielding");
+ REXCVAR_DEFINE_BOOL(ignore_thread_affinities, true, "Kernel",
+                     "Ignores game-specified thread affinities");
+ 
+@@ -1072,11 +1077,30 @@ X_STATUS XThread::Delay(uint32_t processor_mode, uint32_t alertable, uint64_t in
+     }
+   } else {
+     if (timeout_ms == 0) {
++#if REX_PLATFORM_SWITCH
++      // A Sleep(0) polling loop (UE3 waiting for its rendering thread, which itself waits for the
++      // GPU) only yields to threads of the same priority: on the Switch's three cores it kept a
++      // whole core busy and starved the audio mixer (the sound crackled). Past a streak of polls,
++      // the thread really sleeps.
++      thread_local uint64_t last_zero_delay_us = 0;
++      thread_local uint32_t zero_delay_streak = 0;
++      const uint64_t now_us = uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
++          std::chrono::steady_clock::now().time_since_epoch()).count());
++      zero_delay_streak = now_us - last_zero_delay_us < 200 ? zero_delay_streak + 1 : 0;
++      const int32_t backoff_us = REXCVAR_GET(zero_delay_backoff_us);
++      if (backoff_us > 0 && zero_delay_streak > 16) {
++        rex::thread::Sleep(std::chrono::microseconds(backoff_us));
++      } else
++#endif
+       if (priority_ <= rex::thread::ThreadPriority::kBelowNormal) {
+         rex::thread::Sleep(std::chrono::microseconds(100));
+       } else {
+         rex::thread::MaybeYield();
+       }
++#if REX_PLATFORM_SWITCH
++      last_zero_delay_us = uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
++          std::chrono::steady_clock::now().time_since_epoch()).count());
++#endif
+     } else {
+       rex::thread::Sleep(std::chrono::milliseconds(timeout_ms));
+     }
 diff --git a/sdk/src/ui/rex_app.cpp b/sdk/src/ui/rex_app.cpp
 index d1b2a1c..357177f 100644
 --- a/sdk/src/ui/rex_app.cpp
@@ -840,3 +937,42 @@ index d1b2a1c..357177f 100644
      if (!config_.graphics) {
        // Fatal by design: no silent headless fallback.
        auto msg =
+diff --git a/sdk/src/ui/switch_perf.cpp b/sdk/src/ui/switch_perf.cpp
+index 6b3d30a..bdeb08e 100644
+--- a/sdk/src/ui/switch_perf.cpp
++++ b/sdk/src/ui/switch_perf.cpp
+@@ -804,9 +804,21 @@ void ProfilerMain(void*) {
+   // Invasive sampling is only enabled explicitly, for diagnostics.
+   // The normal mode keeps FPS, CPU and counters, without stopping the game.
+   bool sample_stacks = false;
+-  if (FILE* flag = std::fopen(StackFlagPath().c_str(), "r")) {
+-    sample_stacks = true;
+-    std::fclose(flag);
++  // The flag file must start with '1': nxlink can overwrite a file but not delete it, so writing "0"
++  // turns sampling off again without touching the SD card by hand.
++  // It is looked for in the log folder and next to the NRO (<NRO folder>/logs/rex/ minus "logs/rex/").
++  std::string flag_found = "ninguna";
++  std::string flag_paths[2] = {StackFlagPath(), StackFlagPath()};
++  if (const size_t cut = flag_paths[1].rfind("logs/rex/"); cut != std::string::npos) {
++    flag_paths[1].erase(cut, sizeof("logs/rex/") - 1);
++  }
++  for (const std::string& path : flag_paths) {
++    if (FILE* flag = std::fopen(path.c_str(), "r")) {
++      sample_stacks = std::fgetc(flag) == '1';
++      std::fclose(flag);
++      flag_found = path;
++      break;
++    }
+   }
+ 
+   u64 counters_last[kCounterCount]{};
+@@ -816,7 +828,8 @@ void ProfilerMain(void*) {
+   if (FILE* f = std::fopen(ReportPath().c_str(), "w")) {
+     std::fprintf(f, "imagen 0x%016" PRIx64 ", codigo hasta 0x%016" PRIx64 "\n\n", g_base,
+                  g_text_hi);
+-    std::fprintf(f, "Muestreo de pilas: %s\n", sample_stacks ? "activo (1 ms)" : "desactivado");
++    std::fprintf(f, "Muestreo de pilas: %s (bandera: %s)\n", sample_stacks ? "activo (1 ms)" : "desactivado",
++                 flag_found.c_str());
+     std::fclose(f);
+   }
+ 
