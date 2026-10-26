@@ -36,6 +36,7 @@
 
 #include "native_vertex_dedupe.h"
 #include "native_texture_pool.h"
+#include "scene_resolution.h"  // airborne_scene_resolution
 
 #include "graphics_settings.h"
 #if __has_include("nfsmw_nativo_resplandor_energia_spirv.h") && __has_include("nfsmw_nativo_resplandor_suave_spirv.h")
@@ -3281,6 +3282,35 @@ class VulkanDrawerImpl final : public VulkanDrawer {
     }
     if (framing_empty != 0) {
       return true;  // empty viewport or scissor: as before
+    }
+    // airborne_scene_resolution: how far right and down the frame draws in the screen-sized targets (guest pitch
+    // 1280, any sample count), so the output knows whether the scene corner holds the whole frame.
+    if ((r[gr::XE_GPU_REG_RB_SURFACE_INFO] & 0x3FFF) == 1280) {
+      const float vp_right = viewport.x + viewport.width;
+      const float vp_bottom = std::max(viewport.y, viewport.y + viewport.height);
+      const uint32_t right = std::min(uint32_t(std::max(0, scissor.offset.x + int32_t(scissor.extent.width))),
+                                      uint32_t(std::max(0.0f, std::ceil(vp_right))));
+      const uint32_t bottom = std::min(uint32_t(std::max(0, scissor.offset.y + int32_t(scissor.extent.height))),
+                                       uint32_t(std::max(0.0f, std::ceil(vp_bottom))));
+      const airborne::scene::Size scene = airborne::scene::Configured();
+      const float vp_top = std::min(viewport.y, viewport.y + viewport.height);
+      const bool scene_viewport = scene.width_px && std::abs(viewport.x) < 0.5f && std::abs(vp_top) < 0.5f &&
+                                  std::abs(viewport.width - float(scene.width_px)) < 0.5f &&
+                                  std::abs(std::abs(viewport.height) - float(scene.height_px)) < 0.5f;
+      airborne::scene::NoteDraw(right, bottom, scene_viewport);
+      if (scene.width_px && (right > scene.width_px || bottom > scene.height_px) && scene_outside_logged_ < 24) {
+        const uint64_t id = (uint64_t(uint32_t(p.vs->number)) << 32) | uint32_t(ps ? int(ps->number) : -1);
+        if (std::find(scene_outside_ids_.begin(), scene_outside_ids_.end(), id) == scene_outside_ids_.end()) {
+          scene_outside_ids_.push_back(id);
+          ++scene_outside_logged_;
+          REXLOG_INFO("[scene] draw outside the scene corner: VS n{} PS n{} type {} count {} surface {:08X} color0 "
+                      "{:08X} depth {:08X} edram mode {} -> {}x{} (viewport {}+{} x {}+{}, scissor {}+{} x {}+{})",
+                      p.vs->number, ps ? int(ps->number) : -1, type, num, r[gr::XE_GPU_REG_RB_SURFACE_INFO],
+                      r[gr::XE_GPU_REG_RB_COLOR_INFO], r[gr::XE_GPU_REG_RB_DEPTH_INFO], edram_mode, right, bottom,
+                      viewport.x, viewport.width, viewport.y, viewport.height, scissor.offset.x,
+                      scissor.extent.width, scissor.offset.y, scissor.extent.height);
+        }
+      }
     }
 
     uint32_t specialization = entry->specialization;
@@ -13050,6 +13080,9 @@ class VulkanDrawerImpl final : public VulkanDrawer {
   uint64_t sends_after_shadows_ = 0;         // for the report
   uint32_t pass_stats_ = UINT32_MAX;
   uint32_t draw_occlusion_warnings_ = 0;  // diagnostic of the query draws
+  // airborne_scene_resolution: the draws that keep a frame from being shown from the corner (logged once each).
+  std::vector<uint64_t> scene_outside_ids_;
+  uint32_t scene_outside_logged_ = 0;
   std::chrono::steady_clock::time_point last_draw_occlusion_warning_{};
   VkCommandBuffer commands_pass_ = VK_NULL_HANDLE;
   uint64_t key_pass_ = 0;

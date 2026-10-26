@@ -14,7 +14,7 @@
 // host registers.
 //
 // audio_native_mixer turns it on. Like the renderer's NEON index path, the first 2,000 calls (and then
-// 1 in 4,096) also run the original on a copy of dst and compare bit for bit; at the first difference
+// 1 in 4,096) also run the original on a copy of dst and compare bit for bit; at the third difference
 // the native path switches itself off for the rest of the session and the original's result is kept.
 
 #if defined(__GNUC__) && !defined(__clang__)
@@ -27,6 +27,10 @@
 #include <cmath>
 #include <cstring>
 #include <vector>
+
+#if defined(__aarch64__)
+#include <arm_neon.h>
+#endif
 
 #include <rex/cvar.h>
 #include <rex/hook.h>
@@ -73,6 +77,32 @@ void MixAddNative(PPCContext& ctx, uint8_t* base) {
     // FZ on ARM), so plain float arithmetic matches VMX128 and the loop vectorizes.
     ctx.fpscr.enableFlushMode();
     const float gain = float(ctx.f1.f64);
+#if defined(__aarch64__)
+    // GCC left the loop below scalar (one float per iteration, 25 % of the audio thread in Adanti on the
+    // console, build c68116de654a). Same arithmetic four floats at a time: separate fmul and fadd, both under
+    // the FPCR's FZ like the scalar instructions; count is a multiple of 64 here.
+    const float32x4_t g = vdupq_n_f32(gain);
+    for (uint32_t i = 0; i < count; i += 16) {
+      uint8_t* dp = d + size_t(i) * 4;
+      const uint8_t* sp = s + size_t(i) * 4;
+      uint8x16x4_t sv = vld1q_u8_x4(sp);
+      uint8x16x4_t dv = vld1q_u8_x4(dp);
+      float32x4_t r0 = vaddq_f32(vmulq_f32(g, vreinterpretq_f32_u8(vrev32q_u8(sv.val[0]))),
+                                 vreinterpretq_f32_u8(vrev32q_u8(dv.val[0])));
+      float32x4_t r1 = vaddq_f32(vmulq_f32(g, vreinterpretq_f32_u8(vrev32q_u8(sv.val[1]))),
+                                 vreinterpretq_f32_u8(vrev32q_u8(dv.val[1])));
+      float32x4_t r2 = vaddq_f32(vmulq_f32(g, vreinterpretq_f32_u8(vrev32q_u8(sv.val[2]))),
+                                 vreinterpretq_f32_u8(vrev32q_u8(dv.val[2])));
+      float32x4_t r3 = vaddq_f32(vmulq_f32(g, vreinterpretq_f32_u8(vrev32q_u8(sv.val[3]))),
+                                 vreinterpretq_f32_u8(vrev32q_u8(dv.val[3])));
+      dv.val[0] = vrev32q_u8(vreinterpretq_u8_f32(r0));
+      dv.val[1] = vrev32q_u8(vreinterpretq_u8_f32(r1));
+      dv.val[2] = vrev32q_u8(vreinterpretq_u8_f32(r2));
+      dv.val[3] = vrev32q_u8(vreinterpretq_u8_f32(r3));
+      vst1q_u8_x4(dp, dv);
+    }
+    return;
+#endif
     for (uint32_t i = 0; i < count; ++i) {
       const float product = gain * LoadBe(s + i * 4);
       StoreBe(d + i * 4, product + LoadBe(d + i * 4));
@@ -104,8 +134,10 @@ REX_HOOK_RAW(sub_82989E20) {
   const uint32_t count = ctx.r6.u32;
   uint8_t* d = REX_RAW_ADDR(ctx.r3.u32);
   const size_t bytes = size_t(count) * 4;
-  thread_local std::vector<uint8_t> before, native;
+  const uint8_t* s = REX_RAW_ADDR(ctx.r4.u32);
+  thread_local std::vector<uint8_t> before, native, src_before;
   before.assign(d, d + bytes);
+  src_before.assign(s, s + bytes);
   PPCContext saved = ctx;
   MixAddNative(ctx, base);
   native.assign(d, d + bytes);
@@ -113,17 +145,35 @@ REX_HOOK_RAW(sub_82989E20) {
   ctx = saved;
   __imp__sub_82989E20(ctx, base);
   const uint64_t checked = g_mixer_checked.fetch_add(1, std::memory_order_relaxed) + 1;
+  if (bytes && std::memcmp(native.data(), d, bytes) != 0 && std::memcmp(src_before.data(), s, bytes) != 0) {
+    // Another thread wrote src while the two ran (the decoder fills the next block): not a difference
+    // of the kernels. The original's result stays; the native path stays on.
+    static std::atomic<uint32_t> races{0};
+    if (races.fetch_add(1, std::memory_order_relaxed) < 4) {
+      REXLOG_WARN("[audio] native mix-add check: src changed during the check (call {}); ignored", n);
+    }
+    return;
+  }
   if (bytes && std::memcmp(native.data(), d, bytes) != 0) {
     size_t at = 0;
     while (at + 4 <= bytes && std::memcmp(native.data() + at, d + at, 4) == 0) {
       at += 4;
     }
-    g_mixer_off.store(true, std::memory_order_relaxed);
+    // On the console (build 5dd45df) one check in ~270 differed by 1 ULP in one float, in either direction,
+    // 35 s in: a write by another thread looks the same. A kernel difference repeats within a few checks
+    // (about 8 a second), so the native path goes off at the third.
+    static std::atomic<uint32_t> differences{0};
+    const uint32_t seen = differences.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (seen >= 3) g_mixer_off.store(true, std::memory_order_relaxed);
     REXLOG_ERROR("[audio] native mix-add DIFFERS from the original (call {}, {} floats, {} path, first at float "
-                 "{}: native {:08X} original {:08X}); native mixer off for the session",
+                 "{}: native {:08X} original {:08X}; src {:08X} dst before {:08X} gain {:016X}, guest fpscr {:08X} "
+                 "host {:08X}); difference {} of 3, {}",
                  n, count, ((saved.r3.u32 | saved.r4.u32) & 0x7F) == 0 && (count & 0x3F) == 0 ? "vector" : "scalar",
                  at / 4, __builtin_bswap32(*reinterpret_cast<const uint32_t*>(native.data() + at)),
-                 __builtin_bswap32(*reinterpret_cast<const uint32_t*>(d + at)));
+                 __builtin_bswap32(*reinterpret_cast<const uint32_t*>(d + at)),
+                 __builtin_bswap32(*reinterpret_cast<const uint32_t*>(src_before.data() + at)),
+                 __builtin_bswap32(*reinterpret_cast<const uint32_t*>(before.data() + at)), saved.f1.u64,
+                 saved.fpscr.csr, ctx.fpscr.getcsr(), seen, seen >= 3 ? "native mixer off for the session" : "native stays on");
     return;
   }
   if (checked == 2000) {

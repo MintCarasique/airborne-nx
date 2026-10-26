@@ -38,8 +38,16 @@ if (-not $SkipSdk) {
     $patch = Join-Path $root 'tools\patches\rexglue-airborne.patch'
     $touched = git -C $ref apply --numstat $patch | ForEach-Object { ($_ -split "`t")[2] }
     if ($LASTEXITCODE -ne 0) { throw "cannot read $patch" }
-    git -C $ref checkout -- @touched
-    git -C $ref apply $patch
+    # Files the patch creates are not in the reference commit: remove them so it can create them again.
+    # (ls-tree, not cat-file -e: Windows PowerShell turns a native command's stderr into an error here.)
+    $existing = @($touched | Where-Object { git -C $ref ls-tree --name-only HEAD -- $_ })
+    $created = @($touched | Where-Object { $existing -notcontains $_ })
+    if ($existing.Count) { git -C $ref checkout -- @existing }
+    foreach ($file in $created) {
+        git -C $ref rm --cached -q --ignore-unmatch -- $file
+        Remove-Item (Join-Path $ref $file) -Force -ErrorAction SilentlyContinue
+    }
+    git -C $ref apply --intent-to-add $patch
     if ($LASTEXITCODE -ne 0) { throw "cannot apply $patch" }
     if (-not (Test-Path (Join-Path $thirdparty 'fmt'))) {
         python (Join-Path $ref 'tools\fetch_thirdparty.py')

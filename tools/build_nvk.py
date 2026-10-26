@@ -24,6 +24,17 @@ def main():
     revision=subprocess.check_output(['git','-C',str(mesa),'rev-parse','HEAD'],text=True).strip()
     if revision!=REVISION or subprocess.check_output(['git','-C',str(mesa),'status','--porcelain'],text=True).strip():
         raise RuntimeError('Mesa revision/clean checkout mismatch')
+    # Our changes to Mesa (tools/patches/mesa-airborne.patch) go on the clean pinned checkout for the build and
+    # come off again afterwards, so the checkout stays clean.
+    patch=ROOT/'tools/patches/mesa-airborne.patch'
+    subprocess.run(['git','-C',str(mesa),'apply',str(patch)],check=True)
+    try:
+        build(options,mesa,revision,hashlib.sha256(patch.read_bytes()).hexdigest())
+    finally:
+        subprocess.run(['git','-C',str(mesa),'checkout','--','.'],check=True)
+
+
+def build(options,mesa,revision,patch_sha256):
     linux_root=subprocess.check_output(['wsl','--exec','wslpath','-a',str(ROOT)],text=True).strip()
     sdk=linux_root+'/tools/toolchain/nx-sdk/opt/devkitpro'
     source=linux_root+'/tools/mesa-switch'
@@ -82,6 +93,7 @@ def main():
                              sha256=hashlib.sha256(archive.read_bytes()).hexdigest()),
                 source='https://github.com/danfromtico/mesa-switch',native_build=native,cross_build=cross,
                 cross_config_sha256=hashlib.sha256((out/'cross.ini').read_bytes()).hexdigest(),
+                patch_sha256=patch_sha256,
                 script_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
     (ROOT/'analysis/nvk_build_summary.json').write_text(json.dumps(report,indent=2),encoding='utf-8')
     print('Built Horizon Vulkan dependency:',archive)

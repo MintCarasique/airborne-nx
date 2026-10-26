@@ -35,7 +35,9 @@ namespace {
 void SetStackSamplingFlag() {
   const std::string flag = std::string(RexSwitchLogDir()) + "perfil_pilas.flag";
   if (REXCVAR_GET(profile_stacks)) {
+    // switch_perf.cpp samples only when the file starts with '1' (an empty one left sampling off).
     if (FILE* f = std::fopen(flag.c_str(), "w")) {
+      std::fputs("1", f);
       std::fclose(f);
       REXLOG_INFO("[perf] stack sampling on ({})", flag);
     } else {

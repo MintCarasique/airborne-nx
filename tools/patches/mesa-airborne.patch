@@ -1,0 +1,23 @@
+diff --git a/src/nouveau/horizon/nouveau_horizon_channel.c b/src/nouveau/horizon/nouveau_horizon_channel.c
+index 512a3f7..06c6e91 100644
+--- a/src/nouveau/horizon/nouveau_horizon_channel.c
++++ b/src/nouveau/horizon/nouveau_horizon_channel.c
+@@ -1852,9 +1852,17 @@ nouveau_horizon_channel_exec_locked(
+    const struct nouveau_horizon_exec *execs)
+ {
+    const uint32_t acquire_entries = channel->cache_acquire_emitted ? 0 : 2;
++   /* AirborneNX (from masseffect-nx): keep room for the submission tail.
++    * submit_locked reserves its fence and report entries (up to 2) plus a
++    * prepended cross-channel wait (1) on top of the final skid. Reserving
++    * only the skid here let a batch fill the GPFIFO to exactly the skid, and
++    * the following submit then failed with NO_SPACE ("channel submit failed:
++    * no queue space"), which nvk turns into a lost device (Mass Effect: after
++    * about 4.5 minutes).
++    */
+    enum nouveau_horizon_status status =
+       nouveau_horizon_channel_reserve_entries_locked(
+-         channel, exec_count + acquire_entries, 0);
++         channel, exec_count + acquire_entries, 3);
+    if (status != NOUVEAU_HORIZON_SUCCESS)
+       goto done;
+ 

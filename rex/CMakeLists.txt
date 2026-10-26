@@ -10,6 +10,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include(generated/rexglue.cmake)
 
+# No floating-point contraction in the game code either. The SDK sets it in its own directory only, so the
+# generated code (airborne_recomp) was built with GCC's default -ffp-contract=fast: on the console the native
+# mixer's self-check found vmulfp128 + vaddfp fused into one FMA (one rounding instead of the Xenon's two,
+# 1 ULP off; build 5dd45df, Adanti).
+add_compile_options(-ffp-contract=off)
+
 # Sources
 set(AIRBORNE_SOURCES
     src/main.cpp
@@ -18,6 +24,7 @@ set(AIRBORNE_SOURCES
     src/occlusion_queries.cpp
     src/gpu_wait.cpp
     src/audio_mixer.cpp
+    src/render_queue.cpp
     src/renderdoc_trigger.cpp
 )
 
@@ -33,6 +40,15 @@ else()
 endif()
 
 rexglue_setup_target(airborne GPU_PLUGINS xenos)
+
+# The build ID of the startup log line (cmake/build_id.cmake): the git commit, -dirty with changes.
+set(AIRBORNE_BUILD_ID_DIR "${CMAKE_CURRENT_BINARY_DIR}/build_id")
+add_custom_target(airborne_build_id
+    COMMAND ${CMAKE_COMMAND} "-DROOT=${CMAKE_CURRENT_SOURCE_DIR}/.."
+            "-DOUT=${AIRBORNE_BUILD_ID_DIR}/build_id.h" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_id.cmake"
+    BYPRODUCTS "${AIRBORNE_BUILD_ID_DIR}/build_id.h")
+add_dependencies(airborne airborne_build_id)
+target_include_directories(airborne PRIVATE "${AIRBORNE_BUILD_ID_DIR}")
 
 # The native renderer uses SDK internals (src/core/threading_switch.h,
 # graphics registers) and xxHash, which the runtime links privately.

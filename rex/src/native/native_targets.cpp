@@ -29,6 +29,7 @@
 #include "stall_waits.h"
 #include "native_shaders.h"  // Samplers of the PS (nfsmw_nativo_diag_lectores_s)
 #include "reflection_on_demand.h"  // road reflection only when it is read
+#include "scene_resolution.h"  // airborne_scene_resolution
 
 #include "graphics_settings.h"
 
@@ -2075,6 +2076,7 @@ class VulkanTargets final : public NativeTargets, public TargetsContext {
   bool Present(rex::ui::Presenter* presenter_ptr, const SwapTexture& swap, uint32_t width_px,
                  uint32_t height_px) override {
     nfsmw::demand_reflection::TrackSwap();  // nfsmw_reflejo_bajo_demanda
+    const airborne::scene::FrameBounds scene_bounds = airborne::scene::TakeFrame();  // airborne_scene_resolution
     // The per-draw diagnostic window opens here, on the PM4 ring thread, which is the one that records the
     // draws. Inside the paint call it would be another thread and the window would catch an arbitrary piece
     // of the frame (33 of 500 shadow draws were measured).
@@ -2306,8 +2308,21 @@ class VulkanTargets final : public NativeTargets, public TargetsContext {
       return false;
     }
     Resolved& resolved = it->second;
-    const uint32_t w = std::min(width_px ? width_px : resolved.img.width_px, resolved.img.width_px);
-    const uint32_t h = std::min(height_px ? height_px : resolved.img.height_px, resolved.img.height_px);
+    uint32_t w = std::min(width_px ? width_px : resolved.img.width_px, resolved.img.width_px);
+    uint32_t h = std::min(height_px ? height_px : resolved.img.height_px, resolved.img.height_px);
+    // airborne_scene_resolution: only the corner the game drew this frame into, when nothing was drawn outside it.
+    if (const airborne::scene::Size scene = airborne::scene::Configured(); scene.width_px) {
+      const bool corner = scene_bounds.scene_viewport;
+      if (corner) {
+        w = std::min(w, scene.width_px);
+        h = std::min(h, scene.height_px);
+        ++scene_corner_frames_;
+      } else {
+        ++scene_whole_frames_;
+        scene_whole_right_ = std::max(scene_whole_right_, scene_bounds.right);
+        scene_whole_bottom_ = std::max(scene_whole_bottom_, scene_bounds.bottom);
+      }
+    }
     bool painted = false;
     // How much of RefreshGuestOutput belongs to the SDK (before and after the callback) and how much to
     // PintarSalida.
@@ -5644,6 +5659,14 @@ class VulkanTargets final : public NativeTargets, public TargetsContext {
                            front_disabled_ ? " *** APAGADO POR LA GUARDIA ***" : " (0 = la imagen es la misma)");
       front_saved_pixels_previous_ = front_saved_pixels_;
     }
+    if (const airborne::scene::Size scene = airborne::scene::Configured(); scene.width_px) {
+      NFSMW_RING_REPORT("[scene] airborne_scene_resolution {}x{}: {} frames shown from the corner, {} whole (no draw with the scene "
+                        "viewport; their draws reached {}x{})",
+                        scene.width_px, scene.height_px, scene_corner_frames_, scene_whole_frames_,
+                        scene_whole_right_, scene_whole_bottom_);
+      scene_corner_frames_ = scene_whole_frames_ = 0;
+      scene_whole_right_ = scene_whole_bottom_ = 0;
+    }
     ShadowMinReport();  // nfsmw_nativo_sombra_minimo
     ClearsReport();  // nfsmw_nativo_diag_borrados, every 20 s
     copies_report_presented_ = presented_;
@@ -6095,6 +6118,9 @@ class VulkanTargets final : public NativeTargets, public TargetsContext {
   uint64_t job_sends_ = 0, job_lock_ns_ = 0, job_submit_ns_ = 0;
   uint64_t output_sends_ = 0, output_lock_ns_ = 0, output_submit_ns_ = 0;
   uint64_t refreshes_ = 0, before_call_ns_ = 0, in_call_ns_ = 0, after_call_ns_ = 0;
+  // airborne_scene_resolution, per report.
+  uint64_t scene_corner_frames_ = 0, scene_whole_frames_ = 0;
+  uint32_t scene_whole_right_ = 0, scene_whole_bottom_ = 0;
   static uint64_t Ns(std::chrono::steady_clock::time_point from, std::chrono::steady_clock::time_point hasta) {
     return hasta > from ? uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(hasta - from).count()) : 0;
   }

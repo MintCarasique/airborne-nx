@@ -26,6 +26,43 @@ volatile_vectors_as_local = true
 # Off: measured on the PC (Adanti, 60-90 s, active samples) it changed nothing.
 volatile_as_local = false
 
+# Generator passes of sa2-nx and masseffect-nx (their SDK's codegen, merged into
+# tools/patches/rexglue-airborne.patch). They change how the C++ is written,
+# not what the guest sees; both ports checked each one with unit tests and
+# lockstep runs, and measured them on the console (Mass Effect: -10 % main
+# thread for the first four, sa2-nx: about 15 % for the whole set).
+#   elide_lr_stores   no `ctx.lr = <return>` before calls. No hook of ours
+#                     reads ctx.lr (the one in native_hooks.cpp is compiled
+#                     out), so lr_keep_returns stays empty.
+#   dform_disp_split  D-form loads/stores as base + zext(reg) + disp.
+#   fctiwz/fcti_inline  float to integer as fcvtzs plus a NaN select.
+#   fp_*              float moves, compares and copies without switching the
+#                     host float mode when no mode can matter.
+#   rotate_word_shifts  rlwinm/rlwimi as the plain shift or extract.
+#   div_inline        divw/divwu as the host instruction, no branch.
+#   skip_msr, reserved_as_local  the guest atomic sequences without the
+#                     mfmsr/mtmsrd fences and the global lock, the lwarx
+#                     reservation in a local.
+# Not taken: non_argument_as_local (needs share_registers marks for the
+# exception funclets that take their frame in r12: tools/read_before_write.py
+# of masseffect-nx lists ~100 here), args_in_registers (no gain in Mass
+# Effect), dcbt_prefetch (no emitter in this generator).
+elide_lr_stores = true
+lr_keep_returns = []
+dform_disp_split = true
+fctiwz_inline = true
+fcti_inline = true
+fp_moves_modeless = true
+fp_compares_modeless = true
+fp_mode_lookahead = true
+fp_mode_lookahead_past_branch = false
+fp_copy_pairs = true
+fp_copy_forwarding = true
+rotate_word_shifts = true
+div_inline = true
+skip_msr = true
+reserved_as_local = true
+
 # ----------------------------------------------------------------------------
 #  FUNCTIONS DECLARED BY HAND
 #

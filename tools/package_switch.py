@@ -78,9 +78,15 @@ if old.exists():
 
 # 3. Switch config overrides (read from the NRO's folder).
 (bundle / 'airborne.toml').write_text(
-    '# AirborneNX Switch overrides (read from the NRO folder).\n'
+    '# AirborneNX Switch overrides (read from the NRO folder). Command-line\n'
+    '# arguments (nxlink) still win over these.\n'
     'log_file = "sdmc:/switch/airborne-nx/result.txt"\n'
-    'log_level = "info"\n', encoding='utf-8')
+    'log_level = "info"\n'
+    '# The native Vulkan renderer (the Xenos emulation is far too slow here).\n'
+    'nfsmw_renderizador = "nativo"\n'
+    '# Scene resolution: 1280x720 (the Xbox 360\'s), 1120x624, 1040x576,\n'
+    '# 960x544, 880x496 or 800x448; smaller ones are faster and softer.\n'
+    'airborne_scene_resolution = "1280x720"\n', encoding='utf-8')
 
 # 4. Build ID and README.
 nro_sha = sha256(bundle / 'airborne-nx.nro')
@@ -90,8 +96,8 @@ build_id = f'{git("rev-parse", "--short", "HEAD")}{dirty}+{nro_sha[:12]}'
 Сборка: {build_id}
 Дата: {date.today().isoformat()}
 
-Это первая сборка на рантайме ReXGlue с эмуляцией GPU Xenos поверх NVK.
-Ожидается, что она будет медленной. Язык игры: немецкий.
+Рантайм ReXGlue, нативный рендерер на Vulkan (NVK). Язык игры: немецкий.
+Разрешение сцены задаётся в airborne.toml (airborne_scene_resolution).
 
 Установка (SD-карта):
   /switch/airborne-nx/airborne-nx.nro      - приложение
