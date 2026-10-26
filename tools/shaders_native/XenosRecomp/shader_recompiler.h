@@ -40,10 +40,12 @@ struct ShaderRecompiler : StringBuffer
     // They are discovered while translating the body, so their declarations are inserted
     // into `out` afterwards at the recorded positions.
     std::set<uint32_t> undeclaredSamplers;
+    std::map<uint32_t, TextureDimension> undeclaredSamplerDimensions; // AirborneNX: for the deko3d declarations
     std::set<uint32_t> literalConstants; // AirborneNX: cN locals from the definition table
     std::map<uint32_t, std::string> syntheticVertexInputs; // fetch address -> variable name
     bool usesMemExportDummy = false;
     size_t samplerDefsPos = 0;
+    size_t dkSamplerDefsPos = 0; // AirborneNX: the same, in the NFSMW_DEKO3D block
     size_t vertexSignaturePos = 0;
     size_t bodyStartPos = 0;
 
@@ -242,4 +244,11 @@ struct ShaderRecompiler : StringBuffer
     void recompile(const AluInstruction& instr);
 
     void recompile(const uint8_t* shaderData, const std::string_view& include);
+
+#ifdef NFSMW_RECOMP
+    // The #else of the constants block under NFSMW_DEKO3D: the float constants from the UBOs only, and each
+    // sampler register as a texture and a sampler at fixed bindings (shader_common.h). Text only: the maps
+    // above are filled by the Vulkan block.
+    void printDeko3dConstants(const ConstantTableContainer* constantTableContainer);
+#endif
 };

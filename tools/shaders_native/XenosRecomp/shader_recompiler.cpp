@@ -312,6 +312,7 @@ void ShaderRecompiler::recompile(const TextureFetchInstruction& instr, bool bicu
         constNamePtr = constName.c_str();
         // AirborneNX: sampler not in the constant table; its defines are added at the end.
         undeclaredSamplers.insert(instr.constIndex);
+        undeclaredSamplerDimensions.emplace(instr.constIndex, instr.dimension);
     }
 
 #ifdef UNLEASHED_RECOMP
@@ -1198,6 +1199,87 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
     cerrarSiEscribePredicado(marcaPredicado);
 }
 
+#ifdef NFSMW_RECOMP
+void ShaderRecompiler::printDeko3dConstants(const ConstantTableContainer* constantTableContainer)
+{
+    for (uint32_t i = 0; i < constantTableContainer->constantTable.constants; i++)
+    {
+        const auto constantInfo = reinterpret_cast<const ConstantInfo*>(
+            constantTableData + constantTableContainer->constantTable.constantInfo + i * sizeof(ConstantInfo));
+
+        const char* constantName = reinterpret_cast<const char*>(constantTableData + constantInfo->name);
+
+        switch (constantInfo->registerSet)
+        {
+        case RegisterSet::Float4:
+        {
+            const char* shaderName = isPixelShader ? "Pixel" : "Vertex";
+
+            if (constantInfo->registerCount > 1)
+            {
+                uint32_t tailCount = (isPixelShader ? 224 : 256) - constantInfo->registerIndex;
+                println("#define {}(INDEX) select((INDEX) < {}, g_Ubo{}.v[{} + min(INDEX, {})], 0.0)",
+                    constantName, tailCount, shaderName, constantInfo->registerIndex.get(), tailCount - 1);
+            }
+            else
+            {
+                println("#define {} g_Ubo{}.v[{}]", constantName, shaderName, constantInfo->registerIndex.get());
+            }
+            break;
+        }
+
+        case RegisterSet::Sampler:
+        {
+            // One texture per register with the type the constant table gives it (as the renderer reads it:
+            // nfsmw_nativo_shaders.cpp), at binding R; its sampler at binding R too (another set: GLSL's
+            // combined sampler takes the texture's binding, nfsmw_dk_glsl.cpp). deko3d has 32 texture
+            // bindings per stage: 0-15 for the registers and 16-31 for the pairs of the 2D ones.
+            const uint32_t reg = constantInfo->registerIndex;
+            const auto typeInfo = reinterpret_cast<const TypeInfo*>(constantTableData + constantInfo->typeInfo);
+            const char* dimension = "2D";
+            switch (typeInfo->parameterType)
+            {
+            case ParameterType::Texture3D:
+            case ParameterType::Sampler3D:
+                dimension = "3D";
+                break;
+            case ParameterType::TextureCube:
+            case ParameterType::SamplerCube:
+                dimension = "Cube";
+                break;
+            default:
+                break;
+            }
+
+            if (reg >= 16)
+                println("#error \"{}: sampler register {} has no deko3d binding (0-15)\"", constantName, reg);
+
+            println("[[vk::binding({}, 0)]] Texture{}<float4> {}_Textura;", reg, dimension, constantName);
+            println("[[vk::binding({}, 1)]] SamplerState {}_Muestreo;", reg, constantName);
+            println("#define {0}_Texture{1}DescriptorIndex {0}_Textura", constantName, dimension);
+            println("#define {0}_SamplerDescriptorIndex {0}_Muestreo", constantName);
+            if (strcmp(dimension, "2D") == 0)
+            {
+                // tfetch2DSombraMin's pair arrives in the 3D index word of the same register.
+                println("[[vk::binding({}, 0)]] Texture2D<float4> {}_Pareja;", 16 + reg, constantName);
+                println("#define {0}_Texture3DDescriptorIndex {0}_Pareja", constantName);
+            }
+
+            const uint32_t invBase = 360 + reg * 8;
+            println("#define {}_InvTamano float2(NFSMW_COMPARTIDA_FLOAT({}), NFSMW_COMPARTIDA_FLOAT({}))",
+                constantName, invBase, invBase + 4);
+            // AirborneNX: per-texture value scale, float at 488 + slot * 4 (as in the Vulkan block).
+            println("#define {}_Escala NFSMW_COMPARTIDA_FLOAT({})", constantName, 488 + reg * 4);
+            break;
+        }
+
+        default:
+            break;
+        }
+    }
+}
+#endif
+
 void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_view& include)
 {
     const auto shaderContainer = reinterpret_cast<const ShaderContainer*>(shaderData);
@@ -1218,6 +1300,12 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
     constantTableData = reinterpret_cast<const uint8_t*>(&constantTableContainer->constantTable);
 
     out += "#ifdef __spirv__\n\n";
+
+#ifdef NFSMW_RECOMP
+    // NFSMW_DEKO3D (shader_common.h): the same constants for deko3d, written after this block. Without the
+    // define DXC sees exactly what it saw before that mode existed.
+    out += "#ifndef NFSMW_DEKO3D\n\n";
+#endif
 
 #ifdef UNLEASHED_RECOMP
     bool isMetaInstancer = false;
@@ -1305,6 +1393,13 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
     }
 
     samplerDefsPos = out.size(); // AirborneNX: undeclared sampler defines go here
+#ifdef NFSMW_RECOMP
+    out += "\n#else\n\n";
+    printDeko3dConstants(constantTableContainer);
+    dkSamplerDefsPos = out.size(); // AirborneNX
+    out += "\n#endif\n";
+#endif
+
     out += "\n#else\n\n";
 
     println("cbuffer {}ShaderConstants : register(b{}, space4)", isPixelShader ? "Pixel" : "Vertex", isPixelShader ? 1 : 0);
@@ -2127,6 +2222,30 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
 
     if (!undeclaredSamplers.empty())
     {
+#ifdef NFSMW_RECOMP
+        // The deko3d block comes after the Vulkan one: insert it first so samplerDefsPos stays valid.
+        std::string dk;
+        for (uint32_t idx : undeclaredSamplers)
+        {
+            const TextureDimension dim = undeclaredSamplerDimensions.at(idx);
+            const char* dimension = dim == TextureDimension::Texture3D ? "3D" : dim == TextureDimension::TextureCube ? "Cube" : "2D";
+            if (idx >= 16)
+                dk += fmt::format("#error \"s{}: sampler register {} has no deko3d binding (0-15)\"\n", idx, idx);
+            dk += fmt::format("[[vk::binding({0}, 0)]] Texture{1}<float4> s{0}_Textura;\n", idx, dimension);
+            dk += fmt::format("[[vk::binding({0}, 1)]] SamplerState s{0}_Muestreo;\n", idx);
+            dk += fmt::format("#define s{0}_Texture{1}DescriptorIndex s{0}_Textura\n", idx, dimension);
+            dk += fmt::format("#define s{0}_SamplerDescriptorIndex s{0}_Muestreo\n", idx);
+            if (strcmp(dimension, "2D") == 0)
+            {
+                dk += fmt::format("[[vk::binding({}, 0)]] Texture2D<float4> s{}_Pareja;\n", 16 + idx, idx);
+                dk += fmt::format("#define s{0}_Texture3DDescriptorIndex s{0}_Pareja\n", idx);
+            }
+            const uint32_t invBase = 360 + idx * 8;
+            dk += fmt::format("#define s{}_InvTamano float2(NFSMW_COMPARTIDA_FLOAT({}), NFSMW_COMPARTIDA_FLOAT({}))\n", idx, invBase, invBase + 4);
+            dk += fmt::format("#define s{}_Escala NFSMW_COMPARTIDA_FLOAT({})\n", idx, 488 + idx * 4);
+        }
+        out.insert(dkSamplerDefsPos, dk);
+#endif
         std::string defs;
         for (uint32_t idx : undeclaredSamplers)
         {
