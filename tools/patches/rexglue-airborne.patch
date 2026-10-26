@@ -1,3 +1,121 @@
+diff --git a/sdk/CMakeLists.txt b/sdk/CMakeLists.txt
+index c460dd3..a13aca1 100644
+--- a/sdk/CMakeLists.txt
++++ b/sdk/CMakeLists.txt
+@@ -24,6 +24,9 @@ option(REXGLUE_ENABLE_FIDELITYFX "Enable optional AMD FidelityFX integration (ex
+ option(REXGLUE_ENABLE_TRACY                "Enable Tracy profiler integration" ON)
+ option(REXGLUE_ENABLE_PERF_COUNTERS        "Enable lightweight perf counter registry and overlay" ON)
+ option(REXGLUE_PLATFORM_SWITCH             "Build for Nintendo Switch (devkitA64 + libnx; set by the toolchain file)" OFF)
++# nfsmw: the Switch build for the title's own deko3d renderer (docs/HowToDeko3d.md): no Vulkan, no NVK and no
++# GPU plugin in the SDK; the title brings its graphics system, presenter and UI drawer.
++option(REXGLUE_SWITCH_DEKO3D               "Switch: build for a title-provided deko3d renderer, without Vulkan or NVK" OFF)
+ # Propagate profiling defines globally (compiled out in Release)
+ if(REXGLUE_ENABLE_TRACY)
+     add_compile_definitions($<$<NOT:$<CONFIG:Release>>:REXGLUE_ENABLE_PROFILING>)
+@@ -43,7 +46,13 @@ else()
+     option(REXGLUE_USE_VULKAN "Enable Vulkan graphics backend" ON)
+ endif()
+ 
+-if(NOT REXGLUE_USE_D3D12 AND NOT REXGLUE_USE_VULKAN)
++if(REXGLUE_SWITCH_DEKO3D AND NOT REXGLUE_PLATFORM_SWITCH)
++    message(FATAL_ERROR "REXGLUE_SWITCH_DEKO3D is for the Nintendo Switch build only")
++endif()
++if(REXGLUE_SWITCH_DEKO3D AND REXGLUE_USE_VULKAN)
++    message(FATAL_ERROR "REXGLUE_SWITCH_DEKO3D needs REXGLUE_USE_VULKAN=OFF (switch-devkitA64.cmake sets it)")
++endif()
++if(NOT REXGLUE_USE_D3D12 AND NOT REXGLUE_USE_VULKAN AND NOT REXGLUE_SWITCH_DEKO3D)
+     message(FATAL_ERROR "At least one graphics backend must be enabled (REXGLUE_USE_D3D12 or REXGLUE_USE_VULKAN)")
+ endif()
+ 
+@@ -204,9 +213,12 @@ add_compile_definitions(REXGLUE_BUILD_CONFIG="$<CONFIG>")
+ include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/rex_pch.cmake)
+ 
+ include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/rex_version.cmake)
++# nfsmw: this SDK is a folder of the port's repository, whose tags (v1.0.0, ...) are the port's releases, not
++# the SDK's: they made the floor check fail. The version is the project's (0.10).
+ rex_resolve_version(REXGLUE_FULL_VERSION
+     FLOOR_MAJOR ${PROJECT_VERSION_MAJOR}
+-    FLOOR_MINOR ${PROJECT_VERSION_MINOR})
++    FLOOR_MINOR ${PROJECT_VERSION_MINOR}
++    NO_GIT)
+ 
+ # Strip the -id trailer (if any) for the numeric-only version.
+ string(REGEX REPLACE "-.*$" "" REXGLUE_NUMERIC_VERSION "${REXGLUE_FULL_VERSION}")
+diff --git a/sdk/cmake/rexglue_switch.cmake b/sdk/cmake/rexglue_switch.cmake
+index e428edf..8fa18a3 100644
+--- a/sdk/cmake/rexglue_switch.cmake
++++ b/sdk/cmake/rexglue_switch.cmake
+@@ -7,13 +7,31 @@
+ #       packages <target>.nro next to the executable
+ #
+ # Requires the switch-devkitA64.cmake toolchain (DEVKITPRO, compiler, specs) and
+-# REXGLUE_SWITCH_NVK_SDK pointing at the Mesa Horizon SDK.
++# REXGLUE_SWITCH_NVK_SDK pointing at the Mesa Horizon SDK. With
++# REXGLUE_SWITCH_DEKO3D the title brings a deko3d renderer instead: no Mesa SDK,
++# no GPU plugin, and deko3d (devkitPro's package) is linked.
+ #==========================================================
+ include_guard(GLOBAL)
+ 
+ set(REXGLUE_SWITCH_NVK_SDK "" CACHE PATH
+     "portlibs/switch directory of the Mesa Horizon SDK (static NVK driver)")
+-if(NOT EXISTS "${REXGLUE_SWITCH_NVK_SDK}/lib/libvulkan.a")
++option(REXGLUE_SWITCH_DEKO3D_DEBUG
++    "deko3d build: link deko3d's debug library (libdeko3dd: every call checked, readable errors)" OFF)
++if(REXGLUE_SWITCH_DEKO3D)
++    # The GPU library of the title: deko3d. rex::switch_gpu is what the title links.
++    if(NOT TARGET rex::switch_gpu)
++        add_library(rexglue_switch_gpu INTERFACE)
++        add_library(rex::switch_gpu ALIAS rexglue_switch_gpu)
++        if(REXGLUE_SWITCH_DEKO3D_DEBUG)
++            set(_deko3d deko3dd)
++        else()
++            set(_deko3d deko3d)
++        endif()
++        target_link_directories(rexglue_switch_gpu INTERFACE "${DEVKITPRO}/libnx/lib")
++        target_link_libraries(rexglue_switch_gpu INTERFACE ${_deko3d} nx stdc++ m)
++        target_link_options(rexglue_switch_gpu INTERFACE -pthread)
++    endif()
++elseif(NOT EXISTS "${REXGLUE_SWITCH_NVK_SDK}/lib/libvulkan.a")
+     message(FATAL_ERROR
+         "REXGLUE_SWITCH_NVK_SDK must point at <mesa-...-horizon-sdk>/opt/devkitpro/portlibs/switch "
+         "(no lib/libvulkan.a under '${REXGLUE_SWITCH_NVK_SDK}')")
+@@ -24,9 +42,10 @@ endif()
+ # instead; the NVIDIA CUBIN parser that uses libelf never runs on Switch.
+ # Listed twice for archive rescanning, as the Mesa config does without
+ # LINK_GROUP support.
+-if(NOT TARGET rex::nvk)
++if(NOT REXGLUE_SWITCH_DEKO3D AND NOT TARGET rex::nvk)
+     add_library(rexglue_switch_nvk INTERFACE)
+     add_library(rex::nvk ALIAS rexglue_switch_nvk)
++    add_library(rex::switch_gpu ALIAS rexglue_switch_nvk)
+     target_link_directories(rexglue_switch_nvk INTERFACE
+         "${REXGLUE_SWITCH_NVK_SDK}/lib"
+         "${DEVKITPRO}/portlibs/switch/lib"
+@@ -48,9 +67,14 @@ endif()
+ #   switch_crash_hooks.c  abort()/exit() reports and stderr to the SD; abort
+ #                       must be defined before libc.a is searched
+ if(NOT TARGET rexglue_switch_startup)
++    if(REXGLUE_SWITCH_DEKO3D)
++        set(_switch_elf_stubs)  # only Mesa needs them
++    else()
++        set(_switch_elf_stubs "${CMAKE_CURRENT_LIST_DIR}/../src/ui/switch_elf_stubs.c")
++    endif()
+     add_library(rexglue_switch_startup OBJECT
+         "${CMAKE_CURRENT_LIST_DIR}/../src/ui/runtime_switch.cpp"
+-        "${CMAKE_CURRENT_LIST_DIR}/../src/ui/switch_elf_stubs.c"
++        ${_switch_elf_stubs}
+         "${CMAKE_CURRENT_LIST_DIR}/../src/ui/switch_crash_hooks.c"
+         "${CMAKE_CURRENT_LIST_DIR}/../src/ui/switch_perf.cpp"
+         # FPS and resolution for the console overlays (SaltyNX) and Reverse-NX reading.
+@@ -106,7 +130,7 @@ function(rexglue_switch_configure_target target_name)
+     set_property(TARGET ${target_name} APPEND PROPERTY LINK_DEPENDS ${_whole})
+     # Still linked normally, for the build order and their own dependencies
+     # (glslang, FFmpeg, ...), which stay regular archives.
+-    target_link_libraries(${target_name} PRIVATE ${_libs} rex::nvk)
++    target_link_libraries(${target_name} PRIVATE ${_libs} rex::switch_gpu)
+ 
+     # rex_app.cpp includes imgui.h. rexruntime links imgui privately, so its
+     # include path does not reach the title; take the path alone, since imgui's
 diff --git a/sdk/include/rex/codegen/config.h b/sdk/include/rex/codegen/config.h
 index 8200139..d026260 100644
 --- a/sdk/include/rex/codegen/config.h
@@ -7386,42 +7504,6 @@ index feacf4d..03f69b3 100644
        }
      }
  
-diff --git a/sdk/src/kernel/xboxkrnl/xboxkrnl_audio.cpp b/sdk/src/kernel/xboxkrnl/xboxkrnl_audio.cpp
-index 5cfbb36..7aa5e34 100644
---- a/sdk/src/kernel/xboxkrnl/xboxkrnl_audio.cpp
-+++ b/sdk/src/kernel/xboxkrnl/xboxkrnl_audio.cpp
-@@ -24,6 +24,7 @@
- #include <rex/system/xtypes.h>
- 
- #include <algorithm>
-+#include <atomic>
- #include <condition_variable>
- #include <cstring>
- #include <deque>
-@@ -35,6 +36,10 @@
- #include <unordered_map>
- #include <vector>
- 
-+REXCVAR_DEFINE_INT32(audio_speaker_config, 0x00010001, "Audio",
-+                     "XAudioGetSpeakerConfig's answer: 0x00010001 = analog stereo plus Dolby Digital (5.1), the "
-+                     "default; 0x00000001 = analog stereo only. EA's RwAudioCore mixes its master bus in 5.1; "
-+                     "with stereo it may mix fewer channels (AirborneNX: CPU cost of the RWAudioCore Dac thread)");
- REXCVAR_DEFINE_INT32(audio_volcado_s, 0, "Audio",
-                      "Diagnostico: segundos del audio que entrega el juego (6 canales, antes del "
-                      "driver) que se guardan en audio_volcado_<cliente>.wav junto al ejecutable; "
-@@ -178,7 +183,11 @@ namespace rex::kernel::xboxkrnl {
- using namespace rex::system;
- 
- u32 XAudioGetSpeakerConfig_entry(mapped_u32 config_ptr) {
--  *config_ptr = 0x00010001;
-+  *config_ptr = static_cast<uint32_t>(REXCVAR_GET(audio_speaker_config));
-+  static std::atomic<bool> logged{false};
-+  if (!logged.exchange(true)) {
-+    REXLOG_INFO("[audio] XAudioGetSpeakerConfig -> {:#010x}", static_cast<uint32_t>(REXCVAR_GET(audio_speaker_config)));
-+  }
-   return X_ERROR_SUCCESS;
- }
- 
 diff --git a/sdk/src/kernel/xboxkrnl/xboxkrnl_threading.cpp b/sdk/src/kernel/xboxkrnl/xboxkrnl_threading.cpp
 index 57fd161..a263445 100644
 --- a/sdk/src/kernel/xboxkrnl/xboxkrnl_threading.cpp
@@ -7507,63 +7589,40 @@ index 57fd161..a263445 100644
    if (alertable && result == X_STATUS_USER_APC) {
      XThread::GetCurrentThread()->DeliverAPCs();
    }
-diff --git a/sdk/src/system/global_lock_spin.h b/sdk/src/system/global_lock_spin.h
-new file mode 100644
-index 0000000..a62d244
---- /dev/null
-+++ b/sdk/src/system/global_lock_spin.h
-@@ -0,0 +1,51 @@
-+#pragma once
-+/**
-+ * @file        system/global_lock_spin.h
-+ * @brief       Acquire the global critical region with a short bounded spin before blocking in the kernel.
-+ *
-+ * The region guards very short sections (a handle-table lookup, a retain). When another core holds it, a
-+ * blocking lock costs a kernel arbitration round trip (tens of microseconds on Horizon, plus a context
-+ * switch on both sides) for a wait of a few hundred nanoseconds. Spinning a bounded number of try-locks first
-+ * avoids that. The bound keeps the priority-inversion property of a real mutex: if the holder was preempted
-+ * on this core, the spinner gives up after a few microseconds and blocks.
-+ */
+diff --git a/sdk/src/system/CMakeLists.txt b/sdk/src/system/CMakeLists.txt
+index 8f5388d..e2f1c5d 100644
+--- a/sdk/src/system/CMakeLists.txt
++++ b/sdk/src/system/CMakeLists.txt
+@@ -131,3 +131,7 @@ if(REXGLUE_USE_VULKAN)
+     )
+     target_compile_definitions(rexruntime PUBLIC REX_HAS_VULKAN=1)
+ endif()
++if(REXGLUE_SWITCH_DEKO3D)
++    # The title's deko3d renderer: no GPU plugin linked (gpu_plugin_loader.cpp).
++    target_compile_definitions(rexruntime PRIVATE REXGLUE_SWITCH_DEKO3D=1)
++endif()
+diff --git a/sdk/src/system/gpu_plugin_loader.cpp b/sdk/src/system/gpu_plugin_loader.cpp
+index 708d41b..7f856b4 100644
+--- a/sdk/src/system/gpu_plugin_loader.cpp
++++ b/sdk/src/system/gpu_plugin_loader.cpp
+@@ -54,7 +54,16 @@ std::vector<platform::DynamicLibrary>& LoadedPlugins() {
+ 
+ }  // namespace
+ 
+-#if REX_PLATFORM_SWITCH
++#if REX_PLATFORM_SWITCH && REXGLUE_SWITCH_DEKO3D
 +
-+#include <cstdint>
-+#include <mutex>
-+
-+#include <rex/cvar.h>
-+#include <rex/sys_counters.h>
-+
-+REXCVAR_DECLARE(int32_t, global_lock_spin);
-+
-+namespace rex::system {
-+
-+inline void CpuRelax() {
-+#if defined(__aarch64__)
-+  asm volatile("yield" ::: "memory");
-+#elif defined(__x86_64__) || defined(__i386__)
-+  __builtin_ia32_pause();
-+#endif
++// nfsmw: the deko3d build links no GPU plugin; the title brings its graphics system (config.graphics).
++std::unique_ptr<IGraphicsSystem> LoadGpuPlugin(std::string_view name, std::string_view backend) {
++  (void)backend;
++  REXSYS_ERROR("GPU plugin '{}' is not linked into this executable (deko3d build: no GPU plugins)", name);
++  return nullptr;
 +}
 +
-+// `contended_counter`: syscount id bumped when the first try failed (0 = none).
-+inline std::unique_lock<std::recursive_mutex> AcquireGlobalSpin(std::recursive_mutex& mutex,
-+                                                                unsigned contended_counter = 0) {
-+  std::unique_lock<std::recursive_mutex> lock(mutex, std::try_to_lock);
-+  if (lock.owns_lock()) {
-+    return lock;
-+  }
-+  if (contended_counter) {
-+    REX_SYS_COUNT(contended_counter, 1);
-+  }
-+  for (int32_t i = REXCVAR_GET(global_lock_spin); i > 0; --i) {
-+    CpuRelax();
-+    if (lock.try_lock()) {
-+      return lock;
-+    }
-+  }
-+  lock.lock();
-+  return lock;
-+}
-+
-+}  // namespace rex::system
++#elif REX_PLATFORM_SWITCH
+ }  // namespace rex::system
+ 
+ // A NRO cannot load code at run time: rexgpu-xenos is linked into the
 diff --git a/sdk/src/system/runtime.cpp b/sdk/src/system/runtime.cpp
 index c10694c..ad94056 100644
 --- a/sdk/src/system/runtime.cpp
@@ -7915,3 +7974,29 @@ index 0279615..7666f22 100644
  
  #undef XE_UI_VULKAN_LIMIT
  #undef XE_UI_VULKAN_ENUM_LIMIT
+diff --git a/tools/switch/cmake/switch-devkitA64.cmake b/tools/switch/cmake/switch-devkitA64.cmake
+index 3312873..5d545a8 100644
+--- a/tools/switch/cmake/switch-devkitA64.cmake
++++ b/tools/switch/cmake/switch-devkitA64.cmake
+@@ -11,6 +11,7 @@
+ # Usage:
+ #   cmake -G Ninja -DCMAKE_TOOLCHAIN_FILE=<this file> \
+ #         -DREXGLUE_SWITCH_NVK_SDK=<mesa-...-horizon-sdk>/opt/devkitpro/portlibs/switch ...
++#   cmake -G Ninja -DCMAKE_TOOLCHAIN_FILE=<this file> -DREXGLUE_SWITCH_DEKO3D=ON ...   (deko3d, no Mesa)
+ 
+ set(CMAKE_SYSTEM_NAME Generic)
+ set(CMAKE_SYSTEM_VERSION 1)
+@@ -20,7 +21,12 @@ set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+ set(REXGLUE_PLATFORM_SWITCH ON CACHE BOOL "Build rexglue for Nintendo Switch/libnx")
+ set(REXGLUE_ENABLE_TRACY OFF CACHE BOOL "Tracy is unavailable on Switch" FORCE)
+ set(REXGLUE_ENABLE_PERF_COUNTERS OFF CACHE BOOL "No perf counters on Switch" FORCE)
+-set(REXGLUE_USE_VULKAN ON CACHE BOOL "NVK" FORCE)
++# REXGLUE_SWITCH_DEKO3D (-D on the command line): the deko3d renderer (docs/HowToDeko3d.md), without Vulkan.
++if(REXGLUE_SWITCH_DEKO3D)
++    set(REXGLUE_USE_VULKAN OFF CACHE BOOL "deko3d build: no Vulkan" FORCE)
++else()
++    set(REXGLUE_USE_VULKAN ON CACHE BOOL "NVK" FORCE)
++endif()
+ set(REXGLUE_USE_D3D12 OFF CACHE BOOL "No D3D12 on Switch" FORCE)
+ 
+ if(NOT DEFINED DEVKITPRO)

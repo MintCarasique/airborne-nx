@@ -4,14 +4,17 @@ Usage: python tools/package_switch.py [--nro PATH]
 
 Archives the previous measured NRO bundle (top-level files only) to
 dist/archive/<sha256 of nro>.zip, installs the new NRO and default.xex,
-writes airborne.toml, README.txt and SHA256SUMS.txt, and builds the zip.
-The game/MOHAGame folder is never read or copied.
+writes airborne.toml, README.txt and SHA256SUMS.txt, the Coalesced.ini
+override (32 audio channels instead of 90) made from the extracted game, and
+builds the zip. The game/MOHAGame folder is never read or copied. dist/ holds
+game data and is never committed.
 """
 from datetime import date
 from pathlib import Path
 import argparse
 import hashlib
 import subprocess
+import sys
 import zipfile
 
 root = Path(__file__).resolve().parents[1]
@@ -21,8 +24,9 @@ zip_path = root / 'dist/airborne-nx.zip'
 SLUG = 'switch/airborne-nx'
 TOP = ['airborne-nx.nro', 'README.txt', 'SHA256SUMS.txt', 'airborne.toml',
        'image.bin', 'xex-header.bin']
+OVERRIDE_INI = 'override/MOHAGame/Config/Xenon/Cooked/Coalesced.ini'
 PACKED = ['airborne-nx.nro', 'airborne.toml', 'README.txt', 'SHA256SUMS.txt',
-          'game/default.xex']
+          'game/default.xex', OVERRIDE_INI]
 
 
 def sha256(path):
@@ -76,6 +80,14 @@ if old.exists():
 (bundle / 'airborne-nx.nro').write_bytes(nro.read_bytes())
 (bundle / 'game/default.xex').write_bytes(xex.read_bytes())
 
+# The game's software mixer (RWAudioCore) mixes up to [XeAudio.XeAudioDevice] MaxChannels voices on the CPU; the
+# Xbox 360 value is 90. 32 cut the audio thread from 64-72 % to 54-59 % of a core in Adanti's battles with no
+# missing sound heard (docs/HARDWARE_NOTES.md). The app substitutes files under <NRO folder>/override.
+ini = root / 'extracted/base/MOHAGame/Config/Xenon/Cooked/Coalesced.ini'
+(bundle / OVERRIDE_INI).parent.mkdir(parents=True, exist_ok=True)
+subprocess.run([sys.executable, '-I', str(root / 'tools/coalesced.py'), 'set', str(ini), str(bundle / OVERRIDE_INI),
+                'Cooked\\Xe-MOHAEngine.ini', '[XeAudio.XeAudioDevice]', 'MaxChannels=32'], check=True)
+
 # 3. Switch config overrides (read from the NRO's folder).
 (bundle / 'airborne.toml').write_text(
     '# AirborneNX Switch overrides (read from the NRO folder). Command-line\n'
@@ -86,39 +98,42 @@ if old.exists():
     'nfsmw_renderizador = "nativo"\n'
     '# Scene resolution: 1280x720 (the Xbox 360\'s), 1120x624, 1040x576,\n'
     '# 960x544, 880x496 or 800x448; smaller ones are faster and softer.\n'
-    'airborne_scene_resolution = "1280x720"\n', encoding='utf-8')
+    'airborne_scene_resolution = "1280x720"\n'
+    '# Horizon priority of the game audio thread (RWAudioCore Dac), decimal: 44 = 0x2C,\n'
+    '# above the game threads (0x3B), so the sound gets the CPU before the frame rate does.\n'
+    'guest_audio_thread_priority = 44\n', encoding='utf-8')
 
 # 4. Build ID and README.
 nro_sha = sha256(bundle / 'airborne-nx.nro')
 dirty = '-dirty' if git('status', '--porcelain') else ''
 build_id = f'{git("rev-parse", "--short", "HEAD")}{dirty}+{nro_sha[:12]}'
-(bundle / 'README.txt').write_text(f"""AirborneNX (Medal of Honor: Airborne) для Nintendo Switch
-Сборка: {build_id}
-Дата: {date.today().isoformat()}
+(bundle / 'README.txt').write_text(f"""AirborneNX (Medal of Honor: Airborne) for the Nintendo Switch
+Build: {build_id}
+Date: {date.today().isoformat()}
 
-Рантайм ReXGlue, нативный рендерер на Vulkan (NVK). Язык игры: немецкий.
-Разрешение сцены задаётся в airborne.toml (airborne_scene_resolution).
+ReXGlue runtime, native renderer on Vulkan (NVK). The game text is German unless
+an English Localization/Coalesced.int is under override/ (see docs/STATUS.md).
+Settings: airborne.toml next to the NRO (scene resolution, audio priority).
 
-Установка (SD-карта):
-  /switch/airborne-nx/airborne-nx.nro      - приложение
-  /switch/airborne-nx/game/MOHAGame        - файлы игры (уже на месте)
-  /switch/airborne-nx/game/default.xex     - исполняемый файл игры
-  /switch/airborne-nx/result.txt           - лог (создаётся при запуске)
+The project is on hold: the game runs, but heavy levels reach only 10-15 FPS
+and the sound stutters there. docs/STATUS.md in the repository explains why.
 
-Обновление: распакуйте папку `switch` из airborne-nx.zip в корень SD-карты
-с заменой файлов. Файлы игры при этом остаются.
+Install (SD card):
+  /switch/airborne-nx/airborne-nx.nro      - the application
+  /switch/airborne-nx/game/MOHAGame        - the game files (your own dump)
+  /switch/airborne-nx/game/default.xex     - the game executable
+  /switch/airborne-nx/override/            - replaced game files (Coalesced.ini)
+  /switch/airborne-nx/result.txt           - the log (created at start)
 
-Запуск: режим перехвата тайтла - удерживайте R при запуске любой
-установленной игры, откроется hbmenu; выберите airborne-nx.
+Update: extract the `switch` folder of airborne-nx.zip to the root of the SD card,
+replacing files. The game files stay.
 
-Что прислать обратно:
-  1. файл result.txt;
-  2. короткое описание: появился ли титульный экран / интро,
-     на каком месте произошёл вылет или зависание.
+Start: title takeover mode - hold R while starting any installed game, hbmenu
+opens; choose airborne-nx.
 """, encoding='utf-8')
 
 # 5. Checksums.
-sums = ['airborne-nx.nro', 'airborne.toml', 'README.txt', 'game/default.xex']
+sums = ['airborne-nx.nro', 'airborne.toml', 'README.txt', 'game/default.xex', OVERRIDE_INI]
 (bundle / 'SHA256SUMS.txt').write_text(
     ''.join(f'{sha256(bundle / n)}  {n}\n' for n in sums), encoding='utf-8')
 

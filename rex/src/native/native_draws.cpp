@@ -3298,19 +3298,6 @@ class VulkanDrawerImpl final : public VulkanDrawer {
                                   std::abs(viewport.width - float(scene.width_px)) < 0.5f &&
                                   std::abs(std::abs(viewport.height) - float(scene.height_px)) < 0.5f;
       airborne::scene::NoteDraw(right, bottom, scene_viewport);
-      if (scene.width_px && (right > scene.width_px || bottom > scene.height_px) && scene_outside_logged_ < 24) {
-        const uint64_t id = (uint64_t(uint32_t(p.vs->number)) << 32) | uint32_t(ps ? int(ps->number) : -1);
-        if (std::find(scene_outside_ids_.begin(), scene_outside_ids_.end(), id) == scene_outside_ids_.end()) {
-          scene_outside_ids_.push_back(id);
-          ++scene_outside_logged_;
-          REXLOG_INFO("[scene] draw outside the scene corner: VS n{} PS n{} type {} count {} surface {:08X} color0 "
-                      "{:08X} depth {:08X} edram mode {} -> {}x{} (viewport {}+{} x {}+{}, scissor {}+{} x {}+{})",
-                      p.vs->number, ps ? int(ps->number) : -1, type, num, r[gr::XE_GPU_REG_RB_SURFACE_INFO],
-                      r[gr::XE_GPU_REG_RB_COLOR_INFO], r[gr::XE_GPU_REG_RB_DEPTH_INFO], edram_mode, right, bottom,
-                      viewport.x, viewport.width, viewport.y, viewport.height, scissor.offset.x,
-                      scissor.extent.width, scissor.offset.y, scissor.extent.height);
-        }
-      }
     }
 
     uint32_t specialization = entry->specialization;
@@ -13080,9 +13067,6 @@ class VulkanDrawerImpl final : public VulkanDrawer {
   uint64_t sends_after_shadows_ = 0;         // for the report
   uint32_t pass_stats_ = UINT32_MAX;
   uint32_t draw_occlusion_warnings_ = 0;  // diagnostic of the query draws
-  // airborne_scene_resolution: the draws that keep a frame from being shown from the corner (logged once each).
-  std::vector<uint64_t> scene_outside_ids_;
-  uint32_t scene_outside_logged_ = 0;
   std::chrono::steady_clock::time_point last_draw_occlusion_warning_{};
   VkCommandBuffer commands_pass_ = VK_NULL_HANDLE;
   uint64_t key_pass_ = 0;

@@ -34,7 +34,7 @@ if (-not $SkipSdk) {
     # are reset to the reference commit and the patch is applied again, so a patch
     # that grew since the last build still applies. Edits to those files that are
     # not in the patch are lost; export them first:
-    #   git -C tools/reference-nfsmw diff -- sdk/src > tools/patches/rexglue-airborne.patch
+    #   git -C tools/reference-nfsmw diff -- sdk/src sdk/include sdk/resources sdk/CMakeLists.txt sdk/cmake tools/switch/cmake > tools/patches/rexglue-airborne.patch
     $patch = Join-Path $root 'tools\patches\rexglue-airborne.patch'
     $touched = git -C $ref apply --numstat $patch | ForEach-Object { ($_ -split "`t")[2] }
     if ($LASTEXITCODE -ne 0) { throw "cannot read $patch" }

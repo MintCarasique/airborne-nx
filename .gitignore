@@ -45,3 +45,9 @@ __pycache__/
 *.log
 .vs/
 build/
+
+# Local files that must never be committed: the PC version of the game, hardware logs, photos
+/pcversion/
+/result.txt
+*.jpg
+*.png

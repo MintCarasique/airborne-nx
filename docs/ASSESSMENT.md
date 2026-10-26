@@ -1,120 +1,120 @@
-# Оценка проекта и план (2026-10-23)
+# Project assessment and plan (2026-10-23)
 
-## Что работает
+## What works
 
-- Извлечение GOD-контейнера и XEX с проверкой хешей (`tools/extract_god.py`).
-- Перекомпиляция XenonRecomp: 317 файлов, ~81 тыс. функций, сборка под AArch64.
-- Восстановлены две таблицы переходов (`0x828B6D00`, `0x82CDD594`), перехват часов XDK (`0x82C5B7D8`).
-- Сборка Mesa NVK для Horizon; вывод кадров через VI работает.
-- Упаковка контента на SD, протоколы аппаратных прогонов.
+- GOD container and XEX extraction with hash verification (`tools/extract_god.py`).
+- XenonRecomp recompilation: 317 files, ~81 thousand functions, AArch64 build.
+- Two jump tables restored (`0x828B6D00`, `0x82CDD594`), XDK clock hook (`0x82C5B7D8`).
+- Mesa NVK build for Horizon; frame output through VI works.
+- Content packaging on SD, hardware run logs.
 
-## Главная проблема: графика — не эмуляция, а подгонка
+## Main problem: the graphics are fitting, not emulation
 
-`gpu_startup_clear` / `gpu_startup_resolve` в `runtime/common/startup_services.inc` (старый рантайм, удалён; `git show 8ca98b1:runtime/`) не обрабатывали
-команды Xenos в общем виде. Каждая отрисовка сверяется с заранее известной: точные слова микрокода шейдеров,
-точные значения регистров, точные координаты вершин полноэкранного квада 1280×720. Всё остальное — останов.
-Так можно показать ролик, но меню UE3 — сотни разных отрисовок. Это тупик.
+`gpu_startup_clear` / `gpu_startup_resolve` in `runtime/common/startup_services.inc` (old runtime, removed; `git show 8ca98b1:runtime/`) did not handle
+Xenos commands in a general way. Every draw is checked against a previously known one: exact shader microcode words,
+exact register values, exact vertex coordinates of the full-screen 1280×720 quad. Everything else is a stop.
+This is enough to show a video, but the UE3 menu is hundreds of different draws. This is a dead end.
 
-## Прочие проблемы
+## Other problems
 
-- Все импорты ядра (кроме TLS) идут через один глобальный `service_mutex` и цепочку ~114 `strcmp`;
-  каждый вызов пишется в лог. Это сериализует потоки и замедляет игру.
-- Видео проходит через CPU несколько раз за кадр: readback с GPU → попиксельная запись в гостевую EDRAM-память
-  → повторное декодирование front buffer на CPU → вывод.
-- Весь HLE-слой в одном файле на 110 КБ с глобальным состоянием.
-- Много отчётов вместо кода (`analysis/` — 131 МБ логов и JSON), дублирующиеся нумерованные сборки в `dist/`
-  и `generated/` вопреки `AGENTS.md`.
+- All kernel imports (except TLS) go through one global `service_mutex` and a chain of ~114 `strcmp`;
+  every call is written to the log. This serializes threads and slows the game down.
+- Video passes through the CPU several times per frame: GPU readback → per-pixel write into guest EDRAM memory
+  → repeated front buffer decoding on the CPU → output.
+- The entire HLE layer is in one 110 KB file with global state.
+- Many reports instead of code (`analysis/` — 131 MB of logs and JSON), duplicate numbered builds in `dist/`
+  and `generated/` contrary to `AGENTS.md`.
 
-## Ключевая находка
+## Key finding
 
-В `tools/reference-nfsmw` лежит готовый порт NFS: Most Wanted (X360 → Switch) на базе
-[ReXGlue](https://github.com/rexglue/rexglue-sdk): полный HLE ядра (xboxkrnl/xam), эмуляция Xenos
-(Vulkan/D3D12), декодер XMA, слой Switch (память, потоки 0x3B, исключения, NVK) и руководство
-`docs/porting-another-game.md`. Текущий рантайм написан с нуля параллельно ему.
+`tools/reference-nfsmw` contains a ready-made port of NFS: Most Wanted (X360 → Switch) based on
+[ReXGlue](https://github.com/rexglue/rexglue-sdk): full kernel HLE (xboxkrnl/xam), Xenos emulation
+(Vulkan/D3D12), an XMA decoder, a Switch layer (memory, threads 0x3B, exceptions, NVK) and the guide
+`docs/porting-another-game.md`. The current runtime was written from scratch in parallel with it.
 
-## План
+## Plan
 
-1. **Гигиена.** Git, чистка `dist/`/`generated/`, сырые логи — локально.
-   **Сделано в git (2026-10-23):** удалены старый рантайм `runtime/`, его тесты, скрипты старого конвейера
-   (проба, сборки entry/probe, подогнанные `prepare_*`/`analyze_*` графики) и 22 заметки `analysis/`; факты с железа
-   сведены в [HARDWARE_NOTES.md](HARDWARE_NOTES.md). XenonRecomp оставлен как инструмент анализа (`recompile.ps1`).
-   Локальные `dist/` (7,8 ГБ), `generated/` (2,5 ГБ) и сырые логи `analysis/` не тронуты — ждут решения.
-2. **Переход на ReXGlue (SDK из reference-nfsmw).**
-   1. Сгенерировать проект для `default.xex` MoHA, перенести таблицы переходов и перехват часов.
-      **Сделано (2026-10-23).** SDK собирается `tools/build_rexglue.ps1` (LLVM clang + MSVC/Windows SDK;
-      llvm-mingw не подходит — FFmpeg и D3D12 в SDK рассчитаны на MSVC CRT). Проект — `rex/`, codegen даёт
-      473 файла (~254 МБ C++, в git не попадает). Ручные правки — `rex/overrides.toml`: три функции, до которых
-      анализ не дошёл (`0x82CA6540`, `0x82AA13A8`, `0x82AABB70`, вызываются только хвостовым `b` из thunk'ов),
-      и обе таблицы переходов, ключ — адрес `bctr` (`0x828B6D24`: автоопределение читало 17 записей вместо 12;
-      `0x82CDD5B8`: совпадает). Всего ReXGlue нашёл 469 таблиц. Перехват часов `0x82C5B7D8` не перенесён:
-      ReXGlue сам обновляет `KeTimeStampBundle+16` таймером 1 мс (`xboxkrnl_module.cpp`), его и читает лист.
-   2. Довести до меню и уровня **на PC** с эмуляцией Xenos.
-      **В работе (2026-10-23).** `tools/build_rexglue.ps1 -App -Config RelWithDebInfo` собирает `airborne.exe`,
-      `tools/run_rex.ps1` запускает его на `extracted/base`. Игра проходит заставки, грузит `Shell`/`Menu_test`
-      и рисует титульный экран (D3D12, эмуляция Xenos) без FATAL за 75 с. Потребовалось объявить 538 функций,
-      до которых ReXGlue не дошёл: в XEX нет RTTI, сканер vtable находит 0 таблиц
-      (`tools/missed_functions.py` → `rex/missed_functions.toml`, 32 адреса данных исключены).
-      **Дефекты дампа (не рантайм):** `Localization/Coalesced.int` (= `.uke`) — русский перевод (в шифротексте
-      сигнатура старшего байта кириллицы UTF-16, 55–200‰ против 3–10‰ между другими языками), его ключи не находятся:
-      UI показывает `<?INT?UIStrings…?>`. На немецком (`user_language = 3` в `rex/airborne.toml`) строки на месте:
-      «START-TASTE DRÜCKEN». `CookedMovies/MOHA_Shell_EAID_DEU.wmv` повреждён (нет структуры ASF; остальные 37
-      роликов целые), поэтому немецкая версия пропускает EA-интро. Для английского нужен чистый дамп.
-      **Меню и уровень (2026-10-23, пользователь, клавиатура):** главное меню проходится, загружается учебный
-      уровень (прыжки с C-47). Артефакт: чёрные рваные пятна по треугольникам на персонажах (лицо/торс/ноги
-      инструктора) — NaN/Inf в освещении или битые вершинные данные.
-      **Сравнение бэкендов** (сцена спуска на парашюте, `--cl=Tra_Jmp_P` грузит уровень прямо, без меню):
-      D3D12 — цвета верные; Vulkan по умолчанию (host render targets) — постеризация, оранжевый сдвиг, нет
-      динамического света в салоне; Vulkan с `render_target_path_vulkan=fsi` — верно. Значит, ошибка в host-пути
-      Vulkan-бэкенда (не CPU и не данные игры); `direct_host_resolve=false` не помогает. Оба пути хранят 7e3
-      как R16G16B16A16_FLOAT с аппаратным блендингом — дальше нужен покадровый захват (RenderDoc) D3D12 vs Vulkan.
-      Захваты RenderDoc (`--renderdoc_capture_at`, кадр спуска): всё до прохода с умножающим блендингом
-      (DstColor/Zero) в 7e3-цель совпадает; на нём (Vulkan e7851 / D3D12 e7417) Vulkan портит множитель —
-      сцена оранжевая, тени жёсткими пятнами. Вход прохода: глубина R32F, карта теней R32F 864×864, текстура 64×64.
-      **Причина найдена и исправлена:** проход оказался невиновен — EDRAM-перенос глубина→stencil перед ним.
-      Без `VK_EXT_shader_stencil_export` (у NVIDIA его нет) stencil пишется 8 проходами по биту с kill по маске;
-      для источника-глубины в режиме kStencilBit SPIR-V-генератор переноса не заполнял `packed` (текстура глубины
-      в этом режиме не объявлена), kill не генерировался, все биты ставились → stencil 0xFF → R-канал 7e3 в
-      максимуме. Исправление в `vulkan/render_target_cache.cpp` (патч SDK): `packed = source_stencil` для этого
-      случая. После него Vulkan host-путь рисует как D3D12.
-      **Второй баг Vulkan, исправлен:** при D24FS8 хост-вьюпорт отображает глубину гостя [0,1] в [0,0.5], на
-      `gl_FragDepth` это не действует; D3D12 делит oDepth на 2, SPIR-V-транслятор — нет. Полноэкранный проход
-      восстановления глубины UE3 писал удвоенную глубину → все световые проходы (GreaterEqual) и частицы (дым,
-      облака) проваливали тест глубины. Исправление в `spirv_translator_rb.cpp` (патч SDK).
-      **Чёрные пятна на персонажах** (оба бэкенда, только host render targets; на ROV D3D12 чисто): это провал
-      теста глубины GreaterEqual в световых проходах — их VS смещает меш на ровно 0.25 px по X и Y относительно
-      препасса (2×MSAA), на наклонных треугольниках скиннутого меша это сдвигает глубину на ~2–5·10⁻⁶ ниже
-      сохранённой (восстановленной из R32F-копии препасса). Вершины чистые, CPU ни при чём. `half_pixel_offset`,
-      `native_2x_msaa`, `depth_float24_round` не помогают. Гипотеза: resolve глубины 2×MSAA берёт не тот сэмпл,
-      на позицию которого игра рассчитывает смещение 0.25 px. Не подтверждено.
-      Для Switch: NVK объявляет VK_EXT_fragment_shader_interlock на GM20B (`cls_eng3d` 0xB197 = MAXWELL_B,
-      `nvk_physical_device.c:260`), NAK понижает interlock для SM 5.3 — FSI на консоли доступен как запасной путь.
-   3. Собрать под Switch со слоем SDK.
-      **Первый прогон на консоли (2026-10-23):** доходит до меню без ошибок, < 1 FPS (см. HARDWARE_NOTES).
-      Дальше: локальные регистры в codegen (`cr/non_volatile/xer/ctr_as_local`, проверено на PC), профиль
-      `logs/rex/rex_perfil.log` SDK, живой лог через nxlink (`tools/nxlink.py -s`, Sphaira, 192.168.1.23).
-      Известные неразрешённые переходы codegen (были и до опций, только на путях исключений): `b 0x82C46AE0`
-      из 0x82C4652C (хвост `__finally` в `__restgprlr_26`), `b 0x82DD1400` из фанклета 0x82DD148C.
-      **Узкое место на Switch — EDRAM-переносы** (см. HARDWARE_NOTES): ~10 мс GPU на каждый draw переноса при любой
-      площади (на PC ~0,03 мс). Пропуск stencil-переносов (`vulkan_transfer_skip_stencil`) ломает цвет: младшие биты
-      R канала 7e3 игра хранит в stencil при переинтерпретации EDRAM. Следующая гипотеза — медленный путь в NVK:
-      NFSMW собирали mesa-switch на другом коммите со своим патчем (`tools/reference-nfsmw/mesa/`), у нас NVK без него.
-   4. Измерить; затем собственный рендер (перехваты D3D/RHI UE3), как `nfsmw_nativo_*`.
-   **Сверка инструкций с генератором ReXGlue (2026-10-23)** — наши исправления XenonRecomp против
-   `sdk/src/codegen/builders`. Совпадают: vctuxs/vcfpuxws128, насыщающие add/sub/pack (кроме ниже), сдвиги и
-   сравнения VMX, blrl, rotates, mfcr/mtcrf, vrfin. Расходятся (в скобках — число мест в MoHA):
-   - `vpkuhus` (6, все в форме vD==vB) и `vpkuwus` (0): запись по байтам портит ещё не прочитанные лейны vB —
-     **ошибка, исправить в генераторе** (временный вектор).
-   - `vupkd3d128` (49) / `vpkd3d128` (4) FLOAT16_2: ReXGlue кодирует по расширенному диапазону Xenos
-     (без Inf/NaN, денормали в 0), наши тесты ждали IEEE. Проверить по Xenia, какая семантика верна для CPU.
-   - `frsqrte` (1): нет спецслучаев и FPSCR, NaN отрицательный. `mtfsf`/`mffs` (5/5): флаги FPSCR теряются.
-   - VSCR.SAT не выставляется никогда.
-   Тесты старых исправлений с эталонными векторами (Xenia golden для FLOAT16_2, спецслучаи frsqrte) удалены вместе
-   со старым рантаймом; брать из `git show 8ca98b1:tools/tests/`.
+1. **Hygiene.** Git, cleanup of `dist/`/`generated/`, raw logs kept locally.
+   **Done in git (2026-10-23):** removed the old runtime `runtime/`, its tests, the old pipeline scripts
+   (probe, entry/probe builds, the fitted graphics `prepare_*`/`analyze_*`) and 22 notes in `analysis/`; hardware facts
+   consolidated in [HARDWARE_NOTES.md](HARDWARE_NOTES.md). XenonRecomp is kept as an analysis tool (`recompile.ps1`).
+   The local `dist/` (7.8 GB), `generated/` (2.5 GB) and raw `analysis/` logs are untouched — awaiting a decision.
+2. **Move to ReXGlue (SDK from reference-nfsmw).**
+   1. Generate a project for MoHA `default.xex`, carry over the jump tables and the clock hook.
+      **Done (2026-10-23).** The SDK is built by `tools/build_rexglue.ps1` (LLVM clang + MSVC/Windows SDK;
+      llvm-mingw does not work — FFmpeg and D3D12 in the SDK are built for the MSVC CRT). The project is `rex/`, codegen produces
+      473 files (~254 MB of C++, not tracked in git). Manual fixes are in `rex/overrides.toml`: three functions that
+      analysis did not reach (`0x82CA6540`, `0x82AA13A8`, `0x82AABB70`, called only by a tail `b` from thunks),
+      and both jump tables, keyed by the `bctr` address (`0x828B6D24`: auto-detection read 17 entries instead of 12;
+      `0x82CDD5B8`: matches). In total ReXGlue found 469 tables. The clock hook `0x82C5B7D8` was not carried over:
+      ReXGlue itself updates `KeTimeStampBundle+16` with a 1 ms timer (`xboxkrnl_module.cpp`), which is what the leaf reads.
+   2. Get to the menu and a level **on PC** with Xenos emulation.
+      **In progress (2026-10-23).** `tools/build_rexglue.ps1 -App -Config RelWithDebInfo` builds `airborne.exe`,
+      `tools/run_rex.ps1` runs it on `extracted/base`. The game passes the splash screens, loads `Shell`/`Menu_test`
+      and draws the title screen (D3D12, Xenos emulation) with no FATAL within 75 s. It was necessary to declare 538 functions
+      that ReXGlue did not reach: the XEX has no RTTI, and the vtable scanner finds 0 tables
+      (`tools/missed_functions.py` → `rex/missed_functions.toml`, 32 data addresses excluded).
+      **Dump defects (not the runtime):** `Localization/Coalesced.int` (= `.uke`) is a Russian translation (in the ciphertext
+      the signature of the high byte of UTF-16 Cyrillic, 55–200‰ versus 3–10‰ between the other languages), its keys are not found:
+      the UI shows `<?INT?UIStrings…?>`. In German (`user_language = 3` in `rex/airborne.toml`) the strings are in place:
+      «START-TASTE DRÜCKEN». `CookedMovies/MOHA_Shell_EAID_DEU.wmv` is corrupted (no ASF structure; the other 37
+      videos are intact), so the German version skips the EA intro. English requires a clean dump.
+      **Menu and level (2026-10-23, user, keyboard):** the main menu can be navigated, the tutorial
+      level loads (jumping from the C-47). Artifact: black ragged patches per triangle on characters (the instructor's
+      face/torso/legs) — NaN/Inf in lighting or broken vertex data.
+      **Backend comparison** (parachute descent scene, `--cl=Tra_Jmp_P` loads the level directly, without the menu):
+      D3D12 — colors correct; Vulkan by default (host render targets) — posterization, orange shift, no
+      dynamic light in the cabin; Vulkan with `render_target_path_vulkan=fsi` — correct. So the bug is in the host path
+      of the Vulkan backend (not the CPU and not the game data); `direct_host_resolve=false` does not help. Both paths store 7e3
+      as R16G16B16A16_FLOAT with hardware blending — a per-frame capture (RenderDoc) of D3D12 vs Vulkan is needed next.
+      RenderDoc captures (`--renderdoc_capture_at`, descent frame): everything up to the pass with multiplicative blending
+      (DstColor/Zero) into the 7e3 target matches; on it (Vulkan e7851 / D3D12 e7417) Vulkan corrupts the multiplier —
+      the scene is orange, the shadows are hard patches. Pass input: R32F depth, R32F shadow map 864×864, 64×64 texture.
+      **Cause found and fixed:** the pass turned out to be innocent — the culprit was the EDRAM depth→stencil transfer before it.
+      Without `VK_EXT_shader_stencil_export` (NVIDIA does not have it) stencil is written in 8 per-bit passes with a kill by mask;
+      for a depth source in kStencilBit mode the SPIR-V transfer generator did not fill in `packed` (the depth texture
+      is not declared in this mode), the kill was not generated, all bits were set → stencil 0xFF → the R channel of 7e3 at
+      maximum. The fix is in `vulkan/render_target_cache.cpp` (SDK patch): `packed = source_stencil` for this
+      case. After it the Vulkan host path renders like D3D12.
+      **Second Vulkan bug, fixed:** with D24FS8 the host viewport maps guest depth [0,1] to [0,0.5], which does not
+      apply to `gl_FragDepth`; D3D12 divides oDepth by 2, the SPIR-V translator does not. The UE3 full-screen depth
+      restore pass wrote doubled depth → all light passes (GreaterEqual) and particles (smoke,
+      clouds) failed the depth test. The fix is in `spirv_translator_rb.cpp` (SDK patch).
+      **Black patches on characters** (both backends, host render targets only; clean on D3D12 ROV): this is a failure of the
+      GreaterEqual depth test in the light passes — their VS shifts the mesh by exactly 0.25 px in X and Y relative to the
+      prepass (2×MSAA), and on slanted triangles of the skinned mesh this moves the depth ~2–5·10⁻⁶ below the
+      stored one (restored from the R32F copy of the prepass). The vertices are clean, the CPU is not involved. `half_pixel_offset`,
+      `native_2x_msaa`, `depth_float24_round` do not help. Hypothesis: the 2×MSAA depth resolve takes the wrong sample,
+      not the one at whose position the game computes the 0.25 px offset. Not confirmed.
+      For Switch: NVK declares VK_EXT_fragment_shader_interlock on GM20B (`cls_eng3d` 0xB197 = MAXWELL_B,
+      `nvk_physical_device.c:260`), NAK lowers interlock for SM 5.3 — FSI on the console is available as a fallback path.
+   3. Build for Switch with the SDK layer.
+      **First run on the console (2026-10-23):** reaches the menu without errors, < 1 FPS (see HARDWARE_NOTES).
+      Next: local registers in codegen (`cr/non_volatile/xer/ctr_as_local`, verified on PC), the SDK profile
+      `logs/rex/rex_perfil.log`, live log through nxlink (`tools/nxlink.py -s`, Sphaira, 192.168.1.23).
+      Known unresolved codegen jumps (they existed before the options, only on exception paths): `b 0x82C46AE0`
+      from 0x82C4652C (the `__finally` tail in `__restgprlr_26`), `b 0x82DD1400` from funclet 0x82DD148C.
+      **The bottleneck on Switch is EDRAM transfers** (see HARDWARE_NOTES): ~10 ms of GPU per transfer draw at any
+      area (on PC ~0.03 ms). Skipping stencil transfers (`vulkan_transfer_skip_stencil`) breaks color: the game stores the low bits of the
+      R channel of 7e3 in stencil when reinterpreting EDRAM. The next hypothesis is a slow path in NVK:
+      NFSMW was built with mesa-switch at a different commit with its own patch (`tools/reference-nfsmw/mesa/`), we have NVK without it.
+   4. Measure; then a custom renderer (UE3 D3D/RHI hooks), like `nfsmw_nativo_*`.
+   **Instruction check against the ReXGlue generator (2026-10-23)** — our XenonRecomp fixes versus
+   `sdk/src/codegen/builders`. Matching: vctuxs/vcfpuxws128, saturating add/sub/pack (except below), VMX shifts and
+   comparisons, blrl, rotates, mfcr/mtcrf, vrfin. Diverging (the number of occurrences in MoHA is in parentheses):
+   - `vpkuhus` (6, all in the vD==vB form) and `vpkuwus` (0): byte-wise writing corrupts vB lanes that have not been read yet —
+     **a bug, to be fixed in the generator** (temporary vector).
+   - `vupkd3d128` (49) / `vpkd3d128` (4) FLOAT16_2: ReXGlue encodes using the extended Xenos range
+     (no Inf/NaN, denormals to 0), our tests expected IEEE. Check against Xenia which semantics is correct for the CPU.
+   - `frsqrte` (1): no special cases and FPSCR, NaN is negative. `mtfsf`/`mffs` (5/5): FPSCR flags are lost.
+   - VSCR.SAT is never set.
+   Tests of the old fixes with reference vectors (Xenia golden for FLOAT16_2, frsqrte special cases) were removed together
+   with the old runtime; take them from `git show 8ca98b1:tools/tests/`.
 
-3. **Сохранить из текущей работы:** инструменты извлечения, таблицы, перехват часов, сборку NVK, упаковку,
-   сведения из аппаратных логов. Реализации инструкций сверить с генератором ReXGlue.
+3. **Keep from the current work:** the extraction tools, the tables, the clock hook, the NVK build, the packaging,
+   information from the hardware logs. Check the instruction implementations against the ReXGlue generator.
 
-## Риски
+## Risks
 
-MoH: Airborne (UE3, 2007) заметно тяжелее NFS MW (2005). Switch: 3 ядра по 1,02 ГГц против 6 потоков Xenon
-по 3,2 ГГц. Меню и уровни достижимы; играбельный FPS потребует долгой оптимизации и не гарантирован.
+MoH: Airborne (UE3, 2007) is noticeably heavier than NFS MW (2005). Switch: 3 cores at 1.02 GHz versus 6 Xenon threads
+at 3.2 GHz. The menu and levels are achievable; a playable FPS will require long optimization and is not guaranteed.

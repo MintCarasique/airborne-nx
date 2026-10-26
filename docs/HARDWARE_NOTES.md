@@ -1,189 +1,205 @@
-# Первый прогон на ReXGlue (2026-10-23, сборка 8b57ce5+6cc5eaa4df8e, лог `analysis/hardware/rexglue_*_result.txt`)
-- Запуск в режиме приложения, handheld 1280x720; NVK (Mesa 26.2.4, git-0ff52079ca) создаёт устройство; арена гостевой
-  памяти маппится; аудио audout 48 кГц 2 канала; монтирование 1249 файлов игры с SD — 2,65 с.
-- Игра проходит заставку и доходит до меню (`Hus_BG_Bkd_Fairway`, музыка меню), ошибок и падений нет за ~2 мин.
-- Скорость: по ощущению пользователя < 1 FPS. Создание каждого графического пайплайна (трансляция шейдера + NAK)
-  занимает 0,1–1,5 с; в первые ~40 с меню их ~60. FPS и время CPU по потокам в логе пока не пишутся.
-- Профайлер SDK (`logs/rex/rex_perfil.log`, отчёт каждые 10 с): в меню 0,6–0,8 FPS при ~160 draw на кадр; один
-  гостевой поток `XThread2FE2D080` занимает 100 % ядра, поток эмуляции GPU («GPU Commands») — единицы процентов,
-  всего CPU 130–170 % из 300 %. Узкое место — CPU одного потока игры, не эмуляция GPU. Частоты: CPU 1020 МГц,
-  GPU 460,8 МГц, память 1600 МГц; 3 ядра (маска 0x7). При загрузке меню (компиляция пайплайнов) 262 % CPU, 0–0,1 FPS.
-- Прогон 2 (aad0efd+4577d1b23b5d, nxlink, стек-сэмплинг): то же 0,7 FPS; локальные регистры не меняют FPS.
-  Стеки: 87 % времени горячего потока — `sub_829B0E38` (XDK `D3DQuery_GetData`, тип 9 = occlusion), вызываемый в
-  цикле ожидания из `sub_82453C88` (0x82453D70): UE3 крутится, пока эмулятор GPU не запишет результат запроса.
-  Шейдерный кэш SDK на SD работает: во втором прогоне фазы компиляции пайплайнов при загрузке меню нет.
-- Прогон 3 (aad0efd+a95feff5cf97, occlusion-запросы отвечают сразу): ожидание запросов из стеков исчезло, FPS тот же
-  0,7. Теперь горячий поток ждёт GPU-фенс в XDK (`sub_829AF948` → цикл `db16cyc` в `sub_829B6490`), а процесс ждёт
-  фенсы NVK 1000 мс в секунду: упор в реальный GPU Tegra, ~1,4 с GPU на кадр меню. На кадр: 167 draw игры,
-  170 EDRAM-переносов (23 RT, 115 дополнительных draw), 10 resolve, площадь scissor ~126 экранов.
-- Прогон 4/5 (fbc5e09+6ce5dd5de8b5, `--gpu_timing=2`, метки времени ×1,627), меню, GPU на кадр:
-  host render targets: draw 125–180 мс, EDRAM-переносы 1180–1280 мс (~83 %), resolve 86–94 мс, прочее ~25 мс,
-  всего ~1500 мс, 0,7 FPS. FSI (`--render_target_path_vulkan=fsi`): переносов нет (0,07 мс), но draw ~1000 мс,
-  resolve ~19 мс, всего ~1050 мс, 0,9–1,0 FPS. Для сравнения PC (RTX 4070 SUPER, host RT): draw ~5 мс, переносы 3–6 мс.
-  NVK не объявляет `VK_EXT_shader_stencil_export`: перенос в глубину = 1 проход глубины + 8 проходов битов stencil.
-- Прогон 6 (f4b320c+4a88abf91c2f, `--cl=Tra_Jmp_P`): вылет в конце загрузки уровня. `AllocFixed`: коммит 4 КБ
-  гостевой памяти → `svcMapProcessCodeMemory` 0xCE01 (OutOfResource) при 411 МБ backing / 658 МБ с зеркалами,
-  затем запись игры по 0x10. Причина: SDK коммитил ровно запрошенный диапазон, и постраничные коммиты UE3 давали
-  отдельное отображение ядра на каждые 4 КБ (+ по одному на зеркало) — кончаются объекты блоков памяти ядра, не байты.
-  Переносы в меню по типам: depth→stencil bit 631 мс/кадр (56 draw), color→stencil bit 344 мс (40 draw),
-  depth→depth 67 мс; каждый draw переноса ~10 мс GPU независимо от площади.
-- Прогон 7 (c429d95+62b19985bf81, коммит блоками по 2 МБ): учебный уровень загрузился, >5 мин без ошибок памяти
-  (422 МБ backing / 716 МБ с зеркалами). 0,1–0,3 FPS. GPU на кадр в уровне: всего ~1090 мс, переносы 909 мс
-  (depth→stencil bit 553 мс/32 draw, color→stencil bit 217 мс/24 draw), draw игры 158 мс. Все типы переносов
-  дают ~25–35 Мпикс/с независимо от источника.
-- Прогон 8 (7d0cd99+4f709f05677d, `--nfsmw_renderizador=nativo`, библиотека шейдеров v3 186 МБ отдельным файлом
-  `sdmc:/switch/airborne-nx/airborne_shaders.nfsp`, лог `analysis/hardware/live_native1.log`): нативный рендерер на
-  железе. Титульный экран 17–20 FPS (эмуляция: 0,7), дальше тяжелее, 4–25 FPS. GPU 32–41 мс на Swap (сцена 20–32 мс,
-  копии 3–4 мс, «320» 2 мс), CPU 150–270 % из 400. 188 разных шейдеров, 182 опознаны (6 — без контейнеров),
-  отказов draw 0, падений нет. Барьеры вокруг копий (`airborne_barreras_copias`) включены. Одна `DIFERENCIA` у
-  IM_LOAD без memcmp (страж отключил ярлык). Картинку с консоли не видели — нужен скриншот.
-- Прогон 9 (b251421+83083eb809bc, уровень `--cl=Tra_Jmp_P`, библиотека v4, лог `analysis/hardware/live_native_para.log`,
-  `result.txt`, `rex_crash.log`): уровень проходится, графика в целом верна (пользователь: свечение у солдата, z-fighting
-  земли). 4–29 FPS, CPU 220–290 % из 300 доступных (3 ядра, 1020 МГц, портатив), звук трещит. Падение через ~6 мин:
-  рендер-поток UE3 (цикл очереди команд sub_82404CD8) прочитал vtable 0x3E848C6D — рекомпилятор выбрасывал
-  `sync`/`lwsync`, на ARM нужен `dmb ish`.
-- Прогоны 10–12 (сэмплер стеков `perfil_pilas.flag` рядом с NRO, лог `live_native_pilas2.log`): рендер-поток UE3
-  крутил ожидание GPU в D3D (sub_829B6490, 90 %), Main — циклы `Sleep(0)`; GPU-кольцо 63 % в `vkWaitForFences` из
-  `GetResolved`: по адресу 15580000 форматы 7 и 32 чередуются, каждый раз — синхронизация с GPU и новый образ
-  (2959 раз за 4 мин). После барьеров, сна в ожиданиях и отложенных образов (b251421+7b6576b819e0,
-  `live_native_park.log`): пересозданий 7, CPU 115–250 %, спуск 15–24 FPS вместо 10–16, у земли 28–30 (лимит 30);
-  теперь упор в GPU: 33–131 мс на Swap в самолёте, простоя почти нет.
-- Прогоны 13–15 (2026-10-26, 5dd45df-dirty+9fbbfb14b9b0: проходы генератора sa2-nx, ожидания рантайма ME, NVK с
-  резервом хвоста GPFIFO; nxlink, `--cl=Tra_Jmp_P`, портатив; логи `analysis/hardware/live_5dd45df_{A_1280,B_960,C_912}.log`,
-  в каждом сначала идёт отчёт профайлера прошлого запуска — `ForwardProfilerReport` читает файл до его обнуления).
-  FPS по 10-с окнам в уровне (12 окон после загрузки), GPU на Swap, переход на `Hus_M1_Briefing` от старта:
-  1280x720 — среднее 22,8 FPS, GPU 19–26 мс, 188 с; 960x544 — 23,9 FPS, GPU 16–22 мс, 184 с;
-  912x512 — 27,8 FPS (9 окон из 12 на 29–30), GPU 11–19 мс, 175 с. Прошлый замер (`live_native_park.log`) — 18,6 FPS
-  на тех же окнах, спуск длился дольше. Сцена в углу: все кадры (0 «целых»). Ошибок и вылетов нет.
-  Оговорка: в A и B самопроверка нативного микшера на ~35 с нашла 1 ULP в одном float (вызов 1,1–1,26 млн, в разные
-  стороны: BA44B534/535, B879B3FE/FD) и выключила его до конца сессии; в C он работал всё время. Значит, часть
-  разницы C с A/B — микшер (RWAudioCore Dac 34–73 % ядра без него). Пропусков audout за прогон: 20 / 30 / 14.
-- Adanti (`Hus_M1_P`), 2026-10-26, 1280x720, портатив, логи `analysis/hardware/live_{866d,c681,neon,a016,839f}_hus*.log`,
-  ELF для символов в `analysis/hardware/elf/`:
-  - 866d: самопроверка микшера трижды за 30 с: «оригинал» = одно округление (FMA), нативный = два (как Xenon).
-    Сгенерированный код собирался без `-ffp-contract=off` (флаг стоял только в каталоге SDK) — исправлено в
-    `rex/CMakeLists.txt`; после этого (c681) расхождений нет.
-  - Звук: пропуски audout 250–470 за 10 с в тяжёлой сцене; RWAudioCore ~60 % ядра, в ядре не ждёт. Нативный
-    mix-add был скалярным (GCC не векторизовал) и занимал ~25 % потока: NEON (005d) — пропуски 100–330, FPS 11–16.
-    Приоритет 0x2C: `--guest_audio_thread_priority=0x2C` читается как 0 (только десятичные: 44), и ставился только
-    из `Delay`, до которого поток не доходил — теперь и из ожиданий объектов (a016). `XAudioGetSpeakerConfig`
-    игра не вызывает (стерео-настройка ни на что не влияет). `[XeAudio.XeAudioDevice] MaxChannels` 90 → 32
-    (override Coalesced.ini): поток 64–72 % → 54–59 %, пропуски 216–443 → 53–284, FPS тот же.
-  - a016: вылет через 95 с — `InvalidFunctionTrap` 0x4354A232 из цикла очереди команд рендера UE3 (sub_82404CD8),
-    как в прогоне 9. Читатель очереди sub_823F8448 без барьера между смещениями и командой: хук с acquire-барьером
-    (`rex/src/render_queue.cpp`, 839f) — два прогона по 5 мин без вылета.
-  - Упор FPS в тяжёлой сцене (10–11 FPS, CPU 307 % из 300): поток кольца нативного рендерера 84 % ядра,
-    ~4000–4500 draw на кадр по ~14,5 мкс (≈60 мс на кадр); GPU ~34 мс на Swap (~50 % загрузки). В кольце: наш
-    транслятор ~15 %, memcpy/memcmp ~8 %, NVK ~12 % (vk_dynamic_graphics_state_copy 3,4 %). Главный поток и
-    рендер-поток UE3 по ~55 %, со сном (ждут кольцо). `StaticMeshCullDistanceBiasBase=0.6` и
-    `bDynamicDecalsEnabled=False`: draw на кадр не уменьшились (медиана 4066 → 4538 в другой точке), FPS тот же.
-- SDK: «Too few processor cores - scheduling will be wonky»; общая память GPU — полный буфер 512 МБ (sparse нет).
+# First run on ReXGlue (2026-10-23, build 8b57ce5+6cc5eaa4df8e, log `analysis/hardware/rexglue_*_result.txt`)
+- Launched in application mode, handheld 1280x720; NVK (Mesa 26.2.4, git-0ff52079ca) creates the device; the guest
+  memory arena is mapped; audio audout 48 kHz 2 channels; mounting 1249 game files from the SD card takes 2.65 s.
+- The game passes the splash screen and reaches the menu (`Hus_BG_Bkd_Fairway`, menu music), no errors or crashes in
+  ~2 min.
+- Speed: by the user's impression < 1 FPS. Creating each graphics pipeline (shader translation + NAK) takes
+  0.1-1.5 s; in the first ~40 s of the menu there are ~60 of them. FPS and per-thread CPU time are not yet written to
+  the log.
+- SDK profiler (`logs/rex/rex_perfil.log`, report every 10 s): in the menu 0.6-0.8 FPS at ~160 draws per frame; one
+  guest thread `XThread2FE2D080` takes 100 % of a core, the GPU emulation thread ("GPU Commands") takes a few percent,
+  total CPU 130-170 % out of 300 %. The bottleneck is the CPU of a single game thread, not GPU emulation. Clocks: CPU
+  1020 MHz, GPU 460.8 MHz, memory 1600 MHz; 3 cores (mask 0x7). While the menu loads (pipeline compilation) 262 % CPU,
+  0-0.1 FPS.
+- Run 2 (aad0efd+4577d1b23b5d, nxlink, stack sampling): the same 0.7 FPS; local registers do not change FPS.
+  Stacks: 87 % of the hot thread's time is `sub_829B0E38` (XDK `D3DQuery_GetData`, type 9 = occlusion), called in a
+  wait loop from `sub_82453C88` (0x82453D70): UE3 spins until the GPU emulator writes the query result.
+  The SDK shader cache on the SD card works: in the second run there is no pipeline compilation phase when the menu
+  loads.
+- Run 3 (aad0efd+a95feff5cf97, occlusion queries answer immediately): waiting on queries is gone from the stacks, FPS
+  is the same 0.7. Now the hot thread waits for a GPU fence in the XDK (`sub_829AF948` -> `db16cyc` loop in
+  `sub_829B6490`), and the process waits on NVK fences 1000 ms per second: bound by the real Tegra GPU, ~1.4 s of GPU
+  per menu frame. Per frame: 167 game draws, 170 EDRAM transfers (23 RT, 115 additional draws), 10 resolves, scissor
+  area ~126 screens.
+- Run 4/5 (fbc5e09+6ce5dd5de8b5, `--gpu_timing=2`, timestamps x1.627), menu, GPU per frame:
+  host render targets: draws 125-180 ms, EDRAM transfers 1180-1280 ms (~83 %), resolve 86-94 ms, other ~25 ms,
+  total ~1500 ms, 0.7 FPS. FSI (`--render_target_path_vulkan=fsi`): no transfers (0.07 ms), but draws ~1000 ms,
+  resolve ~19 ms, total ~1050 ms, 0.9-1.0 FPS. For comparison PC (RTX 4070 SUPER, host RT): draws ~5 ms, transfers
+  3-6 ms. NVK does not advertise `VK_EXT_shader_stencil_export`: a transfer to depth = 1 depth pass + 8 stencil bit
+  passes.
+- Run 6 (f4b320c+4a88abf91c2f, `--cl=Tra_Jmp_P`): crash at the end of level loading. `AllocFixed`: committing 4 KB of
+  guest memory -> `svcMapProcessCodeMemory` 0xCE01 (OutOfResource) at 411 MB backing / 658 MB with mirrors, then the
+  game writes to 0x10. Cause: the SDK committed exactly the requested range, and UE3's per-page commits produced a
+  separate kernel mapping for every 4 KB (+ one per mirror) - what runs out is kernel memory block objects, not bytes.
+  Transfers in the menu by type: depth->stencil bit 631 ms/frame (56 draws), color->stencil bit 344 ms (40 draws),
+  depth->depth 67 ms; each transfer draw costs ~10 ms of GPU regardless of area.
+- Run 7 (c429d95+62b19985bf81, commit in 2 MB blocks): the tutorial level loaded, >5 min without memory errors
+  (422 MB backing / 716 MB with mirrors). 0.1-0.3 FPS. GPU per frame in the level: total ~1090 ms, transfers 909 ms
+  (depth->stencil bit 553 ms/32 draws, color->stencil bit 217 ms/24 draws), game draws 158 ms. All transfer types
+  give ~25-35 Mpix/s regardless of the source.
+- Run 8 (7d0cd99+4f709f05677d, `--nfsmw_renderizador=nativo`, shader library v3 186 MB as a separate file
+  `sdmc:/switch/airborne-nx/airborne_shaders.nfsp`, log `analysis/hardware/live_native1.log`): the native renderer on
+  hardware. Title screen 17-20 FPS (emulation: 0.7), heavier afterwards, 4-25 FPS. GPU 32-41 ms per Swap (scene
+  20-32 ms, copies 3-4 ms, "320" 2 ms), CPU 150-270 % out of 400. 188 distinct shaders, 182 recognized (6 without
+  containers), draw rejections 0, no crashes. Barriers around copies (`airborne_barreras_copias`) are enabled. One
+  `DIFERENCIA` at IM_LOAD without memcmp (the guard disabled the shortcut). The picture from the console was not seen -
+  a screenshot is needed.
+- Run 9 (b251421+83083eb809bc, level `--cl=Tra_Jmp_P`, library v4, log `analysis/hardware/live_native_para.log`,
+  `result.txt`, `rex_crash.log`): the level is playable, graphics generally correct (user: glow on the soldier,
+  z-fighting on the ground). 4-29 FPS, CPU 220-290 % out of 300 available (3 cores, 1020 MHz, handheld), audio
+  crackles. Crash after ~6 min: the UE3 render thread (command queue loop sub_82404CD8) read vtable 0x3E848C6D - the
+  recompiler dropped `sync`/`lwsync`, ARM needs `dmb ish`.
+- Runs 10-12 (stack sampler `perfil_pilas.flag` next to the NRO, log `live_native_pilas2.log`): the UE3 render thread
+  spun waiting for the GPU in D3D (sub_829B6490, 90 %), Main - `Sleep(0)` loops; the GPU ring 63 % in `vkWaitForFences`
+  from `GetResolved`: at address 15580000 formats 7 and 32 alternate, each time a synchronization with the GPU and a
+  new image (2959 times in 4 min). After barriers, sleeping in waits and deferred images (b251421+7b6576b819e0,
+  `live_native_park.log`): 7 recreations, CPU 115-250 %, descent 15-24 FPS instead of 10-16, near the ground 28-30
+  (limit 30); now bound by the GPU: 33-131 ms per Swap in the airplane, almost no idle time.
+- Runs 13-15 (2026-10-26, 5dd45df-dirty+9fbbfb14b9b0: sa2-nx generator passes, ME runtime waits, NVK with GPFIFO tail
+  reserve; nxlink, `--cl=Tra_Jmp_P`, handheld; logs `analysis/hardware/live_5dd45df_{A_1280,B_960,C_912}.log`,
+  each begins with the previous run's profiler report - `ForwardProfilerReport` reads the file before it is zeroed).
+  FPS over 10-s windows in the level (12 windows after loading), GPU per Swap, transition to `Hus_M1_Briefing` from
+  start: 1280x720 - average 22.8 FPS, GPU 19-26 ms, 188 s; 960x544 - 23.9 FPS, GPU 16-22 ms, 184 s;
+  912x512 - 27.8 FPS (9 windows out of 12 at 29-30), GPU 11-19 ms, 175 s. The previous measurement
+  (`live_native_park.log`) - 18.6 FPS on the same windows, the descent lasted longer. Scene in the corner: all frames
+  (0 "whole"). No errors or crashes.
+  Caveat: in A and B the native mixer self-test over ~35 s found 1 ULP in one float (call 1.1-1.26 million, in
+  different directions: BA44B534/535, B879B3FE/FD) and disabled it for the rest of the session; in C it ran the whole
+  time. So part of the difference between C and A/B is the mixer (RWAudioCore Dac 34-73 % of a core without it).
+  audout dropouts per run: 20 / 30 / 14.
+- Adanti (`Hus_M1_P`), 2026-10-26, 1280x720, handheld, logs `analysis/hardware/live_{866d,c681,neon,a016,839f}_hus*.log`,
+  ELF for symbols in `analysis/hardware/elf/`:
+  - 866d: mixer self-test three times in 30 s: "original" = one rounding (FMA), native = two (like Xenon).
+    The generated code was built without `-ffp-contract=off` (the flag was set only in the SDK directory) - fixed in
+    `rex/CMakeLists.txt`; after that (c681) there are no discrepancies.
+  - Audio: audout dropouts 250-470 per 10 s in a heavy scene; RWAudioCore ~60 % of a core, does not wait in the
+    kernel. The native mix-add was scalar (GCC did not vectorize it) and took ~25 % of the thread: NEON (005d) -
+    dropouts 100-330, FPS 11-16.
+    Priority 0x2C: `--guest_audio_thread_priority=0x2C` is read as 0 (decimal only: 44), and was set only from
+    `Delay`, which the thread never reached - now also from object waits (a016). The game does not call
+    `XAudioGetSpeakerConfig` (the stereo setting has no effect). `[XeAudio.XeAudioDevice] MaxChannels` 90 -> 32
+    (Coalesced.ini override): thread 64-72 % -> 54-59 %, dropouts 216-443 -> 53-284, FPS the same.
+  - a016: crash after 95 s - `InvalidFunctionTrap` 0x4354A232 from the UE3 render command queue loop (sub_82404CD8),
+    as in run 9. The queue reader sub_823F8448 has no barrier between the offsets and the command: a hook with an
+    acquire barrier (`rex/src/render_queue.cpp`, 839f) - two 5-min runs without a crash.
+  - FPS bound in a heavy scene (10-11 FPS, CPU 307 % out of 300): the native renderer ring thread at 84 % of a core,
+    ~4000-4500 draws per frame at ~14.5 us each (~60 ms per frame); GPU ~34 ms per Swap (~50 % load). In the ring: our
+    translator ~15 %, memcpy/memcmp ~8 %, NVK ~12 % (vk_dynamic_graphics_state_copy 3.4 %). The main thread and the
+    UE3 render thread ~55 % each, with sleeping (waiting for the ring). `StaticMeshCullDistanceBiasBase=0.6` and
+    `bDynamicDecalsEnabled=False`: draws per frame did not decrease (median 4066 -> 4538 at another point), FPS the
+    same.
+- SDK: "Too few processor cores - scheduling will be wonky"; shared GPU memory - a full 512 MB buffer (no sparse).
 
-# Измерено на железе (Switch, HOS 22.1.0, applet_type 0 = Application)
+# Measured on hardware (Switch, HOS 22.1.0, applet_type 0 = Application)
 
-Источник: логи пользователя из старого рантайма (`analysis/hardware/`; сырые `.txt` хранятся локально, заметки
-о прогонах удалены, см. `git show 8ca98b1:analysis/`). Консоль/версию Atmosphere лог не называет.
-Метки сборок: v0.1 ecb1e73175f9, v0.2 f6741f128e30 (memory), v0.3 811084736791, v0.4 7c22a4a387d5,
+Source: user logs from the old runtime (`analysis/hardware/`; raw `.txt` files are kept locally, run notes were
+deleted, see `git show 8ca98b1:analysis/`). The log does not name the console or the Atmosphere version.
+Build tags: v0.1 ecb1e73175f9, v0.2 f6741f128e30 (memory), v0.3 811084736791, v0.4 7c22a4a387d5,
 v0.5 fefdd112f4ab, v0.6 ba51b874a908, v0.7 6d74b214954e, e779 e77977c5ffe5, e05d e05d08748c72,
-f4ba f4bac5364158, 6271 627190085788 (последний измеренный).
+f4ba f4bac5364158, 6271 627190085788 (last measured).
 
-## 1. Память
-- svcGetInfo при старте homebrew (v0.3): TotalMemory 0xC7500000 (3188,5 МиБ), UsedMemory 0xC710C000 (3184,5 МиБ);
-  Used почти равен Total сразу (куча hbloader), это не "занято игрой". Крупнейший свободный регион кучи 3 325 956 096 Б
-  (v0.3), 3 113 672 704 Б (v0.5, после старта рантайма).
-- Адресные регионы процесса (v0.3): alias 6 ГиБ (0x180000000), heap 8 ГиБ (0x200000000), ASLR 0xFF8000000.
-- Резерв непрерывного VA 4 ГиБ через libnx virtmem: успешно (v0.2, v0.3). Это адресное пространство, не RAM.
-- ОТКАЗ (v0.2): `svcMapProcessMemory` с источником из обычной кучи (тип Normal=5) -> rc 0xD401 (module 1,
-  description 106, InvalidMemoryState). У Normal-страниц нет CanMapProcess.
-- ИСПРАВЛЕНИЕ (v0.3, PASS 1569 проверок): `svcMapProcessMemory`->`MapProcessCodeMemory` кучи в staging-область
-  (тип 9 AliasCodeData), `SetProcessMemoryPermission(RW)` на staging (perm=3), затем гостевые алиасы из staging
-  (тип 15 SharedCode, RW). Все map/unmap вернули 0. Обратный порядок очистки: алиасы, затем возврат страниц куче.
-- v0.3: физические окна A/C/E согласованы на скаляр/вектор/atomic/dcbz, 4 МиБ heap x 1024 страницы, охранные
-  страницы (проверка запросом состояния памяти, без падения).
-- v0.4+: пул физической памяти 512 МиБ staging создан и смаплен кусками (A/C/E только на выделенные срезы); образ
-  20 054 016 Б, стек 256 КиБ, 81 146 отображений функций; отказов map/unmap нет (v0.4-6271).
-- Виртуальные коммиты как AliasCodeData-алиасы с последующим `SetMemoryPermission` работают (v0.4+).
-- Снятие отображений при ещё живых рабочих потоках не делали: выход через `svcExitProcess` (v0.4) дал
-  пользователю стандартную HOS-ошибку после "+" (код неизвестен). Кооперативный join потоков -> unmap -> return из
-  main: CLEANUP=PASS, EXIT_ACTION=RETURN_TO_LOADER (v0.5, v0.6, v0.7, e779, e05d, 6271).
+## 1. Memory
+- svcGetInfo at homebrew start (v0.3): TotalMemory 0xC7500000 (3188.5 MiB), UsedMemory 0xC710C000 (3184.5 MiB);
+  Used is almost equal to Total immediately (hbloader heap), this is not "used by the game". Largest free heap region
+  3 325 956 096 B (v0.3), 3 113 672 704 B (v0.5, after the runtime started).
+- Process address regions (v0.3): alias 6 GiB (0x180000000), heap 8 GiB (0x200000000), ASLR 0xFF8000000.
+- Reserving a contiguous 4 GiB of VA through libnx virtmem: succeeded (v0.2, v0.3). This is address space, not RAM.
+- FAILURE (v0.2): `svcMapProcessMemory` with a source from the ordinary heap (type Normal=5) -> rc 0xD401 (module 1,
+  description 106, InvalidMemoryState). Normal pages do not have CanMapProcess.
+- FIX (v0.3, PASS 1569 checks): `svcMapProcessMemory`->`MapProcessCodeMemory` of the heap into a staging area
+  (type 9 AliasCodeData), `SetProcessMemoryPermission(RW)` on staging (perm=3), then guest aliases from staging
+  (type 15 SharedCode, RW). All map/unmap returned 0. Cleanup in reverse order: aliases, then returning pages to the
+  heap.
+- v0.3: physical windows A/C/E agree on scalar/vector/atomic/dcbz, 4 MiB heap x 1024 pages, guard pages (checked by
+  a memory state query, without crashing).
+- v0.4+: a 512 MiB staging physical memory pool is created and mapped in chunks (A/C/E only onto allocated slices);
+  image 20 054 016 B, stack 256 KiB, 81 146 function mappings; no map/unmap failures (v0.4-6271).
+- Virtual commits as AliasCodeData aliases followed by `SetMemoryPermission` work (v0.4+).
+- Unmapping while worker threads were still alive was not done: exiting via `svcExitProcess` (v0.4) gave the user a
+  standard HOS error after "+" (code unknown). Cooperative thread join -> unmap -> return from main: CLEANUP=PASS,
+  EXIT_ACTION=RETURN_TO_LOADER (v0.5, v0.6, v0.7, e779, e05d, 6271).
 
-## 2. Потоки и время
-- `threadCreate` с prio 44 (0x2C), core -2 (по умолчанию), стек 64 КиБ, join с таймаутом 3 с: OK (v0.3).
-- Прио 59 (0x3B) через `svcSetThreadPriority` принято и считано обратно (rc 0) на всех 20 записях THREAD_POLICY (6271).
-  Маска ядра там везде 0x1 (preferred=0), т.е. логом подтверждено ядро 0, а не 0..2; влияние на скорость не измерено.
-- В логе f4ba: 15 вызовов ExCreateThread и 14 KeSetAffinityThread.
-- Таймер: `svcSleepThread(10 мс)` = 500 201 / 500 237 тиков при диагностической частоте 50 МГц (~10,004 мс), монотонно
-  (v0.1, v0.3).
-- Игра за ~120 с вызывает RtlEnterCriticalSection 419 399 раз, KeWaitForSingleObject 1956 (6271): импорты
-  ядра горячие, их нельзя сериализовать или логировать по одному.
-- Построчный flush лога на SD останавливает старт: за 120 с не открыт ни один файл игры (e05d). С буфером 64 КиБ
-  и flush раз в 250 мс первый кадр ролика на аптайме 43,5 с (6271).
+## 2. Threads and time
+- `threadCreate` with prio 44 (0x2C), core -2 (default), stack 64 KiB, join with a 3 s timeout: OK (v0.3).
+- Prio 59 (0x3B) via `svcSetThreadPriority` was accepted and read back (rc 0) on all 20 THREAD_POLICY entries (6271).
+  The core mask there is 0x1 everywhere (preferred=0), i.e. the log confirms core 0, not 0..2; the effect on speed was
+  not measured.
+- In the f4ba log: 15 ExCreateThread calls and 14 KeSetAffinityThread calls.
+- Timer: `svcSleepThread(10 ms)` = 500 201 / 500 237 ticks at a diagnostic frequency of 50 MHz (~10.004 ms),
+  monotonic (v0.1, v0.3).
+- In ~120 s the game calls RtlEnterCriticalSection 419 399 times, KeWaitForSingleObject 1956 (6271): kernel imports
+  are hot, they cannot be serialized or logged one by one.
+- Line-by-line log flush to the SD card stalls startup: in 120 s not a single game file was opened (e05d). With a
+  64 KiB buffer and a flush every 250 ms the first movie frame is at uptime 43.5 s (6271).
 
-## 3. Видео, NVK, VI
-- NVK виден как `NVIDIA Tegra X1 (GM20B) (NVK GM20B)`, vendor 10de, device 0fe0, apiVersion 4211042 (Vulkan 1.4.98);
-  int64, bufferDeviceAddress, runtimeDescriptorArray, gather, sampled-dynamic = 1 (v0.5, v0.6).
-- VI-поверхность: 1280x720, minImages = maxImages = 3, форматы VkFormat 37 и 44, colorspace 0, usage 0x8009F
-  (v0.6). Создание 3-кадровой цепочки (FIFO), submit + fence, `vkQueuePresentKHR` rc 0 (v0.6).
-- Образ 1280x720 RGBA8: выделение 3 932 160 Б (v0.5). Нативные depth/stencil clear 640x360 x4 MSAA и resolve 720p
-  выполнены на GPU, fence завершён (v0.6).
-- ОТКАЗ VI (v0.7): повторное `viOpenDefaultDisplay` из потока vblank, пока libnx-окно держит Default display ->
-  rc 0x1272 (module 114, description 9). libnx не даёт публичного getter; исправлено заимствованием владельца
-  (перехват `viOpenDisplay`/`viCloseDisplay`); дальше display id = 83 (e779).
-- ОТКАЗ vblank (e779): `eventClear` на автоочищаемом событии из `viGetDisplayVsyncEvent` -> rc 0xFA01
-  (module 1, description 125, InvalidState). Исправление: только `eventWait`. После: 513 успешных ожиданий (e05d);
-  одно измеренное ожидание 14,63 мс при таймауте 100 мс (e05d).
-- Ролик (6271, 120 с, watchdog): 475 отрисовок кадров ролика; интервал между отрисовками mean 161,4 / median 99,6 /
-  p95 219,3 мс (в него входят ожидания игры, это не чистое декодирование). Стадии, медиана: eDRAM resolve 14,9 мс,
-  загрузка+draw+readback ролика 14,2 мс, decode+present 42,1 мс (p95 52,2) - при CPU-readback на каждый кадр.
-  Пользователь: интро видно, "очень медленно" (f4ba, 6271).
+## 3. Video, NVK, VI
+- NVK is visible as `NVIDIA Tegra X1 (GM20B) (NVK GM20B)`, vendor 10de, device 0fe0, apiVersion 4211042
+  (Vulkan 1.4.98); int64, bufferDeviceAddress, runtimeDescriptorArray, gather, sampled-dynamic = 1 (v0.5, v0.6).
+- VI surface: 1280x720, minImages = maxImages = 3, formats VkFormat 37 and 44, colorspace 0, usage 0x8009F
+  (v0.6). Creating a 3-frame swapchain (FIFO), submit + fence, `vkQueuePresentKHR` rc 0 (v0.6).
+- 1280x720 RGBA8 image: allocation 3 932 160 B (v0.5). Native depth/stencil clear 640x360 x4 MSAA and 720p resolve
+  were executed on the GPU, fence completed (v0.6).
+- VI FAILURE (v0.7): repeated `viOpenDefaultDisplay` from the vblank thread while the libnx window holds the Default
+  display -> rc 0x1272 (module 114, description 9). libnx provides no public getter; fixed by borrowing the owner
+  (intercepting `viOpenDisplay`/`viCloseDisplay`); the display id is then 83 (e779).
+- vblank FAILURE (e779): `eventClear` on the auto-clearing event from `viGetDisplayVsyncEvent` -> rc 0xFA01
+  (module 1, description 125, InvalidState). Fix: `eventWait` only. After that: 513 successful waits (e05d);
+  one measured wait of 14.63 ms with a 100 ms timeout (e05d).
+- Movie (6271, 120 s, watchdog): 475 movie frame draws; the interval between draws is mean 161.4 / median 99.6 /
+  p95 219.3 ms (it includes game waits, this is not pure decoding). Stages, median: eDRAM resolve 14.9 ms,
+  movie upload+draw+readback 14.2 ms, decode+present 42.1 ms (p95 52.2) - with a CPU readback on every frame.
+  User: the intro is visible, "very slow" (f4ba, 6271).
 
-## 4. Звук (6271)
-- `audoutInitialize`/`audoutStartAudioOut` rc 0: 48 кГц, 2 канала, PCM16, буфер 1024 Б (256 сэмплов);
-  `audoutAppendAudioOutBuffer` и `audoutWaitPlayFinish` rc 0. Игра регистрирует XAudio-клиент (callback 0x82AA3AF0)
-  и сдаёт кадры по 6144 Б (256 сэмплов x 6 каналов x float32); 4 кредита обратного вызова. Слышимость и underrun
-  не проверялись.
+## 4. Audio (6271)
+- `audoutInitialize`/`audoutStartAudioOut` rc 0: 48 kHz, 2 channels, PCM16, buffer 1024 B (256 samples);
+  `audoutAppendAudioOutBuffer` and `audoutWaitPlayFinish` rc 0. The game registers an XAudio client
+  (callback 0x82AA3AF0) and submits frames of 6144 B (256 samples x 6 channels x float32); 4 callback credits.
+  Audibility and underruns were not checked.
 
-## 5. Файловый ввод-вывод (6271)
-- Корень контента `sdmc:/switch/airborne-nx/game/MOHAGame` (6,33 ГБ, 1242 файла). Все открытия/чтения успешны (rc 0).
-- Скорость чтения SD отдельно не измерена. Пакеты `.xxx` читаются кусками по 0x20000 (128 КиБ).
-- Ошибок memory/file/audio на пути ролика нет; `RESULT=FAIL` в 6271 - это только сработавший watchdog 120 с.
+## 5. File I/O (6271)
+- Content root `sdmc:/switch/airborne-nx/game/MOHAGame` (6.33 GB, 1242 files). All opens/reads succeeded (rc 0).
+- SD read speed was not measured separately. `.xxx` packages are read in chunks of 0x20000 (128 KiB).
+- No memory/file/audio errors on the movie path; `RESULT=FAIL` in 6271 is only the 120 s watchdog firing.
 
-# Что подтверждает/дополняет platform-notes.md NFSMW
-- Подтверждает: ~3,2 ГБ памяти приложения, UsedMemory ~ Total с первого момента (3184,5 из 3188,5 МиБ у нас).
-- Подтверждает: VI-цепочка ровно 3 образа; 1280x720; VI-окно через libnx/NVK.
-- Дополняет: `MapProcessMemory` не принимает Normal-кучу, rc 0xD401 (InvalidMemoryState), а не 0xCE01; обход -
-  `MapProcessCodeMemory` в staging + `SetProcessMemoryPermission(RW)`, потом алиасы (типы 9 -> 15). Права на staging
-  менять можно; у notes записано, что на `MapProcessMemory`-памяти нельзя.
-- Дополняет: 512 МиБ физического пула staging + A/C/E-алиасы только на выделенные срезы не дают 0xCE01 до 120 с
-  работы (6271); исключения/page fault-обработчик в нашем рантайме не использовались.
-- Дополняет: прио 0x3B и 0x2C принимаются; маска ядра 0x1 принимается (notes: доступны 0x7). Эффект не измерен.
-- Дополняет: `viOpenDefaultDisplay` повторно -> 0x1272; `eventClear` на vsync-событии -> 0xFA01. Wait на нём
-  14,6 мс (таймаут 100 мс). `eventWait` сам делает reset.
-- Дополняет: Vulkan API NVK = 1.4.98; форматы VI 37/44; usage 0x8009F.
-- Дополняет: объём SD-лога - реальный тормоз: построчный flush на SD (5,2 МБ) оставил игру без открытых файлов за 120 с.
+# What this confirms/supplements in the NFSMW platform-notes.md
+- Confirms: ~3.2 GB of application memory, UsedMemory ~ Total from the very first moment (3184.5 of 3188.5 MiB for us).
+- Confirms: the VI swapchain is exactly 3 images; 1280x720; VI window via libnx/NVK.
+- Supplements: `MapProcessMemory` does not accept the Normal heap, rc 0xD401 (InvalidMemoryState), not 0xCE01; the
+  workaround is `MapProcessCodeMemory` into staging + `SetProcessMemoryPermission(RW)`, then aliases (types 9 -> 15).
+  Permissions on staging can be changed; the notes record that this is not possible on `MapProcessMemory` memory.
+- Supplements: a 512 MiB physical staging pool + A/C/E aliases only onto allocated slices do not give 0xCE01 up to
+  120 s of operation (6271); exceptions/the page fault handler were not used in our runtime.
+- Supplements: prio 0x3B and 0x2C are accepted; core mask 0x1 is accepted (notes: 0x7 available). The effect was not
+  measured.
+- Supplements: repeated `viOpenDefaultDisplay` -> 0x1272; `eventClear` on the vsync event -> 0xFA01. A wait on it
+  takes 14.6 ms (timeout 100 ms). `eventWait` does the reset itself.
+- Supplements: NVK Vulkan API = 1.4.98; VI formats 37/44; usage 0x8009F.
+- Supplements: the SD log volume is a real brake: line-by-line flush to the SD card (5.2 MB) left the game with no open
+  files in 120 s.
 
-# Факты об игре (не зависят от рантайма)
-- XEX: title 454107F6, media 5E593EE0, база 0x82000000, entry 0x82C5C310, образ 20 054 016 Б, 267 именованных импортов
-  (xboxkrnl 316 + xam 228 записей); `default.xex` 6 270 976 Б, LZX.
-- Содержимое: 1196 `.xxx` (1179 UE3-пакетов, 17 аудио/потоковых с другой сигнатурой), 38 `.wmv` (37 ASF GUID,
-  `MOHA_Shell_EAID_DEU.wmv` с иным заголовком). `Coalesced.ini`/`Xbox360TOC.txt` - не plain text.
-- Порядок открытия на старте (6271, пути `D:\MOHAGame\...`): `Xbox360TOC.txt` (78 447 Б), `Config\Xenon\Cooked\Coalesced.ini`
-  (308 494 Б), `Localization\Coalesced.int` (477 789 Б), `CookedMovies\MOHA_Shell_EAID.wmv` (8 797 581 Б), затем
+# Game facts (independent of the runtime)
+- XEX: title 454107F6, media 5E593EE0, base 0x82000000, entry 0x82C5C310, image 20 054 016 B, 267 named imports
+  (xboxkrnl 316 + xam 228 entries); `default.xex` 6 270 976 B, LZX.
+- Contents: 1196 `.xxx` (1179 UE3 packages, 17 audio/streaming with a different signature), 38 `.wmv` (37 ASF GUID,
+  `MOHA_Shell_EAID_DEU.wmv` with a different header). `Coalesced.ini`/`Xbox360TOC.txt` are not plain text.
+- Open order at startup (6271, paths `D:\MOHAGame\...`): `Xbox360TOC.txt` (78 447 B), `Config\Xenon\Cooked\Coalesced.ini`
+  (308 494 B), `Localization\Coalesced.int` (477 789 B), `CookedMovies\MOHA_Shell_EAID.wmv` (8 797 581 B), then
   `CookedXenon\`: Core, Engine, EAKynapse, EngineFonts, EngineMaterials, EngineResources, GameFramework, IpDrv,
   MOHAEngineMaterials, MOHAGame, MOHAGame_LOC_int, MOHAUISkin, OnlineSubsystemLive, Plasma,
   PostProcessMaterialPackage, Shell, UI_Fonts, UI_MenuModules, UnrealScriptTest (.xxx).
-- Первое видео - интро-WMV; ролик рисуется 3 плоскостями R8 (Y/U/V) своими шейдерами игры (PC: 253 draw/resolve
-  вместо Switch 475 до watchdog). Первый ролик на Switch начинался на 43,5 с аптайма (6271).
-- Видео: игра спрашивает режим 0x500 x 0x2D0 (1280x720); первый VdSwap (PC и Switch v0.5): front buffer 0xFF657000,
-  format 6, tiled, pitch 1280, swizzle B,G,R,1; к нему 72 PM4-пакета, 24 стартовых draw без вывода.
-- Кольцо команд: 32 КиБ (закодированный размер 12), phys 0x1FCF7000 (наблюдалось на PC; в Switch-логе v0.5/v0.6 тот же fetch/ring).
-  Ожидание на phys 0x1FCF5004 - темп кадров: прерывание источника 1 ставит flip, источника 0 (vblank) отпускает его (PC).
-- Инициализация видео: `VdInitializeEngines` (LR 0x829C0788) - первая граница v0.4; `VdSwap` LR 0x829B3B08.
-- Шейдеры: XDK-контейнеры (magic 0x102A11) внутри `.xxx`; найдено 1036 уникальных (329 VS + 707 PS) из 1197 файлов,
-  969 транслируются в SPIR-V (прошли spirv-val), 67 не транслируются (внутри WMV-шейдеры). Это PC-анализ.
-- Лист 0x82C5B7D8 - функция времени в мс (GetTickCount-подобная): перехватывается как steady uptime ms, 32 бита,
-  16 байт кода сверены (6271).
-- Аудио инициализации: таблица XMA 320 контекстов x 64 Б; PC останавливается на `XMADisableContext` (LR 0x82997EF8),
-  затем `NetDll_XNetStartup` (LR 0x82A98A54) - PC-результат, на Switch не проверено.
-- Счётчики импортов за 120 с (f4ba): NtAllocateVirtualMemory 341, MmAllocatePhysicalMemoryEx 36, RtlMultiByteToUnicodeN 1251,
-  KeQueryPerformanceFrequency 51.
+- The first video is the intro WMV; the movie is drawn as 3 R8 planes (Y/U/V) with the game's own shaders (PC: 253
+  draws/resolves versus Switch 475 until the watchdog). The first movie on Switch started at uptime 43.5 s (6271).
+- Video: the game asks for mode 0x500 x 0x2D0 (1280x720); first VdSwap (PC and Switch v0.5): front buffer 0xFF657000,
+  format 6, tiled, pitch 1280, swizzle B,G,R,1; 72 PM4 packets before it, 24 initial draws without output.
+- Command ring: 32 KiB (encoded size 12), phys 0x1FCF7000 (observed on PC; in the Switch log v0.5/v0.6 the same
+  fetch/ring). The wait at phys 0x1FCF5004 is the frame pacing: interrupt source 1 sets the flip, source 0 (vblank)
+  releases it (PC).
+- Video initialization: `VdInitializeEngines` (LR 0x829C0788) - the first boundary of v0.4; `VdSwap` LR 0x829B3B08.
+- Shaders: XDK containers (magic 0x102A11) inside `.xxx`; 1036 unique found (329 VS + 707 PS) from 1197 files,
+  969 translate to SPIR-V (passed spirv-val), 67 do not translate (WMV-internal shaders). This is PC analysis.
+- Leaf 0x82C5B7D8 is a time function in ms (GetTickCount-like): intercepted as steady uptime ms, 32 bits,
+  16 bytes of code verified (6271).
+- Audio initialization: XMA table of 320 contexts x 64 B; PC stops at `XMADisableContext` (LR 0x82997EF8),
+  then `NetDll_XNetStartup` (LR 0x82A98A54) - a PC result, not verified on Switch.
+- Import counters over 120 s (f4ba): NtAllocateVirtualMemory 341, MmAllocatePhysicalMemoryEx 36, RtlMultiByteToUnicodeN
+  1251, KeQueryPerformanceFrequency 51.
