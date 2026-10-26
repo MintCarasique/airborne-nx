@@ -4,7 +4,7 @@ The port works but is not playable in the heavy parts of the game, and the remai
 this console. This page is the summary to start from when the work resumes. The measurements behind every number are
 in [HARDWARE_NOTES.md](HARDWARE_NOTES.md); the renderer is described in [NATIVE_RENDERER_NOTES.md](NATIVE_RENDERER_NOTES.md).
 
-Last build: commit after `8f10715` (see `git log`), Switch NRO packaged by `tools/package_switch.py` with
+Last build: `e6b70d1+e0c61df25d44` (commit + NRO hash, as in the startup log line), packaged by `tools/package_switch.py` with
 `guest_audio_thread_priority = 44` and the 32-channel `Coalesced.ini` override. All numbers below: Switch at stock
 clocks (CPU 1020 MHz, GPU 460.8 MHz, handheld), 1280x720 unless stated.
 
