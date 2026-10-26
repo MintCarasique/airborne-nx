@@ -7,7 +7,9 @@ execute_process(COMMAND git -C "${ROOT}" rev-parse --short=7 HEAD
 if(NOT commit_result EQUAL 0 OR commit STREQUAL "")
   set(commit "unknown")
 endif()
-execute_process(COMMAND git -C "${ROOT}" status --porcelain --untracked-files=no
+# core.autocrlf: the tree is a Windows checkout (CRLF) also built from WSL, whose git would see every line ending
+# as a change.
+execute_process(COMMAND git -C "${ROOT}" -c core.autocrlf=true status --porcelain --untracked-files=no
                 OUTPUT_VARIABLE changes OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
 if(NOT changes STREQUAL "")
   set(commit "${commit}-dirty")
